@@ -22,6 +22,30 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Capability roadmap: full 831-row manifest for the google/adk-python migration
+**2026-08-21** · (link added once this PR is opened)
+
+- **Added:** `capability-manifest.md` — the complete capability inventory for
+  the migration, one row per capability with a stable `C####` id, grouped into
+  17 dependency-ordered phases (P1 core primitives through P17 deferred
+  decisions). Built from 8 parallel read-only inventory passes over
+  `google/adk-python`'s ~206k lines / 28 top-level modules.
+- **Known limitation:** the `Existing RustyMill impl` column is populated only
+  where a repo/purpose match was obvious from `platform-directory.md`'s
+  heuristic — a full `scan_platform_repos.sh` pass per capability wasn't run
+  at this scale; it's re-checked per-issue when each capability is actually
+  worked (per the rust-migration skill's step 3).
+- **Known gap, flagged not hidden:** `runners.py` (the core `Runner`/
+  `InMemoryRunner` execution engine, 2609 lines) sits outside the 28 scoped
+  module directories and wasn't deep-dived by any of the 8 inventory agents —
+  row `C0788` flags this explicitly as a required follow-up read before P2
+  can be considered fully scoped, rather than silently omitting it.
+- Every row defaults `REQUIRED` per the migration's boundary contract;
+  `scripts/check_manifest_coverage.sh` confirms all 831 rows parse and are
+  correctly in a non-terminal state (nothing migrated yet, as expected).
+- No GitHub issues have been filed yet — the user asked for the manifest
+  organized into phases first, to review and pace the work themselves.
+
 ## PR #TBD — Bootstrap governance files; begin rust-migration of google/adk-python
 **2026-08-21** · (link added once this PR is opened)
 
