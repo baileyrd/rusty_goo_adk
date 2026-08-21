@@ -110,11 +110,11 @@ pub trait CredentialService {
 pub struct PluginManager;
 
 impl PluginManager {
-    pub fn run_before_agent_callback(&self) -> Option<Value> {
+    pub fn run_before_agent_callback(&self) -> Option<adk_genai::content::Content> {
         None
     }
 
-    pub fn run_after_agent_callback(&self) -> Option<Value> {
+    pub fn run_after_agent_callback(&self) -> Option<adk_genai::content::Content> {
         None
     }
 

@@ -1,0 +1,15 @@
+[package]
+name = "adk-models"
+description = "Model layer core, ported from google/adk-python's models/ module (Phase 3)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+adk-agents = { path = "../adk-agents" }
+adk-genai = { path = "../adk-genai" }
+adk-platform = { path = "../adk-platform" }
+rusty_serde = { workspace = true }
+rusty_err = { workspace = true }
+rusty_tokio = { workspace = true }
+regex = { workspace = true }

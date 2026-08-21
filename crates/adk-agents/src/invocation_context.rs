@@ -18,12 +18,15 @@
 //! logic (`populate_invocation_agent_states`) actually needs — see
 //! [`ResumabilityConfigStub`]'s doc.
 //!
-//! **Deferred** (blocked on Phase 3's real `Content`/`Part` — `Event`
-//! currently types those as opaque `Value` placeholders, so
-//! `get_function_calls`/`get_function_responses` don't exist yet):
-//! `should_pause_invocation`, `_find_matching_function_call`,
-//! `stamp_event_branch_context` (part of C0071). `_get_events` (also part of
-//! C0071) needs none of that and is implemented.
+//! **C0071 now complete**: `get_events`/`should_pause_invocation`/
+//! `find_matching_function_call`/`stamp_event_branch_context` all needed
+//! `Event::get_function_calls`/`get_function_responses`, blocked until
+//! Phase 3 gave `Event.content` a real `Content`/`Part` structure to
+//! inspect — landed alongside this batch, so all four are implemented and
+//! tested here. `find_event_by_function_call_id` is pulled forward from
+//! the source's `flows.llm_flows.functions` (Phase 4 isn't built) since
+//! `find_matching_function_call` needs it and it doesn't depend on
+//! anything else in that module.
 //!
 //! **Deferred**: `_enqueue_event` (C0069) needs the `_event_queue` this
 //! batch omits along with the other live-mode fields (see the scope note
@@ -212,27 +215,155 @@ impl InvocationContext {
         }
     }
 
-    /// C0071 (partial): events from the current session, optionally
-    /// filtered by invocation and/or branch. Branch matching here covers
-    /// only the direct/descendant-branch prefix check — the source's
-    /// function-response/function-call cross-branch leak guard needs
-    /// `Event::get_function_calls`/`get_function_responses`, which don't
-    /// exist until Phase 3's `Content`/`Part` land.
+    /// C0071: events from the current session, optionally filtered by
+    /// invocation and/or branch.
     pub fn get_events(&self, current_invocation: bool, current_branch: bool) -> Vec<Event> {
         let mut results: Vec<Event> = self.session.events.clone();
         if current_invocation {
             results.retain(|event| event.invocation_id == self.invocation_id);
         }
         if current_branch {
-            results.retain(|event| match (&event.branch, &self.branch) {
-                (None, _) | (_, None) => event.branch == self.branch,
-                (Some(event_branch), Some(branch)) => {
-                    event_branch == branch || event_branch.starts_with(&format!("{branch}."))
-                }
-            });
+            results.retain(|event| self.is_branch_match(event));
         }
         results
     }
+
+    /// The predicate behind `get_events(current_branch=True)`: for a
+    /// user-authored event carrying function responses, first checks that
+    /// at least one response id matches a function-call id issued on this
+    /// branch or a descendant sub-branch (guarding against event leakage
+    /// across parallel/unrelated branches); then applies the ordinary
+    /// direct/descendant-branch prefix match.
+    fn is_branch_match(&self, event: &Event) -> bool {
+        if event.author == "user" {
+            let frs = event.get_function_responses();
+            if !frs.is_empty() {
+                if let Some(branch) = &self.branch {
+                    let fr_ids: std::collections::HashSet<&str> =
+                        frs.iter().filter_map(|fr| fr.id.as_deref()).collect();
+                    if !fr_ids.is_empty() {
+                        let branch_fc_ids: std::collections::HashSet<&str> = self
+                            .session
+                            .events
+                            .iter()
+                            .filter(|e| {
+                                e.branch.as_deref().is_some_and(|b| {
+                                    b == branch || b.starts_with(&format!("{branch}."))
+                                })
+                            })
+                            .flat_map(|e| e.get_function_calls())
+                            .filter_map(|fc| fc.id.as_deref())
+                            .collect();
+                        if fr_ids.is_disjoint(&branch_fc_ids) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            match (&event.branch, &self.branch) {
+                (None, _) | (_, None) => true,
+                (Some(event_branch), Some(branch)) => {
+                    event_branch == branch || event_branch.starts_with(&format!("{branch}."))
+                }
+            }
+        } else {
+            event.branch == self.branch
+        }
+    }
+
+    /// C0071: whether to pause the invocation right after `event` —
+    /// true iff `event` carries an unresolved long-running function call
+    /// that isn't already being answered by a nested sub-branch.
+    pub fn should_pause_invocation(&self, event: &Event) -> bool {
+        let long_running_ids = match &event.long_running_tool_ids {
+            Some(ids) if !ids.is_empty() => ids,
+            _ => return false,
+        };
+        let function_calls = event.get_function_calls();
+        if function_calls.is_empty() {
+            return false;
+        }
+
+        let events = &self.session.events;
+        for fc in &function_calls {
+            let Some(fc_id) = fc.id.as_deref() else {
+                continue;
+            };
+            if !long_running_ids.iter().any(|id| id == fc_id) {
+                continue;
+            }
+            let event_index = events.iter().position(|e| e.id == event.id);
+            let is_resolving_sub_branch = event_index.is_some_and(|index| {
+                events[index + 1..].iter().any(|e| {
+                    e.author == "user"
+                        && e.branch
+                            .as_ref()
+                            .map(|b| branch_path_run_ids(b).contains(&fc_id.to_string()))
+                            .unwrap_or(false)
+                })
+            });
+            if !is_resolving_sub_branch {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// C0071: finds the function-call event in the current invocation that
+    /// matches `function_response_event`'s function response id.
+    pub fn find_matching_function_call(&self, function_response_event: &Event) -> Option<Event> {
+        let function_responses = function_response_event.get_function_responses();
+        if function_responses.is_empty() {
+            return None;
+        }
+        let events = self.get_events(true, false);
+        let search_space: &[Event] = if events
+            .last()
+            .is_some_and(|last| last.id == function_response_event.id)
+        {
+            &events[..events.len() - 1]
+        } else {
+            &events[..]
+        };
+        let function_response_id = function_responses[0].id.as_deref()?;
+        find_event_by_function_call_id(search_space, function_response_id)
+    }
+
+    /// C0071: stamps `event` with the branch (and, if unset, isolation
+    /// scope) of its matching function-call event.
+    pub fn stamp_event_branch_context(&self, event: &mut Event) {
+        if let Some(function_call_event) = self.find_matching_function_call(event) {
+            event.branch = function_call_event.branch.clone();
+            if event.isolation_scope.is_none() && function_call_event.isolation_scope.is_some() {
+                event.isolation_scope = function_call_event.isolation_scope.clone();
+            }
+        }
+    }
+}
+
+/// Shared by [`InvocationContext::should_pause_invocation`] — the
+/// `_BranchPath`-tagged run ids embedded in a dot-separated branch string
+/// (mirrors `_BranchPath.from_string(branch).run_ids`).
+fn branch_path_run_ids(branch: &str) -> Vec<String> {
+    adk_events::branch_path::BranchPath::from_string(branch)
+        .run_ids()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// C0071 helper (the source's `flows.llm_flows.functions.find_event_by_function_call_id`,
+/// pulled forward since `InvocationContext::find_matching_function_call`
+/// needs it and the full `flows/` module is Phase 4): finds the function
+/// call event matching `function_call_id`, searching backward.
+fn find_event_by_function_call_id(events: &[Event], function_call_id: &str) -> Option<Event> {
+    events.iter().rev().find_map(|event| {
+        event
+            .get_function_calls()
+            .iter()
+            .any(|fc| fc.id.as_deref() == Some(function_call_id))
+            .then(|| event.clone())
+    })
 }
 
 /// Builds an [`InvocationContext`] for tests and call sites that don't need
@@ -465,5 +596,132 @@ mod tests {
         };
         assert_eq!(entry.role, "user");
         assert_eq!(entry.timestamp, 1.5);
+    }
+
+    use adk_events::node_info::NodeInfo;
+    use adk_genai::content::{Content, FunctionCall, FunctionResponse, Part};
+
+    fn fc_event(invocation_id: &str, id: &str) -> Event {
+        let mut event = Event::new(invocation_id, "agent", NodeInfo::new("root"));
+        event.content = Some(Content::new(
+            "model",
+            vec![Part::function_call(FunctionCall {
+                id: Some(id.to_string()),
+                name: Some("tool".to_string()),
+                ..Default::default()
+            })],
+        ));
+        event
+    }
+
+    fn fr_event(invocation_id: &str, id: &str) -> Event {
+        let mut event = Event::new(invocation_id, "user", NodeInfo::new("root"));
+        event.content = Some(Content::new(
+            "user",
+            vec![Part::function_response(FunctionResponse {
+                id: Some(id.to_string()),
+                name: Some("tool".to_string()),
+                ..Default::default()
+            })],
+        ));
+        event
+    }
+
+    #[test]
+    fn should_pause_invocation_is_true_for_an_unresolved_long_running_call() {
+        let mut event = fc_event("inv-1", "fc-1");
+        event.set_long_running_tool_ids(["fc-1"]);
+        let ic = ctx();
+        assert!(ic.should_pause_invocation(&event));
+    }
+
+    #[test]
+    fn should_pause_invocation_is_false_without_a_matching_long_running_id() {
+        let mut event = fc_event("inv-1", "fc-1");
+        event.set_long_running_tool_ids(["some-other-id"]);
+        let ic = ctx();
+        assert!(!ic.should_pause_invocation(&event));
+    }
+
+    #[test]
+    fn should_pause_invocation_is_false_once_a_sub_branch_resolves_it() {
+        let mut event = fc_event("inv-1", "fc-1");
+        event.set_long_running_tool_ids(["fc-1"]);
+
+        let mut resolving_user_event = Event::new("inv-1", "user", NodeInfo::new("root"));
+        resolving_user_event.branch = Some("root@fc-1".to_string());
+
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(event.clone());
+        session.events.push(resolving_user_event);
+        let ic = InvocationContextBuilder::new("inv-1", session).build();
+
+        assert!(!ic.should_pause_invocation(&event));
+    }
+
+    #[test]
+    fn find_matching_function_call_locates_the_originating_call() {
+        let call = fc_event("inv-1", "fc-1");
+        let response = fr_event("inv-1", "fc-1");
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(call.clone());
+        session.events.push(response.clone());
+        let ic = InvocationContextBuilder::new("inv-1", session).build();
+
+        let found = ic.find_matching_function_call(&response).unwrap();
+        assert_eq!(found.id, call.id);
+    }
+
+    #[test]
+    fn find_matching_function_call_returns_none_without_a_response() {
+        let ic = ctx();
+        let plain_event = Event::new("inv-1", "user", NodeInfo::new("root"));
+        assert!(ic.find_matching_function_call(&plain_event).is_none());
+    }
+
+    #[test]
+    fn stamp_event_branch_context_copies_branch_from_the_matching_call() {
+        let mut call = fc_event("inv-1", "fc-1");
+        call.branch = Some("root.worker".to_string());
+        let mut response = fr_event("inv-1", "fc-1");
+
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(call);
+        session.events.push(response.clone());
+        let ic = InvocationContextBuilder::new("inv-1", session).build();
+
+        ic.stamp_event_branch_context(&mut response);
+        assert_eq!(response.branch.as_deref(), Some("root.worker"));
+    }
+
+    #[test]
+    fn get_events_branch_filter_excludes_a_function_response_for_an_unrelated_branch() {
+        // A function call issued on branch "a", and a function response
+        // event whose only matching call was never issued anywhere in "a"'s
+        // branch tree — the response must not leak into "a"'s event view.
+        let mut call = fc_event("inv-1", "fc-1");
+        call.branch = Some("a".to_string());
+        let mut response = fr_event("inv-1", "fc-1");
+        response.branch = Some("a".to_string());
+
+        let mut unrelated_response = fr_event("inv-1", "fc-2");
+        unrelated_response.branch = Some("a".to_string());
+        let unrelated_response_id = unrelated_response.id.clone();
+
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(call);
+        session.events.push(response.clone());
+        session.events.push(unrelated_response);
+        let ic = InvocationContextBuilder::new("inv-1", session)
+            .branch("a")
+            .build();
+
+        let events = ic.get_events(false, true);
+        let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&response.id.as_str()));
+        assert!(
+            !ids.contains(&unrelated_response_id.as_str()),
+            "the response to a call never issued on this branch tree must be filtered out"
+        );
     }
 }

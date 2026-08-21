@@ -357,6 +357,178 @@ impl LlmAgent {
             has_sub_agents,
         )
     }
+
+    /// C0095: saves the model output to `event.actions.state_delta[output_key]`
+    /// if applicable. `name` is this agent's name (a `BaseAgent` field this
+    /// standalone struct doesn't hold yet — see the module doc).
+    ///
+    /// **Adaptation**: the source's `validate_schema(self.output_schema,
+    /// result)` step (coercing/validating the joined text against
+    /// `output_schema`, a JSON-Schema-shaped type) is not ported — there is
+    /// no JSON-Schema validation engine in this codebase yet, and building
+    /// one is its own scoped decision, not a corollary of this method. The
+    /// empty-final-chunk skip (checking the *unvalidated* text isn't blank)
+    /// is still applied, since that doesn't need the schema itself.
+    pub fn maybe_save_output_to_state(&self, name: &str, event: &mut adk_events::Event) {
+        if event.author != name {
+            return;
+        }
+        let Some(output_key) = &self.output_key else {
+            return;
+        };
+        if self.mode == Some(AgentMode::Task) {
+            return;
+        }
+        if !event.is_final_response() {
+            return;
+        }
+        let Some(content) = &event.content else {
+            return;
+        };
+        if content.parts.is_empty() {
+            return;
+        }
+        let has_text_part = content
+            .parts
+            .iter()
+            .any(|part| part.text.is_some() && part.thought != Some(true));
+        if !has_text_part {
+            return;
+        }
+        let result: String = content
+            .parts
+            .iter()
+            .filter(|part| part.thought != Some(true))
+            .filter_map(|part| part.text.as_deref())
+            .collect();
+        if self.output_schema.is_some() && result.trim().is_empty() {
+            return;
+        }
+        event
+            .actions
+            .state_delta
+            .insert(output_key.clone(), Value::String(result));
+    }
+
+    /// C0095: accumulates `output_key` text across a streaming turn
+    /// spanning tool calls — see the source's docstring for why
+    /// `is_final_response()`-gated saving alone drops text on those turns.
+    pub fn maybe_accumulate_streaming_output(
+        &self,
+        name: &str,
+        event: &mut adk_events::Event,
+        accumulator: String,
+    ) -> String {
+        let Some(output_key) = &self.output_key else {
+            return accumulator;
+        };
+        if self.mode == Some(AgentMode::Task) || self.output_schema.is_some() {
+            return accumulator;
+        }
+        if event.author != name || event.partial == Some(true) {
+            return accumulator;
+        }
+        let Some(content) = &event.content else {
+            return accumulator;
+        };
+        if content.parts.is_empty() {
+            return accumulator;
+        }
+        let text: String = content
+            .parts
+            .iter()
+            .filter(|part| part.thought != Some(true))
+            .filter_map(|part| part.text.as_deref())
+            .collect();
+        if text.is_empty() {
+            return accumulator;
+        }
+        let accumulator = accumulator + &text;
+        event
+            .actions
+            .state_delta
+            .insert(output_key.clone(), Value::String(accumulator.clone()));
+        accumulator
+    }
+}
+
+#[derive(Debug, rusty_err::Error)]
+pub enum GetSubagentToResumeError {
+    #[error("No agent to transfer to for resuming agent from function response {0}")]
+    NoAgentToTransferTo(String),
+    #[error("Agent '{0}' not found.")]
+    AgentNotFound(String),
+}
+
+/// C0094: determines which sub-agent to resume, based on the last event's
+/// transfer/function-call-response state.
+///
+/// **Scope note**: this only needs `agent`'s name and its position in the
+/// `BaseAgent` tree (`root_agent`/`find_agent`), not any of `LlmAgent`'s own
+/// config fields — so it's implemented here as a free function over a
+/// `BaseAgent` handle rather than an `LlmAgent` method, usable once
+/// `LlmAgent` is wired into the tree (a later batch).
+pub fn get_subagent_to_resume(
+    agent: &crate::base_agent::BaseAgent,
+    ctx: &crate::invocation_context::InvocationContext,
+) -> Result<Option<crate::base_agent::BaseAgent>, GetSubagentToResumeError> {
+    let events = ctx.get_events(true, true);
+    let Some(last_event) = events.last() else {
+        return Ok(None);
+    };
+
+    if last_event.author == agent.name() {
+        return get_transfer_to_agent_or_none(agent, last_event, agent.name());
+    }
+
+    if last_event.author == "user" {
+        let function_call_event = ctx.find_matching_function_call(last_event).ok_or_else(|| {
+            GetSubagentToResumeError::NoAgentToTransferTo(agent.name().to_string())
+        })?;
+        if function_call_event.author == agent.name() {
+            return Ok(None);
+        }
+    }
+
+    for event in events.iter().rev() {
+        if let Some(target) = get_transfer_to_agent_or_none(agent, event, agent.name())? {
+            return Ok(Some(target));
+        }
+    }
+    Ok(None)
+}
+
+fn get_transfer_to_agent_or_none(
+    agent: &crate::base_agent::BaseAgent,
+    event: &adk_events::Event,
+    from_agent: &str,
+) -> Result<Option<crate::base_agent::BaseAgent>, GetSubagentToResumeError> {
+    let function_responses = event.get_function_responses();
+    if function_responses.is_empty() {
+        return Ok(None);
+    }
+    for function_response in function_responses {
+        let Some(target_agent) = &event.actions.transfer_to_agent else {
+            continue;
+        };
+        if function_response.name.as_deref() == Some("transfer_to_agent")
+            && event.author == from_agent
+            && target_agent != from_agent
+        {
+            return get_agent_to_run(agent, target_agent).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn get_agent_to_run(
+    agent: &crate::base_agent::BaseAgent,
+    agent_name: &str,
+) -> Result<crate::base_agent::BaseAgent, GetSubagentToResumeError> {
+    agent
+        .root_agent()
+        .find_agent(agent_name)
+        .ok_or_else(|| GetSubagentToResumeError::AgentNotFound(agent_name.to_string()))
 }
 
 #[cfg(test)]
@@ -538,6 +710,167 @@ mod tests {
         match result {
             Err(LlmAgentError::SystemInstructionInGenerateContentConfig) => {}
             _ => panic!("expected SystemInstructionInGenerateContentConfig"),
+        }
+    }
+
+    use crate::base_agent::{BaseAgent, NoopBehavior};
+    use adk_events::node_info::NodeInfo;
+    use adk_events::{Event, EventActions};
+    use adk_genai::content::{Content, FunctionResponse, Part};
+
+    fn agent_event(name: &str, text: Option<&str>) -> Event {
+        let mut event = Event::new("inv-1", name, NodeInfo::new("root"));
+        if let Some(text) = text {
+            event.content = Some(Content::new("model", vec![Part::text(text)]));
+        }
+        event
+    }
+
+    #[test]
+    fn maybe_save_output_to_state_writes_final_response_text() {
+        let agent = LlmAgent {
+            output_key: Some("out".to_string()),
+            ..LlmAgent::new(ModelRef::Name("m".to_string()))
+        };
+        let mut event = agent_event("planner", Some("the answer"));
+        agent.maybe_save_output_to_state("planner", &mut event);
+        assert_eq!(
+            event.actions.state_delta.get("out"),
+            Some(&Value::String("the answer".to_string()))
+        );
+    }
+
+    #[test]
+    fn maybe_save_output_to_state_skips_events_from_another_author() {
+        let agent = LlmAgent {
+            output_key: Some("out".to_string()),
+            ..LlmAgent::new(ModelRef::Name("m".to_string()))
+        };
+        let mut event = agent_event("other_agent", Some("text"));
+        agent.maybe_save_output_to_state("planner", &mut event);
+        assert!(event.actions.state_delta.is_empty());
+    }
+
+    #[test]
+    fn maybe_save_output_to_state_skips_task_mode() {
+        let agent = LlmAgent {
+            output_key: Some("out".to_string()),
+            mode: Some(AgentMode::Task),
+            ..LlmAgent::new(ModelRef::Name("m".to_string()))
+        };
+        let mut event = agent_event("planner", Some("text"));
+        agent.maybe_save_output_to_state("planner", &mut event);
+        assert!(event.actions.state_delta.is_empty());
+    }
+
+    #[test]
+    fn maybe_save_output_to_state_skips_without_an_output_key() {
+        let agent = LlmAgent::new(ModelRef::Name("m".to_string()));
+        let mut event = agent_event("planner", Some("text"));
+        agent.maybe_save_output_to_state("planner", &mut event);
+        assert!(event.actions.state_delta.is_empty());
+    }
+
+    #[test]
+    fn maybe_accumulate_streaming_output_appends_across_calls() {
+        let agent = LlmAgent {
+            output_key: Some("out".to_string()),
+            ..LlmAgent::new(ModelRef::Name("m".to_string()))
+        };
+        let mut first = agent_event("planner", Some("Hello"));
+        first.partial = None; // non-partial, mid-turn chunk with a tool call
+        let accumulator =
+            agent.maybe_accumulate_streaming_output("planner", &mut first, String::new());
+        assert_eq!(accumulator, "Hello");
+
+        let mut second = agent_event("planner", Some(" world"));
+        let accumulator =
+            agent.maybe_accumulate_streaming_output("planner", &mut second, accumulator);
+        assert_eq!(accumulator, "Hello world");
+        assert_eq!(
+            second.actions.state_delta.get("out"),
+            Some(&Value::String("Hello world".to_string()))
+        );
+    }
+
+    #[test]
+    fn maybe_accumulate_streaming_output_skips_partial_events() {
+        let agent = LlmAgent {
+            output_key: Some("out".to_string()),
+            ..LlmAgent::new(ModelRef::Name("m".to_string()))
+        };
+        let mut event = agent_event("planner", Some("chunk"));
+        event.partial = Some(true);
+        let accumulator =
+            agent.maybe_accumulate_streaming_output("planner", &mut event, String::new());
+        assert_eq!(accumulator, "");
+    }
+
+    fn agent_with_child() -> (BaseAgent, BaseAgent) {
+        let child = BaseAgent::new("child", NoopBehavior).unwrap();
+        let root = BaseAgent::build(
+            "root",
+            "",
+            vec![child.clone()],
+            vec![],
+            vec![],
+            NoopBehavior,
+        )
+        .unwrap();
+        (root, child)
+    }
+
+    fn transfer_event(author: &str, target: &str) -> Event {
+        let mut event = Event::new("inv-1", author, NodeInfo::new("root"));
+        event.content = Some(Content::new(
+            "user",
+            vec![Part::function_response(FunctionResponse {
+                name: Some("transfer_to_agent".to_string()),
+                ..Default::default()
+            })],
+        ));
+        event.actions = EventActions {
+            transfer_to_agent: Some(target.to_string()),
+            ..Default::default()
+        };
+        event
+    }
+
+    #[test]
+    fn get_subagent_to_resume_returns_none_without_history() {
+        let (root, _child) = agent_with_child();
+        let ic = InvocationContextBuilder::new("inv-1", Session::new("app", "user", "s1"))
+            .agent(root.clone())
+            .build();
+        assert!(get_subagent_to_resume(&root, &ic).unwrap().is_none());
+    }
+
+    #[test]
+    fn get_subagent_to_resume_follows_a_transfer_from_the_current_agent() {
+        let (root, child) = agent_with_child();
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(transfer_event("root", "child"));
+        let ic = InvocationContextBuilder::new("inv-1", session)
+            .agent(root.clone())
+            .build();
+        let resumed = get_subagent_to_resume(&root, &ic).unwrap().unwrap();
+        assert_eq!(resumed.name(), child.name());
+    }
+
+    #[test]
+    fn get_subagent_to_resume_errors_when_no_function_call_matches_a_user_reply() {
+        let (root, _child) = agent_with_child();
+        let mut session = Session::new("app", "user", "s1");
+        session
+            .events
+            .push(Event::new("inv-1", "user", NodeInfo::new("root")));
+        let ic = InvocationContextBuilder::new("inv-1", session)
+            .agent(root.clone())
+            .build();
+        let result = get_subagent_to_resume(&root, &ic);
+        match result {
+            Err(GetSubagentToResumeError::NoAgentToTransferTo(_)) => {}
+            _ => panic!("expected NoAgentToTransferTo"),
         }
     }
 }

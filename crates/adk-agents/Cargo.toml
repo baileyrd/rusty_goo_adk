@@ -9,6 +9,7 @@ publish.workspace = true
 adk-platform = { path = "../adk-platform" }
 adk-errors = { path = "../adk-errors" }
 adk-events = { path = "../adk-events" }
+adk-genai = { path = "../adk-genai" }
 rusty_serde = { workspace = true }
 rusty_tokio = { workspace = true }
 rusty_err = { workspace = true }

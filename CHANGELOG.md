@@ -28,6 +28,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   chain contract, plus `TaskRequest`/`TaskResult`/`DefaultTaskInput`/
   `DefaultTaskOutput` (C0079/C0081-C0089/C0091/C0093/C0100). `LlmAgent`
   isn't yet wired into `BaseAgent`'s tree — deferred pending Phase 3/4/8.
+- `adk-genai` crate: a minimal real subset of `google.genai.types`
+  (`Content`/`Part`/`FunctionCall`/`FunctionResponse`) needed to give
+  `Event`/`LlmRequest`/`LlmResponse` real (not opaque-placeholder)
+  behavior.
+- `adk-models` crate (Phase 3 batch 1): `BaseLlm`/`LlmCapabilities`/
+  `BaseLlmConnection`/`LLMRegistry`/`LlmRequest`/`LlmResponse`/
+  `CacheMetadata` (C0101, C0103-C0108, C0110, C0114-C0115, C0117-C0120,
+  C0122). Adopts the `regex` crate for model-name pattern matching. The
+  native Gemini backend (C0123-C0143) is deferred to a follow-up batch
+  pending an HTTP client decision.
+- Retroactively completed, now that `adk-genai::Content` exists:
+  `Event::is_final_response`/`has_trailing_code_execution_result` (Phase
+  1, C0022/C0023), `InvocationContext`'s FC-matching methods (Phase 2,
+  completing C0071), and `LlmAgent`'s `_get_subagent_to_resume`/
+  `__maybe_save_output_to_state`/`__maybe_accumulate_streaming_output`
+  (Phase 2, C0094/C0095).
 ### Changed
 ### Fixed
 ### Security
