@@ -1,0 +1,9 @@
+[package]
+name = "adk-platform"
+description = "Runtime-abstraction primitives (random/time/uuid/thread) ported from google/adk-python's platform/ module"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusty_uuid = { workspace = true }

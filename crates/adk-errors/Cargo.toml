@@ -1,0 +1,9 @@
+[package]
+name = "adk-errors"
+description = "Exception hierarchy ported from google/adk-python's errors/ module"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusty_err = { workspace = true }
