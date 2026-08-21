@@ -1,0 +1,14 @@
+[package]
+name = "adk-agents"
+description = "Agent core & context, ported from google/adk-python's agents/ module (Phase 2)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+adk-platform = { path = "../adk-platform" }
+adk-errors = { path = "../adk-errors" }
+adk-events = { path = "../adk-events" }
+rusty_serde = { workspace = true }
+rusty_tokio = { workspace = true }
+rusty_err = { workspace = true }
