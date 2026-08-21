@@ -21,6 +21,13 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   async runtime.
 - 94 capability rows (C0833-C0926) filling the `runners.py` inventory gap
   flagged at row C0788.
+- `LlmAgent` config shape + self-contained resolution helpers (Phase 2
+  batch 2): `canonical_instruction`/`canonical_global_instruction`,
+  `generate_content_config` validation, the `_llm_flow` decision,
+  `set_default_model`/`set_default_live_model`, and the model/tool callback
+  chain contract, plus `TaskRequest`/`TaskResult`/`DefaultTaskInput`/
+  `DefaultTaskOutput` (C0079/C0081-C0089/C0091/C0093/C0100). `LlmAgent`
+  isn't yet wired into `BaseAgent`'s tree — deferred pending Phase 3/4/8.
 ### Changed
 ### Fixed
 ### Security
