@@ -2,6 +2,7 @@
 
 use crate::event_actions::EventActions;
 use crate::node_info::NodeInfo;
+use adk_genai::content::{Content, FunctionCall, FunctionResponse};
 use adk_platform::time::get_time;
 use adk_platform::uuid::new_uuid;
 use rusty_serde::value::Value;
@@ -14,14 +15,14 @@ use std::collections::HashMap;
 /// `LlmResponse` (from `models/`, phase P3) via Python inheritance, gaining
 /// ~20 fields (content, grounding metadata, usage metadata, transcriptions,
 /// ...) on top of the ones `events/event.py` itself declares. Rust has no
-/// struct inheritance, and P3 hasn't landed yet, so those inherited fields
-/// are flattened directly onto this struct (matching the actual flat JSON
-/// wire shape either way) and typed as JSON [`Value`] placeholders for now.
-/// They narrow to concrete types (`Content`, `GroundingMetadata`,
-/// `UsageMetadata`, ...) once P3's `models/` crate lands, at which point
-/// this struct is expected to become `#[rusty_serde(flatten)] base:
-/// LlmResponse` plus its own fields, rather than one flat struct — noted
-/// here so that refactor isn't a surprise.
+/// struct inheritance, so those inherited fields are flattened directly
+/// onto this struct (matching the actual flat JSON wire shape either way)
+/// rather than becoming `#[rusty_serde(flatten)] base: LlmResponse` — a
+/// flatten wrapper buys nothing here since nothing needs to hold a bare
+/// `LlmResponse` value distinct from an `Event`. `content` is now the real
+/// `adk_genai::content::Content` (Phase 3 landed it); every other inherited
+/// field not yet load-bearing for a built capability stays a JSON [`Value`]
+/// placeholder (`GroundingMetadata`, `UsageMetadata`, transcriptions, ...).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[rusty_serde(rename_all = "camelCase")]
 pub struct Event {
@@ -47,9 +48,9 @@ pub struct Event {
     pub id: String,
     pub timestamp: f64,
 
-    // --- Fields inherited from LlmResponse in the source (P3 placeholder) ---
+    // --- Fields inherited from LlmResponse in the source ---
     #[rusty_serde(default)]
-    pub content: Option<Value>,
+    pub content: Option<Content>,
     #[rusty_serde(default)]
     pub grounding_metadata: Option<Value>,
     #[rusty_serde(default)]
@@ -163,12 +164,13 @@ impl Event {
     /// Convenience-kwarg-routing equivalent (capability C0019): the
     /// source's `message=` constructor kwarg, routed to `content`.
     ///
-    /// **Adaptation**: a placeholder until P3's `Content` type lands — for
-    /// now this just stores the given [`Value`] as-is on `content`,
-    /// without the source's `t_content` transformer or its "raises if both
-    /// `message` and `content` are given" validation (there is no separate
-    /// `content` constructor arg to conflict with here yet).
-    pub fn with_message(mut self, message: Value) -> Self {
+    /// **Adaptation**: omits the source's `t_content` transformer (which
+    /// accepts a bare string/list-of-parts and normalizes it into a
+    /// `Content`) and its "raises if both `message` and `content` are
+    /// given" validation — there is no separate `content` constructor arg
+    /// to conflict with here, since this builder-style API only has one
+    /// way to set it.
+    pub fn with_message(mut self, message: Content) -> Self {
         self.content = Some(message);
         self
     }
@@ -195,13 +197,13 @@ impl Event {
     }
 
     /// `message` getter (capability C0020) — reads `content`.
-    pub fn message(&self) -> Option<&Value> {
+    pub fn message(&self) -> Option<&Content> {
         self.content.as_ref()
     }
 
     /// `message` setter (capability C0020) — writes (or clears, on `None`)
     /// `content`.
-    pub fn set_message(&mut self, message: Option<Value>) {
+    pub fn set_message(&mut self, message: Option<Content>) {
         self.content = message;
     }
 
@@ -215,48 +217,53 @@ impl Event {
         self.node_info.name()
     }
 
-    /// `is_final_response()` (capability C0022).
-    ///
-    /// **Partial implementation, not yet full parity**: the source's full
-    /// rule also inspects `content` for function-call/function-response
-    /// parts and checks [`Event::has_trailing_code_execution_result`] — both
-    /// require the real `Content`/`Part` structure from P3's `models/`
-    /// crate, which doesn't exist yet (`content` here is an untyped JSON
-    /// placeholder). This implementation covers the two branches that
-    /// don't need `Content`'s structure (the `skip_summarization`/
-    /// `long_running_tool_ids` short-circuit, and the `partial` check);
-    /// the function-call-aware branch is a follow-up once P3 lands, and
-    /// this capability's manifest row stays `REQUIRED` until then rather
-    /// than being marked done on partial coverage.
+    /// C0120 (inherited from `LlmResponse` in the source): the function
+    /// calls requested by the model, extracted from `content.parts`.
+    pub fn get_function_calls(&self) -> Vec<&FunctionCall> {
+        self.content
+            .as_ref()
+            .map(Content::get_function_calls)
+            .unwrap_or_default()
+    }
+
+    /// C0120 (inherited from `LlmResponse` in the source): the function
+    /// responses carried by this event, extracted from `content.parts`.
+    pub fn get_function_responses(&self) -> Vec<&FunctionResponse> {
+        self.content
+            .as_ref()
+            .map(Content::get_function_responses)
+            .unwrap_or_default()
+    }
+
+    /// `is_final_response()` (capability C0022) — now at full parity: a
+    /// short-circuit for `skip_summarization`/`long_running_tool_ids`,
+    /// else true iff there are no function calls, no function responses,
+    /// the event isn't a partial streaming chunk, and it has no trailing
+    /// code-execution result.
     pub fn is_final_response(&self) -> bool {
         if self.actions.skip_summarization || self.long_running_tool_ids.is_some() {
             return true;
         }
-        if self.partial == Some(true) {
-            return false;
-        }
-        // TODO(P3): also require no function calls / no function
-        // responses / no trailing code-execution result once `content`
-        // has real structure to inspect.
-        true
+        self.get_function_calls().is_empty()
+            && self.get_function_responses().is_empty()
+            && self.partial != Some(true)
+            && !self.has_trailing_code_execution_result()
     }
 
-    /// `has_trailing_code_execution_result()` (capability C0023).
-    ///
-    /// **Not yet implemented pending P3**: this fundamentally requires
-    /// inspecting the last part of `content` for a `code_execution_result`
-    /// — impossible to do meaningfully against the current untyped JSON
-    /// placeholder. Returns `false` unconditionally for now; this
-    /// capability's manifest row stays `REQUIRED` until P3's `Content`/
-    /// `Part` types land and this can be implemented for real.
+    /// `has_trailing_code_execution_result()` (capability C0023) — true iff
+    /// the last part of `content` carries a `code_execution_result`.
     pub fn has_trailing_code_execution_result(&self) -> bool {
-        false
+        self.content
+            .as_ref()
+            .and_then(|content| content.parts.last())
+            .is_some_and(|part| part.code_execution_result.is_some())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adk_genai::content::Part;
 
     fn sample_event() -> Event {
         Event::new("inv-1", "test_agent", NodeInfo::new("root"))
@@ -316,8 +323,8 @@ mod tests {
     fn message_getter_and_setter_operate_on_content() {
         let mut event = sample_event();
         assert_eq!(event.message(), None);
-        event.set_message(Some(Value::String("hi".to_string())));
-        assert_eq!(event.message(), Some(&Value::String("hi".to_string())));
+        event.set_message(Some(Content::user_text("hi")));
+        assert_eq!(event.message(), Some(&Content::user_text("hi")));
         event.set_message(None);
         assert_eq!(event.message(), None);
     }
@@ -338,11 +345,10 @@ mod tests {
         assert_eq!(other.node_name(), "");
     }
 
-    /// Parity test for capability C0022 (partial): the
-    /// `skip_summarization`/`long_running_tool_ids`/`partial` branches
-    /// that don't need `Content` structure.
+    /// Parity test for capability C0022: the
+    /// `skip_summarization`/`long_running_tool_ids`/`partial` branches.
     #[test]
-    fn is_final_response_covers_the_non_content_branches() {
+    fn is_final_response_covers_the_flag_branches() {
         let mut event = sample_event();
         assert!(
             event.is_final_response(),
@@ -363,6 +369,83 @@ mod tests {
             with_tool_ids.is_final_response(),
             "long_running_tool_ids short-circuits even when partial"
         );
+    }
+
+    /// Parity test for capability C0022: a function call or response in
+    /// `content` means the event isn't a final response yet.
+    #[test]
+    fn is_final_response_is_false_with_pending_function_calls_or_responses() {
+        let mut with_call = sample_event();
+        with_call.content = Some(Content::new(
+            "model",
+            vec![Part::function_call(FunctionCall {
+                name: Some("get_weather".to_string()),
+                ..Default::default()
+            })],
+        ));
+        assert!(!with_call.is_final_response());
+
+        let mut with_response = sample_event();
+        with_response.content = Some(Content::new(
+            "user",
+            vec![Part::function_response(FunctionResponse {
+                name: Some("get_weather".to_string()),
+                ..Default::default()
+            })],
+        ));
+        assert!(!with_response.is_final_response());
+    }
+
+    /// Parity test for capability C0022/C0023: a trailing code-execution
+    /// result also means the event isn't final yet.
+    #[test]
+    fn is_final_response_is_false_with_a_trailing_code_execution_result() {
+        let mut event = sample_event();
+        event.content = Some(Content::new(
+            "model",
+            vec![Part {
+                code_execution_result: Some(Value::String("42".to_string())),
+                ..Default::default()
+            }],
+        ));
+        assert!(!event.is_final_response());
+        assert!(event.has_trailing_code_execution_result());
+    }
+
+    /// Parity test for capability C0023: only the *last* part is checked.
+    #[test]
+    fn has_trailing_code_execution_result_only_checks_the_last_part() {
+        let mut event = sample_event();
+        event.content = Some(Content::new(
+            "model",
+            vec![
+                Part {
+                    code_execution_result: Some(Value::String("42".to_string())),
+                    ..Default::default()
+                },
+                Part::text("done"),
+            ],
+        ));
+        assert!(!event.has_trailing_code_execution_result());
+    }
+
+    /// Parity test for C0120 (inherited from `LlmResponse`): extracting
+    /// function calls/responses from `content.parts`.
+    #[test]
+    fn get_function_calls_and_responses_extract_from_content() {
+        let mut event = sample_event();
+        assert!(event.get_function_calls().is_empty());
+        assert!(event.get_function_responses().is_empty());
+
+        event.content = Some(Content::new(
+            "model",
+            vec![Part::function_call(FunctionCall {
+                name: Some("tool".to_string()),
+                ..Default::default()
+            })],
+        ));
+        assert_eq!(event.get_function_calls().len(), 1);
+        assert!(event.get_function_responses().is_empty());
     }
 
     #[test]

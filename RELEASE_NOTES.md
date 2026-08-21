@@ -22,6 +22,54 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 3 batch 1: model layer core (BaseLlm/LlmRequest/LlmResponse/LLMRegistry)
+**2026-08-21** · (link added once this PR is opened)
+
+- **Added:** `adk-genai` crate — a minimal, *real* (not opaque) Rust subset
+  of `google.genai.types`: `Content`/`Part`/`FunctionCall`/`FunctionResponse`,
+  covering exactly the fields `google/adk-python`'s own code touches
+  (confirmed by grepping every `part.*`/`content.*` access across the
+  source tree). This isn't an ADK capability of its own — these types
+  belong to the third-party `google-genai` package — but `LlmRequest`/
+  `LlmResponse` (this batch's own capabilities) can't have real behavior
+  without it.
+- **Added:** `adk-models` crate — `BaseLlm` (trait, capabilities self-report
+  with deprecated name-based fallback, `supported_models`, default
+  `NotImplementedError`-equivalent `generate_content_async`/`connect`),
+  `BaseLlmConnection` (live-connection trait), `LLMRegistry` (regex-based
+  model-name dispatch, `prefix:model` override syntax, helpful
+  unresolvable-model errors), `LlmRequest` (`append_instructions`,
+  `insert_transient_user_content`, `set_output_schema`), `LlmResponse`
+  (`get_function_calls`/`get_function_responses`), `CacheMetadata`
+  (two-state active/fingerprint-only model). 37 new tests.
+- **Retroactive completions, now that real `Content`/`Part` exist:**
+  `Event::is_final_response`/`has_trailing_code_execution_result` (Phase 1,
+  C0022/C0023 — left partial there, now finished), `InvocationContext`'s
+  `should_pause_invocation`/`find_matching_function_call`/
+  `stamp_event_branch_context` (Phase 2, completing C0071), and
+  `LlmAgent`'s `_get_subagent_to_resume`/`__maybe_save_output_to_state`/
+  `__maybe_accumulate_streaming_output` (Phase 2, C0094/C0095). 20 total
+  rows across three phases moved to `DONE` by this batch alone.
+- **New dependency:** the `regex` crate, for `LLMRegistry`'s model-name
+  pattern matching — no sibling `rusty_regex` exists in the platform
+  directory, and this isn't a sovereignty-sensitive surface the way an
+  HTTP client or crypto library would be.
+- **Scope decision:** the native Gemini backend (`Gemini`,
+  `GeminiLlmConnection`, `GeminiContextCacheManager` — C0123-C0143, 21
+  rows) is deferred to a follow-up batch. It needs a real HTTP/WebSocket
+  client to Google's API — a dependency decision on the same scale as
+  Phase 2's async-runtime choice — and deserves its own sibling-repo check
+  before hand-rolling, per the migration's own step 3.
+- **Known gaps, flagged not hidden:** `LlmResponse.create()` (needs the raw
+  Gemini SDK response type), `LlmRequest.append_tools` (needs `BaseTool`,
+  Phase 8), the LiteLLM provider-list fallback and real lazy provider
+  registrations (`Gemini`/`Claude`/`LiteLlm`/etc. — no backends exist yet
+  to register) all stay `REQUIRED`.
+- 20 rows marked `DONE` with per-row test-name evidence in
+  `capability-manifest.md` (15 in Phase 3, plus the 5 retroactive
+  completions above); Phase 3 sits at 15 of 43 rows complete, with the
+  remaining 28 concentrated in the deferred Gemini-backend cluster.
+
 ## PR #TBD — Phase 2 batch 2: LlmAgent config shape + task-delegation models
 **2026-08-21** · (link added once this PR is opened)
 

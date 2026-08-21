@@ -50,7 +50,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock, Weak};
 
 use adk_events::Event;
-use rusty_serde::value::Value;
+use adk_genai::content::Content;
 
 use crate::context::Context;
 use crate::invocation_context::InvocationContext;
@@ -59,7 +59,7 @@ use crate::services::PluginManager;
 /// A callback invoked before/after an agent's run. Returning `Some(content)`
 /// short-circuits the chain (see [`run_before_agent_callbacks`]/
 /// [`run_after_agent_callbacks`]).
-pub type AgentCallback = Arc<dyn Fn(&mut Context) -> Option<Value> + Send + Sync>;
+pub type AgentCallback = Arc<dyn Fn(&mut Context) -> Option<Content> + Send + Sync>;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -633,25 +633,25 @@ mod tests {
         let calls_clone = calls.clone();
         let before: AgentCallback = Arc::new(move |_ctx| {
             calls_clone.fetch_add(1, Ordering::SeqCst);
-            Some(Value::String("skip".to_string()))
+            Some(Content::user_text("skip"))
         });
         let agent =
             BaseAgent::build("agent", "", vec![], vec![before], vec![], NoopBehavior).unwrap();
         let events = agent.run_async(&ctx()).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].content, Some(Value::String("skip".to_string())));
+        assert_eq!(events[0].content, Some(Content::user_text("skip")));
     }
 
     #[rusty_tokio::test]
     async fn callback_chain_stops_at_first_non_none_result() {
         let first: AgentCallback = Arc::new(|_ctx| None);
-        let second: AgentCallback = Arc::new(|_ctx| Some(Value::String("second".to_string())));
+        let second: AgentCallback = Arc::new(|_ctx| Some(Content::user_text("second")));
         let third_ran = Arc::new(AtomicUsize::new(0));
         let third_ran_clone = third_ran.clone();
         let third: AgentCallback = Arc::new(move |_ctx| {
             third_ran_clone.fetch_add(1, Ordering::SeqCst);
-            Some(Value::String("third".to_string()))
+            Some(Content::user_text("third"))
         });
         let agent = BaseAgent::build(
             "agent",
@@ -668,17 +668,17 @@ mod tests {
             0,
             "chain must stop at `second`"
         );
-        assert_eq!(events[0].content, Some(Value::String("second".to_string())));
+        assert_eq!(events[0].content, Some(Content::user_text("second")));
     }
 
     #[rusty_tokio::test]
     async fn after_agent_callback_content_is_appended_as_an_extra_event() {
-        let after: AgentCallback = Arc::new(|_ctx| Some(Value::String("done".to_string())));
+        let after: AgentCallback = Arc::new(|_ctx| Some(Content::user_text("done")));
         let agent =
             BaseAgent::build("agent", "", vec![], vec![], vec![after], NoopBehavior).unwrap();
         let events = agent.run_async(&ctx()).await.unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].content, Some(Value::String("done".to_string())));
+        assert_eq!(events[0].content, Some(Content::user_text("done")));
     }
 
     #[rusty_tokio::test]

@@ -1,0 +1,9 @@
+[package]
+name = "adk-genai"
+description = "Minimal Rust subset of google.genai.types that google/adk-python's own code actually touches"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusty_serde = { workspace = true }

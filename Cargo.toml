@@ -23,3 +23,10 @@ rusty_err = { git = "https://github.com/baileyrd/rusty_err", rev = "992ede743fe1
 # mpsc/oneshot/watch/broadcast channels, timers) matching what ADK's
 # in-process task/queue orchestration actually needs.
 rusty_tokio = { git = "https://github.com/baileyrd/rusty_tokio", rev = "6e6f18471749ee8327ce52e9d9b825e2e9e5e1a7" }
+# `LLMRegistry` (Phase 3) genuinely needs regex matching (model-name
+# patterns like `gemini-.*`), not string-prefix matching dressed up as one.
+# No sibling `rusty_regex` exists in the platform directory (checked); the
+# `regex` crate is the standard, extremely well-audited choice for this and
+# isn't a sovereignty-sensitive surface the way an HTTP client or crypto
+# lib would be, so it's adopted directly rather than hand-rolled.
+regex = "1"
