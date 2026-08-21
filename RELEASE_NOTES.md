@@ -22,6 +22,44 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 2 batch 2: LlmAgent config shape + task-delegation models
+**2026-08-21** · (link added once this PR is opened)
+
+- **Added:** `LlmAgent`'s config fields and the handful of methods that
+  don't need Phase 3/4/8 to exist: `canonical_instruction`/
+  `canonical_global_instruction` (string-or-provider resolution), the
+  `generate_content_config` validator (rejects `tools`/`system_instruction`/
+  `response_schema`/`http_options.base_url` set there), the `_llm_flow`
+  single-vs-auto flow *decision*, `set_default_model`/`set_default_live_model`,
+  and the 6 model/tool callback fields' stop-at-first-non-`None` chain
+  contract. Plus `TaskRequest`/`TaskResult`/`DefaultTaskInput`/
+  `DefaultTaskOutput` (task-delegation payload shapes — fully self-contained,
+  no forward references). 21 new tests (155 total workspace-wide), clippy/fmt
+  clean.
+- **Scope decision:** `LlmAgent` is implemented as a standalone struct this
+  batch, not yet wired into `BaseAgent`'s tree/`AgentBehavior` — its real
+  behavior (`canonical_model`, `canonical_tools`, `_run_async_impl`) is
+  driven entirely by types this migration hasn't built yet (`BaseLlm`/
+  `LlmRequest`/`LlmResponse`/`LLMRegistry` — Phase 3; `BaseTool`/
+  `BaseToolset`/`ToolContext` — Phase 8; `BaseLlmFlow`/`SingleFlow`/
+  `AutoFlow`/planners — Phase 4). Wiring it into the tree now would mean
+  giving it a `_run_async_impl` that can't actually run anything; that
+  integration happens once those phases land.
+- **Known gaps, flagged not hidden** — left `REQUIRED`: `canonical_model`/
+  `canonical_live_model` (need `LLMRegistry`), `canonical_tools` (needs
+  `BaseTool` resolution), `_get_subagent_to_resume`/
+  `__maybe_save_output_to_state`/`__maybe_accumulate_streaming_output`
+  (blocked on Phase 3's real `Content`/`Part` — `Event.get_function_calls`/
+  `get_function_responses` don't exist yet), `_pre_validate_tools`'s
+  tool/sub-agent auto-wrapping (needs `BaseNode`/`BaseTool`/
+  `FinishTaskTool`), the deprecated YAML config pipeline (needs the same
+  design decision as `BaseAgent::from_config`), and `FinishTaskTool` itself
+  (needs `BaseTool`/`LlmRequest`/`ToolContext`).
+- 13 more Phase 2 rows marked `DONE` (51 of 66 in the `agents/` phase now
+  complete) with per-row test-name evidence in `capability-manifest.md`.
+  Phase 2's remaining 15 rows are all blocked on later phases landing
+  first — Phase 2 itself is otherwise complete for what's buildable today.
+
 ## PR #TBD — Phase 2 batch 1: BaseAgent + Context/InvocationContext/RunConfig
 **2026-08-21** · (link added once this PR is opened)
 
