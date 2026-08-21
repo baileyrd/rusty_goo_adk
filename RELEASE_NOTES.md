@@ -22,6 +22,54 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 2 batch 1: BaseAgent + Context/InvocationContext/RunConfig
+**2026-08-21** · (link added once this PR is opened)
+
+- **Added:** `adk-agents` crate covering `BaseAgent` (name/parent-tree
+  validation, before/after-agent callback chains with plugin-precedence and
+  error-notification-then-reraise, clone, tree-walk helpers) and the
+  `Context`/`ReadonlyContext`/`InvocationContext` family (state, output,
+  route, interrupt-ids, event-author, artifact/credential/memory
+  tool-context methods, agent-state machine, per-invocation LLM-call-limit
+  enforcement), plus `RunConfig`/`ToolThreadPoolConfig`/`LiveRequest`/
+  `LiveRequestQueue`/`ActiveStreamingTool`/`ContextCacheConfig`/
+  `TranscriptionEntry`/`StreamingMode`. 73 new tests (134 total across the
+  workspace), clippy/fmt clean.
+- **Runners.py inventory gap closed:** a dedicated read of `runners.py`
+  (2609 lines, flagged in row C0788 as outside the original 8-agent
+  inventory's scope) added 94 granular capability rows (C0833-C0926,
+  Phase 2) — the `Runner`/`InMemoryRunner` execution engine's actual
+  sub-capabilities, previously referenced only piecemeal by other reports.
+- **Async runtime decision:** `rusty_tokio` adopted (pinned git-rev) — the
+  first capability needing one, `LiveRequestQueue`'s `asyncio.Queue`
+  equivalent. Chosen over `rustils_async`, which is a narrow OS-level
+  async-I/O primitives layer (process/fs/net) with no task-spawning or
+  channel API; `rusty_tokio` is a general-purpose runtime matching what
+  ADK's in-process task/queue orchestration needs.
+- **Disclosed adaptations** (each documented in its module's doc comment):
+  tree ownership via `Arc`+`OnceLock` back-pointer (mirrors the "adopted as
+  a sub-agent only once" invariant as a single `OnceLock::set` failure);
+  `_run_async_impl`/`_run_live_impl` represented as eagerly-collected
+  `Vec<Event>` rather than a live stream, since no concrete agent subclass
+  yet needs incremental yielding; `sessions.state.State` (Phase 5) and a
+  minimal `Session` placeholder pulled forward since `Context` cannot
+  compile without them; `PluginManager` (Phase 7) is real but structurally
+  always returns `None` for the zero-plugins-registered case.
+- **Known gaps, flagged not hidden:** `BaseAgent._run_impl` (needs
+  `workflow::BaseNode`, Phase 7), `BaseAgent::from_config` dynamic
+  resolution (needs a design decision — no Rust equivalent to Python's
+  dotted-path dynamic loading), `Context.run_node`/`_run_node_internal`
+  (needs the Phase 7 workflow engine), `InvocationContext`'s live-mode
+  fields and `_enqueue_event` (need a concrete live-mode consumer),
+  and `should_pause_invocation`/`_find_matching_function_call`/
+  `stamp_event_branch_context` (blocked on Phase 3's real `Content`/`Part`)
+  all stay `REQUIRED` in the manifest, not marked `DONE`.
+- `LlmAgent` (C0079-C0100) is deferred to a follow-up batch — it has the
+  heaviest forward-reference surface (models/`BaseLlm`, tools, planners,
+  flows) of anything in Phase 2.
+- 38 of the addressed Phase 2 rows marked `DONE` with per-row test-name
+  evidence in `capability-manifest.md`.
+
 ## PR #TBD — Phase 1: platform/errors/events primitives (C0001-C0033)
 **2026-08-21** · (link added once this PR is opened)
 

@@ -15,3 +15,11 @@ rusty_serde = { git = "https://github.com/baileyrd/rusty_serde", rev = "ed0a0bd0
 rusty_uuid = { git = "https://github.com/baileyrd/rusty_uuid", rev = "6bc9e04868fd3042d77d3bb757d40363654ebb45" }
 rusty_time = { git = "https://github.com/baileyrd/rusty_time", rev = "21507244846586a37cb4bfb6700f746404efd3e8" }
 rusty_err = { git = "https://github.com/baileyrd/rusty_err", rev = "992ede743fe16cefef789a85dad55891065d523a" }
+# Async runtime, adopted in Phase 2 (agents/live_request_queue.py's
+# asyncio.Queue needs one). Chosen over rustils_async: rustils_async is
+# a narrow OS-level async-I/O primitives layer (process/fs/net domains
+# only, "process" the sole Active one) with no task-spawning or channel
+# API; rusty_tokio is a general-purpose runtime (work-stealing scheduler,
+# mpsc/oneshot/watch/broadcast channels, timers) matching what ADK's
+# in-process task/queue orchestration actually needs.
+rusty_tokio = { git = "https://github.com/baileyrd/rusty_tokio", rev = "6e6f18471749ee8327ce52e9d9b825e2e9e5e1a7" }

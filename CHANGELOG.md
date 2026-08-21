@@ -14,6 +14,13 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   `adk-events`), implementing capabilities C0001-C0033 (minus C0022/C0023,
   partially blocked on Phase 3) against `rusty_uuid`/`rusty_time`/
   `rusty_err`/`rusty_serde` sibling crates.
+- `adk-agents` crate (Phase 2 batch 1): `BaseAgent`, `Context`/
+  `ReadonlyContext`/`InvocationContext`, `RunConfig`, `LiveRequestQueue`,
+  and supporting types (C0035-C0078 minus C0043/C0047/C0059/C0060/C0066/
+  C0069/C0071, deferred pending later phases). Adopts `rusty_tokio` as the
+  async runtime.
+- 94 capability rows (C0833-C0926) filling the `runners.py` inventory gap
+  flagged at row C0788.
 ### Changed
 ### Fixed
 ### Security
