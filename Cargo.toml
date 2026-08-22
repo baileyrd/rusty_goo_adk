@@ -44,7 +44,21 @@ regex = "1"
 # environment this workspace builds in. Only the REST/SSE transport is
 # decided here; the Live API's WebSocket transport (C0131/C0135-C0139) is
 # its own decision, deferred to the batch that implements `connect()`.
+#
+# Phase 3 batch 3 discovered a real incompatibility: reqwest's *async*
+# client needs a genuine `tokio` reactor underneath (it calls straight
+# into `tokio::net::TcpStream`/`tokio::runtime::Handle::current()`), and
+# `rusty_tokio` (adopted in Phase 2) is a from-scratch, independent async
+# runtime — its own epoll reactor, its own scheduler — not a wrapper
+# around real tokio. The two can't share a reactor. `reqwest::blocking`
+# is the fix, not a workaround: it spins up its own private, self-
+# contained `tokio::runtime::Runtime` internally regardless of the
+# caller's ambient executor, so calling it is safe from any context.
+# `gemini.rs` runs it via `rusty_tokio::spawn_blocking` (a real blocking-
+# thread-pool offload, not a same-thread blocking call) so a slow HTTP
+# call doesn't stall a `rusty_tokio` async worker thread. The `blocking`
+# feature is enabled for exactly this reason.
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
-    "json",
+    "blocking",
 ] }

@@ -19,7 +19,7 @@ use crate::capabilities::{legacy_output_schema_and_tools, LlmCapabilities};
 use crate::llm_request::LlmRequest;
 use crate::llm_response::LlmResponse;
 
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Debug, rusty_err::Error)]
 pub enum BaseLlmError {
@@ -27,6 +27,13 @@ pub enum BaseLlmError {
     GenerationNotSupported(String),
     #[error("Live connection is not supported for {0}.")]
     LiveConnectionNotSupported(String),
+    /// A concrete backend's own richer error (e.g. `Gemini`'s
+    /// [`crate::gemini::GeminiCallError`]), flattened to a message for the
+    /// trait-object-friendly `BaseLlm::generate_content_async` contract —
+    /// callers who need the structured detail should call the concrete
+    /// backend's own inherent method instead (e.g. `Gemini::generate_content`).
+    #[error("{0}")]
+    CallFailed(String),
 }
 
 /// The base trait for an LLM. `model`/`type_name` back
