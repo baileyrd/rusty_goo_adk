@@ -62,3 +62,17 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "blocking",
 ] }
+# Gemini Live API (Phase 3 batch 5) needs a WebSocket client. Checked every
+# sibling Rusty-Mill repo under the platform directory (same list as the
+# `reqwest` decision above) for a WS candidate — none exists. `tungstenite`
+# (not `tokio-tungstenite`) is adopted: it's the synchronous, runtime-
+# agnostic core `tokio-tungstenite` itself wraps, so it has the same
+# "doesn't need a real tokio reactor" property that made
+# `reqwest::blocking` the right fit for the REST transport (see that
+# adaptation note in `gemini.rs`) — `rusty_tokio::spawn_blocking` bridges
+# it into async code the same way. `rustls-tls-webpki-roots` keeps TLS
+# pure-Rust, matching the `reqwest` decision (no system OpenSSL).
+tungstenite = { version = "0.30", default-features = false, features = [
+    "handshake",
+    "rustls-tls-webpki-roots",
+] }

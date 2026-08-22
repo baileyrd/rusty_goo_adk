@@ -72,6 +72,21 @@ pub struct FunctionResponse {
     pub response: Option<std::collections::BTreeMap<String, Value>>,
 }
 
+/// Narrowed placeholder for `types.Blob` (`inline_data`) and
+/// `types.FileData` (`file_data`) — only `mime_type` is modeled, since
+/// `utils/content_utils.py::is_audio_part` (needed by `GeminiLlmConnection`,
+/// Phase 3 batch 5) branches on it. The rest of the payload (`data`/
+/// `file_uri`/`display_name`) is flattened into `rest` rather than dropped,
+/// so round-tripping through JSON doesn't lose it.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct MediaBlobStub {
+    #[rusty_serde(default)]
+    pub mime_type: Option<String>,
+    #[rusty_serde(flatten)]
+    pub rest: Option<Value>,
+}
+
 /// One part of a `Content` — a `oneof`-style union in the source (only one
 /// of `text`/`function_call`/`function_response`/... is meaningfully set at
 /// a time), represented here as a flat struct of options for simplicity,
@@ -93,12 +108,12 @@ pub struct Part {
     pub function_call: Option<FunctionCall>,
     #[rusty_serde(default)]
     pub function_response: Option<FunctionResponse>,
-    /// Opaque placeholder for `types.Blob` (inline binary data).
+    /// See [`MediaBlobStub`].
     #[rusty_serde(default)]
-    pub inline_data: Option<Value>,
-    /// Opaque placeholder for `types.FileData`.
+    pub inline_data: Option<MediaBlobStub>,
+    /// See [`MediaBlobStub`].
     #[rusty_serde(default)]
-    pub file_data: Option<Value>,
+    pub file_data: Option<MediaBlobStub>,
     /// Opaque placeholder for `types.ExecutableCode`.
     #[rusty_serde(default)]
     pub executable_code: Option<Value>,
@@ -197,6 +212,33 @@ mod tests {
             })],
         );
         assert_eq!(content.get_function_responses().len(), 1);
+    }
+
+    #[test]
+    fn media_blob_stub_round_trips_mime_type_and_flattens_the_rest() {
+        let json = r#"{"mimeType":"audio/pcm","data":"base64data","displayName":"clip"}"#;
+        let blob: MediaBlobStub = rusty_serde::json::from_str(json).unwrap();
+        assert_eq!(blob.mime_type.as_deref(), Some("audio/pcm"));
+        assert!(blob.rest.is_some());
+
+        let round_tripped = rusty_serde::json::to_string(&blob).unwrap();
+        let blob_again: MediaBlobStub = rusty_serde::json::from_str(&round_tripped).unwrap();
+        assert_eq!(blob, blob_again);
+    }
+
+    #[test]
+    fn is_audio_part_is_reachable_through_inline_data_mime_type() {
+        let part = Part {
+            inline_data: Some(MediaBlobStub {
+                mime_type: Some("audio/wav".to_string()),
+                rest: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            part.inline_data.as_ref().unwrap().mime_type.as_deref(),
+            Some("audio/wav")
+        );
     }
 
     #[test]

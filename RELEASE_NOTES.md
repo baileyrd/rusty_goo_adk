@@ -22,6 +22,73 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 3 batch 5: GeminiLlmConnection send-side methods
+**2026-08-22** · (link added once this PR is opened)
+
+- **Added:** `GeminiLlmConnection` — `BaseLlmConnection`'s Gemini Live
+  implementation. `send_history` (filters audio parts from replayed
+  history, sends a Gemini-3.x placeholder nudge so a trailing user turn
+  actually triggers a response), `send_content`/`send_content_partial`
+  (function responses route via a tool-response envelope; a single
+  non-partial text part on Gemini 3.x Live routes via realtime input
+  instead of client content), `send_realtime` (type-dispatches
+  Blob/ActivityStart/ActivityEnd/audio-stream-end, with Gemini-3.x/
+  3.5-Live-Translate routing audio/image blobs through dedicated
+  realtime-input fields) — C0135-C0138. 18 new tests, all against a
+  dependency-free local WebSocket test server (`tungstenite`'s own
+  server-side `accept()`, symmetric with the client-side test in
+  `live_connection.rs`).
+- **New dependency, disclosed:** `tungstenite` (not `tokio-tungstenite`)
+  as the Gemini Live API's WebSocket transport. Checked every sibling
+  Rusty-Mill repo (none exists). Adopted the plain synchronous crate,
+  not the tokio-wrapped one, for the identical reason batch 3 adopted
+  `reqwest::blocking` over `reqwest`'s async client: it needs no real
+  `tokio` reactor, so it works safely under `rusty_tokio` (this
+  workspace's from-scratch, independent runtime) via
+  `rusty_tokio::spawn_blocking`. `rustls-tls-webpki-roots` keeps TLS
+  pure-Rust, matching the REST transport's TLS choice.
+- **Fixed, disclosed:** discovered while testing the new Live message
+  envelopes that neither they nor batch 3's REST request body
+  (`generate_content_request.rs`) used `skip_serializing_if` — every
+  absent optional field was serialized as an explicit `null` rather than
+  omitted. Fixed in both places; a test now locks in the REST body's
+  fix, and the Live envelope test explicitly asserts no `null` appears.
+- **Adaptation, disclosed:** `Part.inline_data`/`file_data` — opaque
+  `Value` placeholders since Phase 3 batch 1 — are narrowed to
+  `MediaBlobStub` (`mime_type` modeled; the rest of the payload
+  flattened via `#[rusty_serde(flatten)]` so nothing is lost on
+  round-trip) because `send_history` genuinely needs
+  `utils/content_utils.py`'s `is_audio_part`/`filter_audio_parts`, which
+  branch on `mime_type`. `BaseLlmConnection::send_realtime`'s `blob`
+  parameter is retroactively upgraded the same way, from an opaque
+  `Value` to a real `RealtimeInput` enum (the source's
+  `Union[Blob, ActivityStart, ActivityEnd, LiveClientRealtimeInput]`) —
+  only `LiveClientRealtimeInput.audio_stream_end` is modeled, matching
+  the source's own admittedly-incomplete handling of that variant
+  ("Unary LiveClientRealtimeInput not fully supported yet").
+- **Adaptation, disclosed (confidence caveat):** the Gemini Live API's
+  exact WebSocket message envelopes (`BidiGenerateContentClientContent`/
+  `RealtimeInput`/`ToolResponse`) are Google's public Multimodal Live API
+  wire protocol — not part of `google/adk-python`'s own source, which
+  only ever talks to the opaque third-party `google.genai.live.AsyncSession`.
+  This batch's envelope shapes are a best-effort reconstruction of that
+  public protocol, built with the same "minimal real subset" discipline
+  as the rest of Phase 3, but — unlike the REST `generateContent` body,
+  a simpler and extremely well-known shape — unverified against a live
+  Gemini Live endpoint. Flagged in `gemini_llm_connection.rs`'s module
+  doc rather than presented as certain.
+- **Scope decision, sized deliberately:** `receive()` (C0139) — a
+  ~370-line stateful message-translation engine (grounding-metadata
+  accumulation with index-offset merging, streamed text/thought
+  aggregation tracked by part identity, transcription streaming,
+  Gemini-3.x-variant-dependent tool-call buffering, session-resumption/
+  voice-activity/GoAway passthrough) — and the actual WebSocket handshake
+  to Google's Live endpoint (the rest of C0131) are deferred to their own
+  batch(es), for the same reason `GeminiContextCacheManager` got its own
+  batch: it's too large and too distinct to fold in here.
+- 4 rows marked `DONE` with per-row test-name evidence
+  (C0135-C0138); C0131 (the handshake), C0132, and C0139 stay `REQUIRED`.
+
 ## PR #TBD — Phase 3 batch 4: Gemini Live connect() config-prep
 **2026-08-22** · (link added once this PR is opened)
 

@@ -21,9 +21,9 @@ use crate::llm_request::LlmRequest;
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 #[rusty_serde(rename_all = "camelCase")]
 pub struct GenerationConfigBody {
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub response_mime_type: Option<String>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<Value>,
 }
 
@@ -32,9 +32,9 @@ pub struct GenerationConfigBody {
 #[rusty_serde(rename_all = "camelCase")]
 pub struct GenerateContentRequestBody {
     pub contents: Vec<Content>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub system_instruction: Option<Content>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_config: Option<GenerationConfigBody>,
 }
 
@@ -101,6 +101,16 @@ mod tests {
         let request = LlmRequest::new("gemini-2.5-flash");
         let body = build_request_body(&request);
         assert!(body.generation_config.is_none());
+    }
+
+    #[test]
+    fn absent_optional_fields_are_omitted_from_the_wire_json_not_sent_as_null() {
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.contents.push(Content::user_text("hi"));
+        let body = build_request_body(&request);
+        let json = rusty_serde::json::to_string(&body).unwrap();
+        assert!(!json.contains("systemInstruction"));
+        assert!(!json.contains("generationConfig"));
     }
 
     #[test]

@@ -298,7 +298,10 @@ mod tests {
         let content = Content::new(
             "user",
             vec![Part {
-                inline_data: Some(Value::String("blob".to_string())),
+                inline_data: Some(adk_genai::content::MediaBlobStub {
+                    mime_type: Some("application/octet-stream".to_string()),
+                    rest: None,
+                }),
                 ..Default::default()
             }],
         );

@@ -90,17 +90,41 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   transparent session resumption is Vertex-AI-only. Extends
   `LlmRequest.live_connect_config` from an opaque placeholder to a real
   narrowed `LiveConnectConfigStub`.
+- `GeminiLlmConnection` send-side methods (Phase 3 batch 5): `send_history`
+  (audio-part filtering, Gemini-3.x response-trigger nudge),
+  `send_content`/`send_content_partial` (function-response routing,
+  Gemini-3.x realtime-text routing), `send_realtime` (Blob/ActivityStart/
+  ActivityEnd/audio-stream-end dispatch) — C0135-C0138. `receive()`
+  (C0139, a ~370-line stateful message-translation engine) is deferred to
+  its own batch.
+- **New dependency, disclosed:** `tungstenite` (not `tokio-tungstenite`)
+  as the WebSocket transport for the Gemini Live API — checked every
+  sibling Rusty-Mill repo (none exists); adopted for the same
+  runtime-agnostic reason `reqwest::blocking` fit the REST transport
+  (`rusty_tokio` can't share a reactor with anything assuming real
+  tokio), bridged via `rusty_tokio::spawn_blocking`. `rustls-tls-webpki-roots`
+  keeps TLS pure-Rust.
+- **Fixed, disclosed:** the Gemini REST request body (`generate_content_request.rs`)
+  and the new Live message envelopes now use `skip_serializing_if` to
+  omit absent optional fields instead of sending them as explicit
+  `null` — discovered while testing the Live envelopes; applied to both
+  wire-format modules for consistency.
+- **Adaptation, disclosed:** `Part.inline_data`/`file_data` narrowed from
+  an opaque `Value` placeholder to `MediaBlobStub` (`mime_type` modeled,
+  the rest of the payload flattened so round-tripping doesn't lose it) —
+  needed to port `utils/content_utils.py`'s `is_audio_part`/
+  `filter_audio_parts` for real. `BaseLlmConnection::send_realtime`'s
+  `blob` parameter is retroactively upgraded from an opaque `Value` to
+  the real `RealtimeInput` enum for the same reason.
 - **Scope decision:** the SSE-streaming half of `generate_content_async`
   (`stream=true`, `StreamingResponseAggregator`), context-cache
   integration, interactions-API delegation, the actual Live WebSocket
-  handshake, all of `GeminiLlmConnection` (its `receive()` alone is a
-  ~370-line stateful message-translation engine — deserves its own batch
-  rather than being squeezed in alongside config-prep), redacted
-  request/response logging, and `GeminiContextCacheManager` (C0125's
-  streaming half, C0126, C0128, the rest of C0131, C0132, C0135-C0143)
-  are deferred to further batches — see
-  `crates/adk-models/src/gemini.rs`'s module doc for exactly what's left
-  and why.
+  handshake (the rest of C0131 — opening the connection to Google's Live
+  endpoint), `receive()` (C0139), `_adapt_computer_use_tool`/
+  `_preprocess_request` (C0132), redacted request/response logging, and
+  `GeminiContextCacheManager` are deferred to further batches — see
+  `crates/adk-models/src/gemini.rs`'s and `gemini_llm_connection.rs`'s
+  module docs for exactly what's left and why.
 ### Changed
 ### Fixed
 ### Security
