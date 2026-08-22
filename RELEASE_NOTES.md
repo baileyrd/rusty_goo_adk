@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 3 batch 4: Gemini Live connect() config-prep
+**2026-08-22** · (link added once this PR is opened)
+
+- **Added:** `Gemini::live_api_version` and `Gemini::prepare_live_connect_config`
+  — the config-prep half of C0131 (`Gemini.connect()`): merges tracking
+  headers into `live_connect_config.http_options` only when it's already
+  present (matches the source's own gating exactly — it's never created
+  there either), forwards `speech_config`/`tools`/`thinking_config`/
+  `safety_settings`, unconditionally sets `system_instruction` (even when
+  empty, matching a documented source behavior), and rejects transparent
+  session resumption on the Gemini Developer API backend (Vertex AI
+  only). 18 new tests.
+- **Adaptation:** `LlmRequest.live_connect_config` — previously an opaque
+  `Value` placeholder ("nothing here reads it") — is now a real, narrowed
+  `LiveConnectConfigStub` (`http_options`/`speech_config`/
+  `system_instruction`/`session_resumption`/`tools`/`thinking_config`/
+  `safety_settings`), since this batch's config-prep logic needed real
+  fields to mutate. `GenerateContentConfigStub` similarly grows
+  `tools`/`thinking_config`/`safety_settings` (opaque placeholders,
+  forwarded but not inspected).
+- **Scope decision, sized deliberately:** this batch stops at
+  config-prep — pure in-memory mutation, testable without a live network
+  call, mirroring batch 2's `api_client` construction. The actual Live
+  WebSocket handshake and all of `GeminiLlmConnection`
+  (`send_history`/`send_content`/`send_realtime`/`receive()`) are
+  deferred to their own batch: `receive()` alone is a ~370-line stateful
+  message-translation engine (grounding-metadata accumulation with
+  index-offset merging, streamed text/thought aggregation tracked by
+  part identity, transcription streaming, Gemini-3.x-variant-dependent
+  tool-call buffering, session-resumption/voice-activity/GoAway
+  passthrough) — it deserves the same dedicated-batch treatment
+  `GeminiContextCacheManager` already got, not being folded into this
+  one. The WebSocket transport itself is also still undecided;
+  `tungstenite` (the synchronous core `tokio-tungstenite` wraps) is the
+  leading candidate for the same reason `reqwest::blocking` fit the REST
+  transport — runtime-agnostic, so it doesn't hit the same reactor
+  conflict with `rusty_tokio` batch 3 discovered — but that decision is
+  made when the connection itself is built.
+- No manifest rows moved to `DONE` this batch (C0131 as a whole still
+  needs the real connection to close out) — documented here instead,
+  per the same convention used for C0125's still-open streaming half.
+
 ## PR #TBD — Phase 3 batch 3: Gemini generate_content_async (non-streaming)
 **2026-08-22** · (link added once this PR is opened)
 

@@ -1,5 +1,5 @@
-//! Capabilities C0123-C0125 (partial), C0127, C0129, C0130 (partial C0133):
-//! `Gemini`, ported from `google.adk.models.google_llm`.
+//! Capabilities C0123-C0125 (partial), C0127, C0129-C0131 (C0131 partial),
+//! C0130 (partial C0133): `Gemini`, ported from `google.adk.models.google_llm`.
 //!
 //! **Scope of batch 2 (config layer)**: the config shape, `supported_models()`,
 //! base-URL/API-version resolution, and API-client construction — pure
@@ -22,6 +22,18 @@
 //! names exactly what's missing and how to work around it today (inject a
 //! pre-authed client).
 //!
+//! **Scope of batch 4 (this batch)**: [`Gemini::prepare_live_connect_config`]
+//! and [`Gemini::live_api_version`] — everything `Gemini.connect()` does to
+//! `llm_request.live_connect_config` *before* opening the actual Live
+//! WebSocket connection (C0131's config-prep half): merging tracking
+//! headers into an already-present `http_options` (matching the source's
+//! own gating — it's never created here either), forwarding
+//! `speech_config`/`tools`/`thinking_config`/`safety_settings`, the
+//! unconditional `system_instruction` assignment, and validating that
+//! transparent session resumption is Vertex-AI-only. All pure, in-memory
+//! config mutation — testable without a live network call, same as batch
+//! 2's `api_client` construction.
+//!
 //! Still deferred to later batches, each needing its own foundational
 //! decision or wire-format work this batch doesn't have yet:
 //!   - The SSE-streaming half of C0125 (`stream=true`, `StreamingResponseAggregator`),
@@ -29,9 +41,23 @@
 //!     delegation) — streaming needs an SSE-parsing decision on top of the
 //!     transport this batch already has; caching/interactions need
 //!     capabilities from later batches.
-//!   - C0131/C0132/C0135-C0139 (Live `connect()`, computer-use/preprocess
-//!     adaptation, `GeminiLlmConnection`) — need a WebSocket transport
-//!     decision (this batch only decided the REST/SSE transport).
+//!   - The actual Live WebSocket handshake (the rest of C0131 —
+//!     `_live_api_client`, opening the connection) and all of
+//!     `GeminiLlmConnection` (C0132, C0135-C0139) — `receive()` alone is a
+//!     ~370-line stateful message-translation engine (grounding-metadata
+//!     accumulation with index-offset merging, streamed text/thought
+//!     aggregation tracked by part identity, transcription streaming,
+//!     Gemini-3.x-variant-dependent tool-call buffering, session-
+//!     resumption/voice-activity/GoAway passthrough) that deserves its own
+//!     dedicated batch rather than being hand-waved alongside config-prep,
+//!     the same way `GeminiContextCacheManager` got its own batch instead
+//!     of being squeezed into this one. The WebSocket transport itself is
+//!     also still undecided — `tungstenite` (the synchronous core
+//!     `tokio-tungstenite` wraps) is the leading candidate, since it has
+//!     the same runtime-agnostic property that made `reqwest::blocking`
+//!     the right fit for the REST transport (see the load-bearing
+//!     adaptation note below) — but that decision is made when the
+//!     connection itself is built, not before.
 //!   - C0134 (redacted debug request/response logging).
 //!   - C0140-C0143 (`GeminiContextCacheManager`) — needs a SHA-256 crate
 //!     decision plus the cache-creation HTTP call.
@@ -77,6 +103,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use adk_genai::content::{Content, Part};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rusty_serde::value::Value;
@@ -146,6 +173,13 @@ pub enum GeminiCallError {
     /// link to ADK's resource-exhaustion mitigation docs.
     #[error("HTTP 429: {body}\n\n{RESOURCE_EXHAUSTED_MITIGATION_LINK}")]
     ResourceExhausted { body: String },
+    /// C0131: transparent session resumption only works on the Vertex AI
+    /// backend.
+    #[error(
+        "Transparent session resumption is only supported for Vertex AI backend. Please use \
+         Vertex AI backend."
+    )]
+    TransparentSessionResumptionRequiresVertexAi,
 }
 
 /// C0127: maps a non-2xx HTTP response into a [`GeminiCallError`],
@@ -333,6 +367,95 @@ impl Gemini {
     /// credential-discovery logic of its own yet.
     pub fn api_backend(&self) -> GoogleLlmVariant {
         get_google_llm_variant()
+    }
+
+    /// C0131 (config-prep half): the API version for a Live connection —
+    /// an embedded-in-`base_url` version takes precedence (unlike the REST
+    /// `api_client`, this does *not* fall back to the explicit
+    /// `api_version` field or `GOOGLE_GENAI_API_VERSION`), then the
+    /// backend-specific default (`v1beta1` for Vertex AI, `v1alpha` for the
+    /// Gemini Developer API).
+    pub fn live_api_version(&self) -> String {
+        let (_, api_version) = self.base_url_and_api_version();
+        if let Some(version) = api_version {
+            return version;
+        }
+        match self.api_backend() {
+            GoogleLlmVariant::VertexAi => "v1beta1".to_string(),
+            GoogleLlmVariant::GeminiApi => "v1alpha".to_string(),
+        }
+    }
+
+    /// C0131 (config-prep half — see the module doc): everything
+    /// `Gemini.connect()` does to `llm_request.live_connect_config` before
+    /// opening the actual Live WebSocket connection (deferred — see the
+    /// module doc). Mutates `llm_request` in place, matching the source
+    /// (which mutates the same request object callers pass to `connect()`).
+    pub fn prepare_live_connect_config(
+        &self,
+        llm_request: &mut LlmRequest,
+    ) -> Result<(), GeminiCallError> {
+        let live_api_version = self.live_api_version();
+        let system_instruction_text = llm_request.config.system_instruction.clone();
+        let tools = llm_request.config.tools.clone();
+        let thinking_config = llm_request.config.thinking_config.clone();
+        let safety_settings = llm_request.config.safety_settings.clone();
+        let api_backend = self.api_backend();
+        let speech_config = self.speech_config.clone();
+
+        let config = llm_request
+            .live_connect_config
+            .get_or_insert_with(crate::llm_request::LiveConnectConfigStub::default);
+
+        // Only touches headers/api_version when `http_options` is already
+        // present — matches the source's own gating exactly (it never
+        // creates `http_options` here either).
+        if let Some(http_options) = &mut config.http_options {
+            let existing: Vec<(String, String)> = http_options
+                .headers
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let merged = crate::google_client_headers::merge_tracking_headers(&existing, None);
+            http_options.headers = Some(merged.into_iter().collect());
+            http_options.api_version = Some(live_api_version);
+        }
+
+        if let Some(speech_config) = speech_config {
+            config.speech_config = Some(speech_config);
+        }
+
+        // Assigned unconditionally — see llm_request.rs's `Part::text`
+        // equivalent: with no system instruction this still sends a
+        // `Content(role="system", parts=[Part()])`, matching the source's
+        // documented behavior rather than omitting the field.
+        config.system_instruction = Some(Content {
+            role: Some("system".to_string()),
+            parts: vec![Part {
+                text: system_instruction_text,
+                ..Default::default()
+            }],
+        });
+
+        let wants_transparent_resumption = config
+            .session_resumption
+            .as_ref()
+            .and_then(|r| r.transparent)
+            .unwrap_or(false);
+        if wants_transparent_resumption && api_backend == GoogleLlmVariant::GeminiApi {
+            return Err(GeminiCallError::TransparentSessionResumptionRequiresVertexAi);
+        }
+
+        config.tools = tools;
+        if thinking_config.is_some() {
+            config.thinking_config = thinking_config;
+        }
+        if safety_settings.is_some() && config.safety_settings.is_none() {
+            config.safety_settings = safety_settings;
+        }
+
+        Ok(())
     }
 
     /// Resolves the auth header to attach to a real API call. `None` means
@@ -631,6 +754,263 @@ mod tests {
         std::env::remove_var("GEMINI_API_KEY");
         std::env::remove_var("GOOGLE_GENAI_USE_ENTERPRISE");
         std::env::remove_var("GOOGLE_GENAI_USE_VERTEXAI");
+    }
+
+    #[test]
+    fn live_api_version_defaults_to_v1alpha_on_the_gemini_api_backend() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let version = gemini.live_api_version();
+        clear_auth_env_vars();
+        assert_eq!(version, "v1alpha");
+    }
+
+    #[test]
+    fn live_api_version_defaults_to_v1beta1_on_vertex_ai() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "true");
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let version = gemini.live_api_version();
+        clear_auth_env_vars();
+        assert_eq!(version, "v1beta1");
+    }
+
+    #[test]
+    fn live_api_version_prefers_a_version_embedded_in_the_base_url_over_the_backend_default() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash")
+            .with_base_url("https://region-aiplatform.googleapis.com/v1beta1");
+        let version = gemini.live_api_version();
+        clear_auth_env_vars();
+        assert_eq!(version, "v1beta1");
+    }
+
+    #[test]
+    fn live_api_version_ignores_the_explicit_api_version_field_and_env_var() {
+        // Unlike the REST `api_client`, `_live_api_version` never falls
+        // back to `self.api_version`/`GOOGLE_GENAI_API_VERSION` — matches
+        // the source exactly (see `live_api_version`'s doc comment).
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_GENAI_API_VERSION", "v1-from-env");
+        let gemini = Gemini::new("gemini-2.5-flash").with_api_version("v1-explicit");
+        let version = gemini.live_api_version();
+        clear_auth_env_vars();
+        std::env::remove_var("GOOGLE_GENAI_API_VERSION");
+        assert_eq!(version, "v1alpha");
+    }
+
+    #[test]
+    fn prepare_live_connect_config_defaults_a_missing_config() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        assert!(request.live_connect_config.is_none());
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        clear_auth_env_vars();
+        assert!(request.live_connect_config.is_some());
+    }
+
+    #[test]
+    fn prepare_live_connect_config_only_merges_tracking_headers_when_http_options_is_already_set() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        clear_auth_env_vars();
+
+        // No `http_options` was ever set, so none is created — matches the
+        // source's own gating exactly.
+        assert!(request.live_connect_config.unwrap().http_options.is_none());
+    }
+
+    #[test]
+    fn prepare_live_connect_config_merges_tracking_headers_and_sets_the_live_api_version_when_http_options_is_present(
+    ) {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.live_connect_config = Some(crate::llm_request::LiveConnectConfigStub {
+            http_options: Some(crate::llm_request::HttpOptionsStub::default()),
+            ..Default::default()
+        });
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        clear_auth_env_vars();
+
+        let http_options = request.live_connect_config.unwrap().http_options.unwrap();
+        assert_eq!(http_options.api_version.as_deref(), Some("v1alpha"));
+        assert!(http_options
+            .headers
+            .unwrap()
+            .contains_key("x-goog-api-client"));
+    }
+
+    #[test]
+    fn prepare_live_connect_config_forwards_the_speech_config() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut gemini = gemini;
+        gemini.speech_config = Some(Value::String("speech".to_string()));
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        clear_auth_env_vars();
+
+        assert_eq!(
+            request.live_connect_config.unwrap().speech_config,
+            Some(Value::String("speech".to_string()))
+        );
+    }
+
+    #[test]
+    fn prepare_live_connect_config_always_sets_a_system_instruction_content_even_when_empty() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        clear_auth_env_vars();
+
+        let system_instruction = request
+            .live_connect_config
+            .unwrap()
+            .system_instruction
+            .unwrap();
+        assert_eq!(system_instruction.role.as_deref(), Some("system"));
+        assert_eq!(system_instruction.parts.len(), 1);
+        assert!(system_instruction.parts[0].text.is_none());
+    }
+
+    #[test]
+    fn prepare_live_connect_config_carries_the_system_instruction_text() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.config.system_instruction = Some("be helpful".to_string());
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        clear_auth_env_vars();
+
+        let system_instruction = request
+            .live_connect_config
+            .unwrap()
+            .system_instruction
+            .unwrap();
+        assert_eq!(
+            system_instruction.parts[0].text.as_deref(),
+            Some("be helpful")
+        );
+    }
+
+    #[test]
+    fn prepare_live_connect_config_rejects_transparent_session_resumption_on_the_gemini_api_backend(
+    ) {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.live_connect_config = Some(crate::llm_request::LiveConnectConfigStub {
+            session_resumption: Some(crate::llm_request::SessionResumptionStub {
+                transparent: Some(true),
+            }),
+            ..Default::default()
+        });
+        let result = gemini.prepare_live_connect_config(&mut request);
+        clear_auth_env_vars();
+
+        match result {
+            Err(GeminiCallError::TransparentSessionResumptionRequiresVertexAi) => {}
+            _ => panic!("expected TransparentSessionResumptionRequiresVertexAi"),
+        }
+    }
+
+    #[test]
+    fn prepare_live_connect_config_allows_transparent_session_resumption_on_vertex_ai() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "true");
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.live_connect_config = Some(crate::llm_request::LiveConnectConfigStub {
+            session_resumption: Some(crate::llm_request::SessionResumptionStub {
+                transparent: Some(true),
+            }),
+            ..Default::default()
+        });
+        let result = gemini.prepare_live_connect_config(&mut request);
+        clear_auth_env_vars();
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn prepare_live_connect_config_unconditionally_overwrites_tools() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.config.tools = Some(Value::String("new-tools".to_string()));
+        request.live_connect_config = Some(crate::llm_request::LiveConnectConfigStub {
+            tools: Some(Value::String("stale-tools".to_string())),
+            ..Default::default()
+        });
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        clear_auth_env_vars();
+
+        assert_eq!(
+            request.live_connect_config.unwrap().tools,
+            Some(Value::String("new-tools".to_string()))
+        );
+    }
+
+    #[test]
+    fn prepare_live_connect_config_only_forwards_thinking_config_when_present() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        assert!(request
+            .live_connect_config
+            .as_ref()
+            .unwrap()
+            .thinking_config
+            .is_none());
+
+        request.config.thinking_config = Some(Value::String("thinking".to_string()));
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        clear_auth_env_vars();
+
+        assert_eq!(
+            request.live_connect_config.unwrap().thinking_config,
+            Some(Value::String("thinking".to_string()))
+        );
+    }
+
+    #[test]
+    fn prepare_live_connect_config_does_not_override_an_existing_safety_settings() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.config.safety_settings = Some(Value::String("new".to_string()));
+        request.live_connect_config = Some(crate::llm_request::LiveConnectConfigStub {
+            safety_settings: Some(Value::String("existing".to_string())),
+            ..Default::default()
+        });
+        gemini.prepare_live_connect_config(&mut request).unwrap();
+        clear_auth_env_vars();
+
+        assert_eq!(
+            request.live_connect_config.unwrap().safety_settings,
+            Some(Value::String("existing".to_string()))
+        );
     }
 
     #[test]

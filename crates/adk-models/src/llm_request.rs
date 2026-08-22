@@ -14,16 +14,25 @@
 //! (`system_instruction`, `response_schema`, `response_mime_type`) — since
 //! those methods *mutate* specific keys, not just validate presence (unlike
 //! `LlmAgent`'s `generate_content_config` validator, which only checks keys
-//! and can stay a generic `Value` map). `live_connect_config` stays a
-//! `Value` placeholder — nothing here reads it. `part.inline_data`/
+//! and can stay a generic `Value` map). `part.inline_data`/
 //! `file_data`'s inner shape (`display_name`/`mime_type`/`file_uri`) is
 //! opaque, so `append_instructions`' reference text omits the source's
 //! descriptive suffix (`"(type: ..., 'name')"`) that would need those
 //! fields — the reference id and presence-based branching are preserved.
+//! `tools`/`thinking_config`/`safety_settings` on both config stubs stay
+//! opaque `Value` placeholders — `tools` needs `BaseTool` (Phase 8,
+//! C0116), and nothing here reads inside `thinking_config`/
+//! `safety_settings`, only forwards them.
+//!
+//! **Adaptation, Phase 3 batch 4**: `live_connect_config` was a bare
+//! `Value` placeholder ("nothing here reads it") until `Gemini.connect()`'s
+//! config-preparation logic (C0131) needed real fields to mutate — now
+//! [`LiveConnectConfigStub`], narrowed the same way `config` is.
 
 use adk_genai::content::{Content, Part};
 use rusty_serde::value::Value;
 use rusty_serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::cache_metadata::CacheMetadata;
 
@@ -37,6 +46,56 @@ pub struct GenerateContentConfigStub {
     pub response_schema: Option<Value>,
     #[rusty_serde(default)]
     pub response_mime_type: Option<String>,
+    /// Opaque placeholder — see the module doc.
+    #[rusty_serde(default)]
+    pub tools: Option<Value>,
+    /// Opaque placeholder — see the module doc.
+    #[rusty_serde(default)]
+    pub thinking_config: Option<Value>,
+    /// Opaque placeholder — see the module doc.
+    #[rusty_serde(default)]
+    pub safety_settings: Option<Value>,
+}
+
+/// Narrowed placeholder for `google.genai.types.HttpOptions`, as embedded
+/// in [`LiveConnectConfigStub`].
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct HttpOptionsStub {
+    #[rusty_serde(default)]
+    pub headers: Option<BTreeMap<String, String>>,
+    #[rusty_serde(default)]
+    pub api_version: Option<String>,
+}
+
+/// Narrowed placeholder for `google.genai.types.SessionResumptionConfig`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SessionResumptionStub {
+    #[rusty_serde(default)]
+    pub transparent: Option<bool>,
+}
+
+/// Narrowed placeholder for `google.genai.types.LiveConnectConfig` — see
+/// the module doc's Phase 3 batch 4 adaptation note.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct LiveConnectConfigStub {
+    #[rusty_serde(default)]
+    pub http_options: Option<HttpOptionsStub>,
+    /// Opaque placeholder for `types.SpeechConfig`.
+    #[rusty_serde(default)]
+    pub speech_config: Option<Value>,
+    #[rusty_serde(default)]
+    pub system_instruction: Option<Content>,
+    #[rusty_serde(default)]
+    pub session_resumption: Option<SessionResumptionStub>,
+    /// Opaque placeholder — see the module doc.
+    #[rusty_serde(default)]
+    pub tools: Option<Value>,
+    /// Opaque placeholder — see the module doc.
+    #[rusty_serde(default)]
+    pub thinking_config: Option<Value>,
+    /// Opaque placeholder — see the module doc.
+    #[rusty_serde(default)]
+    pub safety_settings: Option<Value>,
 }
 
 /// Either shape `append_instructions` accepts — the source's
@@ -53,9 +112,7 @@ pub struct LlmRequest {
     pub model: Option<String>,
     pub contents: Vec<Content>,
     pub config: GenerateContentConfigStub,
-    /// Opaque placeholder for `types.LiveConnectConfig` — nothing here
-    /// reads it.
-    pub live_connect_config: Option<Value>,
+    pub live_connect_config: Option<LiveConnectConfigStub>,
     pub cache_config: Option<adk_agents::context_cache_config::ContextCacheConfig>,
     pub cache_metadata: Option<CacheMetadata>,
     pub cacheable_contents_token_count: Option<i64>,
