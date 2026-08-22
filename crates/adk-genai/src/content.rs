@@ -36,7 +36,16 @@ use rusty_serde::value::Value;
 use rusty_serde::{Deserialize, Serialize};
 
 /// A function call part of a `Content`, e.g. requested by the model.
+///
+/// **Adaptation, fixed in Phase 3 batch 3**: the source's `google.genai`
+/// pydantic models use `alias_generator=to_camel` (matching `LlmRequest`/
+/// `LlmResponse`'s own camelCase wire format) — needed both for ADK's own
+/// event/session JSON and for the real Gemini REST API body this type now
+/// also serializes into (`gemini.rs`'s `generate_content_async`). This
+/// crate's initial cut (Phase 3 batch 1) left these as bare field names;
+/// `rename_all = "camelCase"` below closes that gap.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
 pub struct FunctionCall {
     #[rusty_serde(default)]
     pub id: Option<String>,
@@ -53,6 +62,7 @@ pub struct FunctionCall {
 /// A function response part of a `Content`, e.g. a tool's result sent back
 /// to the model.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
 pub struct FunctionResponse {
     #[rusty_serde(default)]
     pub id: Option<String>,
@@ -67,6 +77,7 @@ pub struct FunctionResponse {
 /// a time), represented here as a flat struct of options for simplicity,
 /// matching the source's own field layout.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
 pub struct Part {
     #[rusty_serde(default)]
     pub text: Option<String>,
@@ -209,5 +220,23 @@ mod tests {
         let json = rusty_serde::json::to_string(&content).unwrap();
         let back: Content = rusty_serde::json::from_str(&json).unwrap();
         assert_eq!(content, back);
+    }
+
+    #[test]
+    fn multi_word_fields_serialize_as_camel_case_on_the_wire() {
+        let content = Content::new(
+            "model",
+            vec![Part::function_call(FunctionCall {
+                id: None,
+                name: Some("tool".to_string()),
+                args: None,
+                will_continue: Some(true),
+            })],
+        );
+        let json = rusty_serde::json::to_string(&content).unwrap();
+        assert!(json.contains("\"functionCall\""));
+        assert!(json.contains("\"willContinue\""));
+        assert!(!json.contains("function_call"));
+        assert!(!json.contains("will_continue"));
     }
 }

@@ -1,38 +1,79 @@
-//! Capabilities C0123, C0124, C0129, C0130 (partial C0133): `Gemini`, ported
-//! from `google.adk.models.google_llm`.
+//! Capabilities C0123-C0125 (partial), C0127, C0129, C0130 (partial C0133):
+//! `Gemini`, ported from `google.adk.models.google_llm`.
 //!
-//! **Scope of this batch**: only the config shape, `supported_models()`,
-//! base-URL/API-version resolution, and API-client construction — the parts
-//! that are pure configuration logic, testable without a live network call.
-//! Deferred to later batches, each needing its own foundational decision or
-//! wire-format work this batch doesn't have yet:
-//!   - C0125/C0126/C0128 (`generate_content_async`'s actual REST/SSE calls,
-//!     context-cache integration, interactions-API delegation) — need the
-//!     real `GenerateContentConfig`/`GenerateContentResponse`/`Tool`/
-//!     `FunctionDeclaration` wire types (today's `LlmRequest`/`LlmResponse`
-//!     only model the load-bearing subset ADK's own code reads/writes, not
-//!     the full request/response bodies a real HTTP call would send/parse).
-//!   - C0127 (`_ResourceExhaustedError`) — wraps an HTTP client error that
-//!     only exists once C0125 makes real calls.
+//! **Scope of batch 2 (config layer)**: the config shape, `supported_models()`,
+//! base-URL/API-version resolution, and API-client construction — pure
+//! configuration logic, testable without a live network call.
+//!
+//! **Scope of batch 3 (this batch, real calls)**: non-streaming
+//! `generate_content_async` over the real Gemini REST API
+//! ([`Gemini::generate_content`]), for the Gemini-Developer-API
+//! (API-key) backend only, plus [`GeminiCallError::ResourceExhausted`]
+//! (C0127). **Adaptation, disclosed**: auth is resolved in one of two ways —
+//! an injected [`Gemini::client`] is used exactly as configured (the caller
+//! is assumed to have set up its own auth, e.g. a Vertex AI bearer token),
+//! or — when no client is injected — an API key is read from
+//! `GOOGLE_API_KEY`/`GEMINI_API_KEY` and sent as `x-goog-api-key`, which
+//! only works for the Gemini Developer API backend. Building our own
+//! Vertex AI credentials (Application Default Credentials: gcloud user
+//! creds, service-account JWTs, the GCE/GKE metadata server, workload
+//! identity) is a distinct, large dependency decision of its own —
+//! deferred, not silently unsupported: [`GeminiCallError::VertexAiAuthNotSupported`]
+//! names exactly what's missing and how to work around it today (inject a
+//! pre-authed client).
+//!
+//! Still deferred to later batches, each needing its own foundational
+//! decision or wire-format work this batch doesn't have yet:
+//!   - The SSE-streaming half of C0125 (`stream=true`, `StreamingResponseAggregator`),
+//!     C0126 (context-cache integration), and C0128 (interactions-API
+//!     delegation) — streaming needs an SSE-parsing decision on top of the
+//!     transport this batch already has; caching/interactions need
+//!     capabilities from later batches.
 //!   - C0131/C0132/C0135-C0139 (Live `connect()`, computer-use/preprocess
 //!     adaptation, `GeminiLlmConnection`) — need a WebSocket transport
 //!     decision (this batch only decided the REST/SSE transport).
-//!   - C0134 (redacted debug request/response logging) — needs the real
-//!     wire types above to have fields worth redacting.
+//!   - C0134 (redacted debug request/response logging).
 //!   - C0140-C0143 (`GeminiContextCacheManager`) — needs a SHA-256 crate
 //!     decision plus the cache-creation HTTP call.
+//!   - `config.tools`/`FunctionDeclaration` in the request body — not
+//!     modeled yet (C0116, Phase 8's `BaseTool`); see
+//!     `generate_content_request.rs`'s module doc.
 //!
 //! **Adaptation**: the source's `api_client` is a `cached_property`
 //! returning a full `google.genai.Client` (itself wrapping `httpx`/
 //! `aiohttp`, ADC-based Vertex AI auth, retries, etc.). [`GeminiApiClient`]
 //! here is the Rust-native equivalent scoped to what's decidable without
-//! the real wire calls: a `reqwest::Client` pre-loaded with tracking
+//! the real wire calls: a `reqwest::blocking::Client` pre-loaded with tracking
 //! headers, plus the resolved base URL/API version/`enterprise` flag.
 //! `client_kwargs` (the source's free-form `dict` merged into the SDK
 //! constructor's kwargs, capable of overriding *any* constructor argument)
 //! has no well-typed Rust equivalent without knowing which keys matter, so
 //! it stays an inert opaque placeholder — like `tools_dict` in
 //! `llm_request.rs`, documented rather than silently dropped.
+//!
+//! **Adaptation**: request/response bodies are sent/parsed via
+//! `rusty_serde::json` (a `String` body plus an explicit `content-type`
+//! header on the way out, `response.text()` plus `rusty_serde::json::from_str`
+//! on the way back) rather than `reqwest`'s `.json()` convenience method —
+//! that method requires the real `serde::Serialize`/`Deserialize` traits,
+//! and this workspace deliberately has one serialization framework
+//! (`rusty_serde`), not two.
+//!
+//! **Adaptation, load-bearing**: [`GeminiApiClient`] wraps
+//! `reqwest::blocking::Client`, not the async client. `reqwest`'s async
+//! transport calls straight into real `tokio::net::TcpStream`/
+//! `tokio::runtime::Handle::current()`, which only exists inside an actual
+//! `tokio::runtime::Runtime` — and `rusty_tokio` (this workspace's async
+//! runtime, adopted in Phase 2) is a from-scratch, independent reactor, not
+//! a wrapper around real tokio. The two can't share a reactor: an async
+//! `reqwest::Client` call panics with "there is no reactor running" under
+//! `rusty_tokio`. `reqwest::blocking::Client` sidesteps this because it
+//! spins up its own private, self-contained tokio runtime internally,
+//! independent of whatever ambient executor called it — so
+//! [`Gemini::generate_content`] runs it inside `rusty_tokio::spawn_blocking`
+//! (a genuine blocking-thread-pool offload, so a slow HTTP call doesn't
+//! stall a `rusty_tokio` async worker thread) rather than calling it
+//! directly.
 
 use std::sync::{Arc, OnceLock};
 
@@ -44,10 +85,17 @@ use crate::base_llm::BaseLlm;
 use crate::capabilities::{
     gemini_output_schema_and_tools, get_google_llm_variant, GoogleLlmVariant,
 };
+use crate::generate_content_request::build_request_body;
+use crate::generate_content_response::GenerateContentResponse;
 use crate::google_client_headers::get_tracking_headers;
+use crate::llm_request::LlmRequest;
+use crate::llm_response::LlmResponse;
 
 const DEFAULT_MODEL: &str = "gemini-2.5-flash";
 const API_VERSION_ENV_VAR: &str = "GOOGLE_GENAI_API_VERSION";
+const DEFAULT_GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com";
+const DEFAULT_GEMINI_API_VERSION: &str = "v1beta";
+const RESOURCE_EXHAUSTED_MITIGATION_LINK: &str = "On how to mitigate this issue, please refer to:\n\nhttps://google.github.io/adk-docs/agents/models/google-gemini/#error-code-429-resource_exhausted";
 
 fn version_suffix_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
@@ -58,7 +106,7 @@ fn version_suffix_pattern() -> &'static Regex {
 /// the module doc's adaptation note. Not constructed directly; built by
 /// [`Gemini::api_client`].
 pub struct GeminiApiClient {
-    pub http: reqwest::Client,
+    pub http: reqwest::blocking::Client,
     pub base_url: Option<String>,
     pub api_version: Option<String>,
     pub headers: Vec<(String, String)>,
@@ -72,7 +120,45 @@ pub struct GeminiApiClient {
     pub enterprise: bool,
 }
 
-fn build_http_client(headers: &[(String, String)]) -> reqwest::Client {
+/// Errors from [`Gemini::generate_content`] — the concrete, structured
+/// counterpart to the `BaseLlm` trait's flattened [`crate::base_llm::BaseLlmError::CallFailed`].
+#[derive(Debug, rusty_err::Error)]
+pub enum GeminiCallError {
+    #[error("Gemini requests require a model name.")]
+    MissingModel,
+    /// See the module doc's disclosed adaptation: only the Gemini
+    /// Developer API (API-key) backend can build its own auth today.
+    #[error(
+        "the Vertex AI backend isn't supported yet for real generate_content calls (needs \
+         Application Default Credentials) — inject a pre-configured `client` with your own \
+         auth to use Vertex AI today"
+    )]
+    VertexAiAuthNotSupported,
+    #[error("no API key found — set GOOGLE_API_KEY or GEMINI_API_KEY")]
+    MissingApiKey,
+    #[error("request to the Gemini API failed: {0}")]
+    Transport(String),
+    #[error("Gemini API returned HTTP {status}: {body}")]
+    Http { status: u16, body: String },
+    #[error("failed to parse the Gemini API response: {0}")]
+    Parse(String),
+    /// C0127: `_ResourceExhaustedError` — a 429 response, enhanced with a
+    /// link to ADK's resource-exhaustion mitigation docs.
+    #[error("HTTP 429: {body}\n\n{RESOURCE_EXHAUSTED_MITIGATION_LINK}")]
+    ResourceExhausted { body: String },
+}
+
+/// C0127: maps a non-2xx HTTP response into a [`GeminiCallError`],
+/// enhancing a 429 into [`GeminiCallError::ResourceExhausted`].
+fn map_http_error(status: u16, body: String) -> GeminiCallError {
+    if status == 429 {
+        GeminiCallError::ResourceExhausted { body }
+    } else {
+        GeminiCallError::Http { status, body }
+    }
+}
+
+fn build_http_client(headers: &[(String, String)]) -> reqwest::blocking::Client {
     let mut header_map = HeaderMap::new();
     for (key, value) in headers {
         if let (Ok(name), Ok(value)) = (
@@ -82,7 +168,7 @@ fn build_http_client(headers: &[(String, String)]) -> reqwest::Client {
             header_map.insert(name, value);
         }
     }
-    reqwest::Client::builder()
+    reqwest::blocking::Client::builder()
         .default_headers(header_map)
         .build()
         .expect("reqwest client with well-formed static headers must build")
@@ -248,6 +334,100 @@ impl Gemini {
     pub fn api_backend(&self) -> GoogleLlmVariant {
         get_google_llm_variant()
     }
+
+    /// Resolves the auth header to attach to a real API call. `None` means
+    /// "the client already carries whatever auth it needs" — either an
+    /// injected [`Gemini::client`] (assumed pre-authed by the caller), or
+    /// this being the one case that needs no header of its own. See the
+    /// module doc's disclosed adaptation for why only the Gemini Developer
+    /// API backend can build its own auth today.
+    fn resolve_auth_header(&self) -> Result<Option<(&'static str, String)>, GeminiCallError> {
+        if self.client.is_some() {
+            return Ok(None);
+        }
+        match self.api_backend() {
+            GoogleLlmVariant::VertexAi => Err(GeminiCallError::VertexAiAuthNotSupported),
+            GoogleLlmVariant::GeminiApi => {
+                let key = std::env::var("GOOGLE_API_KEY")
+                    .or_else(|_| std::env::var("GEMINI_API_KEY"))
+                    .map_err(|_| GeminiCallError::MissingApiKey)?;
+                Ok(Some(("x-goog-api-key", key)))
+            }
+        }
+    }
+
+    fn generate_content_url(&self, model: &str) -> String {
+        let client = self.api_client();
+        let base_url = client
+            .base_url
+            .clone()
+            .unwrap_or_else(|| DEFAULT_GEMINI_API_BASE_URL.to_string());
+        let api_version = client
+            .api_version
+            .clone()
+            .unwrap_or_else(|| DEFAULT_GEMINI_API_VERSION.to_string());
+        let base_url = base_url.trim_end_matches('/');
+        format!("{base_url}/{api_version}/models/{model}:generateContent")
+    }
+
+    /// C0125 (non-streaming only — see the module doc): sends a real,
+    /// non-streaming `generateContent` request and maps the response into
+    /// an [`LlmResponse`]. The concrete, structured counterpart to
+    /// `BaseLlm::generate_content_async`'s trait-object-friendly
+    /// `stream: false` case.
+    pub async fn generate_content(
+        &self,
+        llm_request: &LlmRequest,
+    ) -> Result<LlmResponse, GeminiCallError> {
+        let mut llm_request = llm_request.clone();
+        crate::base_llm::maybe_append_user_content(&mut llm_request);
+        let model = llm_request
+            .model
+            .clone()
+            .ok_or(GeminiCallError::MissingModel)?;
+
+        let auth_header = self.resolve_auth_header()?;
+        let client = self.api_client();
+        let url = self.generate_content_url(&model);
+        let body = build_request_body(&llm_request);
+        let body_json = rusty_serde::json::to_string(&body)
+            .map_err(|e| GeminiCallError::Parse(e.to_string()))?;
+
+        // `reqwest::blocking` spins up its own private tokio runtime, so
+        // this genuinely blocking call is safe to make — it just must not
+        // run directly on a `rusty_tokio` async worker thread, hence the
+        // `spawn_blocking` offload. See the module doc's load-bearing
+        // adaptation note.
+        let outcome = rusty_tokio::spawn_blocking(move || -> Result<(u16, String), String> {
+            let mut request = client
+                .http
+                .post(&url)
+                .header("content-type", "application/json")
+                .body(body_json);
+            if let Some((name, value)) = auth_header {
+                request = request.header(name, value);
+            }
+            let response = request.send().map_err(|e| e.to_string())?;
+            let status = response.status().as_u16();
+            let text = response.text().map_err(|e| e.to_string())?;
+            Ok((status, text))
+        })
+        .await;
+
+        let (status, text) = match outcome {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(message)) => return Err(GeminiCallError::Transport(message)),
+            Err(join_error) => return Err(GeminiCallError::Transport(join_error.to_string())),
+        };
+
+        if !(200..300).contains(&status) {
+            return Err(map_http_error(status, text));
+        }
+
+        let parsed: GenerateContentResponse = rusty_serde::json::from_str(&text)
+            .map_err(|e| GeminiCallError::Parse(e.to_string()))?;
+        Ok(LlmResponse::create(parsed))
+    }
 }
 
 impl BaseLlm for Gemini {
@@ -263,6 +443,32 @@ impl BaseLlm for Gemini {
         crate::capabilities::LlmCapabilities {
             output_schema_and_tools: gemini_output_schema_and_tools(&self.model),
         }
+    }
+
+    /// C0125 (non-streaming only — see the module doc): delegates to
+    /// [`Gemini::generate_content`], flattening its structured
+    /// [`GeminiCallError`] into `BaseLlmError::CallFailed` for the
+    /// trait-object-friendly contract. `stream: true` isn't implemented yet
+    /// (the SSE-streaming half of C0125).
+    fn generate_content_async<'a>(
+        &'a self,
+        llm_request: &'a LlmRequest,
+        stream: bool,
+    ) -> crate::base_llm::BoxFuture<'a, Result<Vec<LlmResponse>, crate::base_llm::BaseLlmError>>
+    {
+        Box::pin(async move {
+            if stream {
+                return Err(crate::base_llm::BaseLlmError::CallFailed(
+                    "Gemini streaming generate_content_async isn't implemented yet (deferred \
+                     to a later batch)"
+                        .to_string(),
+                ));
+            }
+            self.generate_content(llm_request)
+                .await
+                .map(|response| vec![response])
+                .map_err(|e| crate::base_llm::BaseLlmError::CallFailed(e.to_string()))
+        })
     }
 
     /// C0124.
@@ -406,7 +612,7 @@ mod tests {
     #[test]
     fn api_client_prefers_an_injected_client_over_building_one() {
         let injected = Arc::new(GeminiApiClient {
-            http: reqwest::Client::new(),
+            http: reqwest::blocking::Client::new(),
             base_url: Some("https://injected.example.com".to_string()),
             api_version: None,
             headers: vec![],
@@ -418,5 +624,261 @@ mod tests {
             gemini.api_client().base_url,
             Some("https://injected.example.com".to_string())
         );
+    }
+
+    fn clear_auth_env_vars() {
+        std::env::remove_var("GOOGLE_API_KEY");
+        std::env::remove_var("GEMINI_API_KEY");
+        std::env::remove_var("GOOGLE_GENAI_USE_ENTERPRISE");
+        std::env::remove_var("GOOGLE_GENAI_USE_VERTEXAI");
+    }
+
+    #[test]
+    fn resolve_auth_header_uses_google_api_key_for_the_gemini_api_backend() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "the-key");
+        let result = Gemini::new("gemini-2.5-flash").resolve_auth_header();
+        clear_auth_env_vars();
+        assert_eq!(
+            result.unwrap(),
+            Some(("x-goog-api-key", "the-key".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_auth_header_falls_back_to_gemini_api_key() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GEMINI_API_KEY", "fallback-key");
+        let result = Gemini::new("gemini-2.5-flash").resolve_auth_header();
+        clear_auth_env_vars();
+        assert_eq!(
+            result.unwrap(),
+            Some(("x-goog-api-key", "fallback-key".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_auth_header_errors_without_any_key() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let result = Gemini::new("gemini-2.5-flash").resolve_auth_header();
+        clear_auth_env_vars();
+        match result {
+            Err(GeminiCallError::MissingApiKey) => {}
+            _ => panic!("expected MissingApiKey"),
+        }
+    }
+
+    #[test]
+    fn resolve_auth_header_errors_for_vertex_ai_without_an_injected_client() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "true");
+        let result = Gemini::new("gemini-2.5-flash").resolve_auth_header();
+        clear_auth_env_vars();
+        match result {
+            Err(GeminiCallError::VertexAiAuthNotSupported) => {}
+            _ => panic!("expected VertexAiAuthNotSupported"),
+        }
+    }
+
+    #[test]
+    fn resolve_auth_header_is_none_when_a_client_is_injected() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "true");
+        let injected = Arc::new(GeminiApiClient {
+            http: reqwest::blocking::Client::new(),
+            base_url: None,
+            api_version: None,
+            headers: vec![],
+            retry_options: None,
+            enterprise: false,
+        });
+        let result = Gemini::new("gemini-2.5-flash")
+            .with_client(injected)
+            .resolve_auth_header();
+        clear_auth_env_vars();
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn generate_content_url_uses_the_gemini_api_default_base_and_version() {
+        let gemini = Gemini::new("gemini-2.5-flash");
+        assert_eq!(
+            gemini.generate_content_url("gemini-2.5-flash"),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        );
+    }
+
+    #[test]
+    fn generate_content_url_uses_a_configured_base_url_and_version() {
+        let gemini = Gemini::new("gemini-2.5-flash")
+            .with_base_url("http://127.0.0.1:9999/")
+            .with_api_version("v1");
+        assert_eq!(
+            gemini.generate_content_url("gemini-2.5-flash"),
+            "http://127.0.0.1:9999/v1/models/gemini-2.5-flash:generateContent"
+        );
+    }
+
+    #[test]
+    fn map_http_error_enhances_a_429_into_resource_exhausted() {
+        match map_http_error(429, "quota exceeded".to_string()) {
+            GeminiCallError::ResourceExhausted { body } => assert_eq!(body, "quota exceeded"),
+            _ => panic!("expected ResourceExhausted"),
+        }
+    }
+
+    #[test]
+    fn map_http_error_passes_through_other_statuses() {
+        match map_http_error(500, "boom".to_string()) {
+            GeminiCallError::Http { status, body } => {
+                assert_eq!(status, 500);
+                assert_eq!(body, "boom");
+            }
+            _ => panic!("expected Http"),
+        }
+    }
+
+    /// A one-shot local HTTP/1.1 server: accepts a single request, reads it
+    /// fully (header-aware, honoring `Content-Length`), then replies with
+    /// `status_line`/`body`. Dependency-free stand-in for a mock HTTP
+    /// server, giving `generate_content` real, end-to-end transport
+    /// coverage without a live call to Google's API.
+    fn spawn_one_shot_server(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut received = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                received.extend_from_slice(&buf[..n]);
+                if let Some(header_end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&received[..header_end]);
+                    let content_length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            let lower = line.to_ascii_lowercase();
+                            lower
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if received.len() >= header_end + 4 + content_length {
+                        break;
+                    }
+                }
+            }
+            let response =
+                format!("{status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[rusty_tokio::test]
+    // Held across `.await` deliberately: this guard only serializes test
+    // env-var mutation against other tests in this file, and the awaited
+    // future never touches `ENV_VAR_GUARD` itself, so there's no deadlock
+    // risk — only the intended cross-test isolation.
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_content_parses_a_successful_response() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+
+        let (base_url, server) = spawn_one_shot_server(
+            "HTTP/1.1 200 OK",
+            r#"{"modelVersion":"gemini-2.5-flash","candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}]}"#,
+        );
+        let gemini = Gemini::new("gemini-2.5-flash").with_base_url(base_url);
+        let request = LlmRequest::new("gemini-2.5-flash");
+        let response = gemini.generate_content(&request).await;
+        clear_auth_env_vars();
+        server.join().unwrap();
+
+        let response = response.unwrap();
+        assert_eq!(
+            response.content.unwrap().parts[0].text.as_deref(),
+            Some("hello")
+        );
+    }
+
+    #[rusty_tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_content_maps_a_429_response_to_resource_exhausted() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+
+        let (base_url, server) =
+            spawn_one_shot_server("HTTP/1.1 429 Too Many Requests", "quota exceeded");
+        let gemini = Gemini::new("gemini-2.5-flash").with_base_url(base_url);
+        let request = LlmRequest::new("gemini-2.5-flash");
+        let response = gemini.generate_content(&request).await;
+        clear_auth_env_vars();
+        server.join().unwrap();
+
+        match response {
+            Err(GeminiCallError::ResourceExhausted { .. }) => {}
+            _ => panic!("expected ResourceExhausted"),
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn generate_content_errors_without_a_model_name() {
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.model = None;
+        match gemini.generate_content(&request).await {
+            Err(GeminiCallError::MissingModel) => {}
+            _ => panic!("expected MissingModel"),
+        }
+    }
+
+    #[rusty_tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn base_llm_generate_content_async_flattens_gemini_call_errors() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let request = LlmRequest::new("gemini-2.5-flash");
+        let result = BaseLlm::generate_content_async(&gemini, &request, false).await;
+        clear_auth_env_vars();
+        match result {
+            Err(crate::base_llm::BaseLlmError::CallFailed(message)) => {
+                assert!(message.contains("GOOGLE_API_KEY"));
+            }
+            _ => panic!("expected CallFailed"),
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn base_llm_generate_content_async_rejects_streaming_for_now() {
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let request = LlmRequest::new("gemini-2.5-flash");
+        let result = BaseLlm::generate_content_async(&gemini, &request, true).await;
+        match result {
+            Err(crate::base_llm::BaseLlmError::CallFailed(message)) => {
+                assert!(message.contains("streaming"));
+            }
+            _ => panic!("expected CallFailed"),
+        }
     }
 }

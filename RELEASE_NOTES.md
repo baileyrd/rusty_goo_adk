@@ -22,6 +22,52 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 3 batch 3: Gemini generate_content_async (non-streaming)
+**2026-08-22** · (link added once this PR is opened)
+
+- **Added:** `LlmResponse.create()` (C0121) — maps a raw
+  `GenerateContentResponse` into an `LlmResponse` (normal/error/
+  block-reason/empty-no-candidates branches), backed by a new
+  `generate_content_response` module modeling the Gemini REST API's
+  response wire shape (minimal real subset, same treatment as
+  `adk_genai::content`). Added `generate_content_request` (the REST
+  request-body wire shape) and `Gemini::generate_content` — a real,
+  non-streaming HTTP POST to the Gemini Developer API, plus
+  `_ResourceExhaustedError`'s 429-with-mitigation-link enhancement
+  (C0127). 25 new tests, including an end-to-end round-trip against a
+  dependency-free local test HTTP server.
+- **Adaptation, disclosed:** auth resolves one of two ways — an injected
+  `client` is trusted as-is (assumed pre-authed, e.g. for Vertex AI), or
+  an API key is read from `GOOGLE_API_KEY`/`GEMINI_API_KEY` (Gemini
+  Developer API backend only). Building real Vertex AI credentials
+  (Application Default Credentials) is a distinct, large dependency
+  decision, deferred — attempting it without an injected client returns
+  a named `VertexAiAuthNotSupported` error rather than failing silently
+  or attempting a doomed call.
+- **Fixed, disclosed:** `adk_genai::content` now serializes multi-word
+  fields as camelCase (`functionCall`, `inlineData`, `willContinue`,
+  etc.) instead of bare snake_case field names — a latent gap from Phase
+  3 batch 1 this batch needed fixed to build a wire-accurate request
+  body, but which also corrects ADK's own event/session JSON to match
+  the source's `alias_generator=to_camel` convention. No prior test
+  pinned the old (incorrect) casing.
+- **New dependency decision, disclosed:** discovered that `reqwest`'s
+  async client requires a genuine `tokio` reactor, which `rusty_tokio`
+  (a from-scratch, independent runtime adopted in Phase 2) doesn't
+  provide — the two can't share a reactor. Switched `GeminiApiClient` to
+  `reqwest::blocking::Client` (self-contained, safe under any ambient
+  executor) driven via `rusty_tokio::spawn_blocking`, so a slow HTTP call
+  offloads to a real blocking thread rather than stalling an async
+  worker. Documented in the workspace `Cargo.toml` and `gemini.rs`.
+- **Scope decision:** SSE-streaming `generate_content_async`
+  (`stream=true`), context-cache integration, interactions-API
+  delegation, the Live `connect()`/`GeminiLlmConnection`, redacted debug
+  logging, and `GeminiContextCacheManager` remain deferred — see
+  `crates/adk-models/src/gemini.rs`'s module doc.
+- 2 rows marked `DONE` with per-row test-name evidence (C0121, C0127);
+  C0125 stays `REQUIRED` since it bundles the still-undone SSE-streaming
+  half. Phase 3 sits at 21 of 43 rows complete.
+
 ## PR #TBD — Phase 3 batch 2: Gemini client construction & config layer
 **2026-08-22** · (link added once this PR is opened)
 

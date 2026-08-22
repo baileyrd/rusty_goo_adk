@@ -51,11 +51,41 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   resolution (C0123, C0124, C0129, C0130). Adopts `reqwest` (`rustls-tls`)
   as the HTTP client after checking every sibling Rusty-Mill repo for an
   HTTP/TLS candidate (none exists) — the REST/SSE transport decision;
-  the Live API's WebSocket transport is a separate, later decision. The
-  actual `generate_content_async` wire calls, context-cache integration,
-  `_ResourceExhaustedError`, redacted request/response logging, the Live
-  `connect()`/`GeminiLlmConnection`, and `GeminiContextCacheManager`
-  (C0125-C0128, C0131-C0143) are deferred to further batches — see
+  the Live API's WebSocket transport is a separate, later decision.
+- Real, non-streaming `Gemini.generate_content_async` (Phase 3 batch 3):
+  `LlmResponse.create()` mapping a raw `GenerateContentResponse` into an
+  `LlmResponse` (C0121), the Gemini REST API request-body wire shape
+  (`generate_content_request.rs`), and `Gemini::generate_content` — a
+  real HTTP POST to the Gemini Developer API, including
+  `_ResourceExhaustedError`'s 429-with-mitigation-link enhancement
+  (C0127). Auth: an injected `client` is used as-is; otherwise an API key
+  is read from `GOOGLE_API_KEY`/`GEMINI_API_KEY` (Gemini Developer API
+  only — Vertex AI's own auth (ADC) is a distinct, deferred dependency
+  decision, and returns a named "not supported yet, inject your own
+  client" error rather than failing silently).
+- **Fixed**: `adk_genai::content` (`Content`/`Part`/`FunctionCall`/
+  `FunctionResponse`) now serializes multi-word fields as camelCase
+  (`functionCall`, `inlineData`, `willContinue`, etc.), matching the
+  source's `alias_generator=to_camel` pydantic config. This was a latent
+  gap from Phase 3 batch 1 — the initial cut used bare field names —
+  that batch 3 needed fixed to build a wire-accurate Gemini REST request
+  body, but which also affects ADK's own event/session JSON.
+- **New dependency, disclosed:** Phase 3 batch 3 discovered that
+  `reqwest`'s *async* client requires a genuine `tokio` reactor
+  underneath, and `rusty_tokio` (Phase 2's runtime) is a from-scratch,
+  independent runtime — the two can't share a reactor (an async
+  `reqwest::Client` call panics with "there is no reactor running" under
+  `rusty_tokio`). Switched to `reqwest::blocking::Client` (which spins up
+  its own private, self-contained tokio runtime internally, so it's safe
+  under any ambient executor), driven via `rusty_tokio::spawn_blocking` so
+  a slow HTTP call doesn't stall an async worker thread. Documented in
+  the workspace `Cargo.toml` and `gemini.rs`'s module doc.
+- **Scope decision:** the SSE-streaming half of `generate_content_async`
+  (`stream=true`, `StreamingResponseAggregator`), context-cache
+  integration, interactions-API delegation, the Live `connect()`/
+  `GeminiLlmConnection`, redacted request/response logging, and
+  `GeminiContextCacheManager` (C0125's streaming half, C0126, C0128,
+  C0131-C0143) are deferred to further batches — see
   `crates/adk-models/src/gemini.rs`'s module doc for exactly what's left
   and why.
 ### Changed
