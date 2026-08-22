@@ -44,6 +44,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   completing C0071), and `LlmAgent`'s `_get_subagent_to_resume`/
   `__maybe_save_output_to_state`/`__maybe_accumulate_streaming_output`
   (Phase 2, C0094/C0095).
+- `Gemini` client-construction/config layer (Phase 3 batch 2): the config
+  shape (`model`/`client`/`base_url`/`api_version`/`speech_config`/
+  `use_interactions_api`/`retry_options`), `supported_models()`,
+  `api_client`/`GeminiApiClient` construction, and base-URL/API-version
+  resolution (C0123, C0124, C0129, C0130). Adopts `reqwest` (`rustls-tls`)
+  as the HTTP client after checking every sibling Rusty-Mill repo for an
+  HTTP/TLS candidate (none exists) — the REST/SSE transport decision;
+  the Live API's WebSocket transport is a separate, later decision. The
+  actual `generate_content_async` wire calls, context-cache integration,
+  `_ResourceExhaustedError`, redacted request/response logging, the Live
+  `connect()`/`GeminiLlmConnection`, and `GeminiContextCacheManager`
+  (C0125-C0128, C0131-C0143) are deferred to further batches — see
+  `crates/adk-models/src/gemini.rs`'s module doc for exactly what's left
+  and why.
 ### Changed
 ### Fixed
 ### Security

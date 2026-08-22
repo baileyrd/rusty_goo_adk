@@ -22,6 +22,51 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 3 batch 2: Gemini client construction & config layer
+**2026-08-22** · (link added once this PR is opened)
+
+- **Added:** the `Gemini` struct (`model`/`client`/`client_kwargs`/
+  `base_url`/`api_version`/`speech_config`/`use_interactions_api`/
+  `retry_options`), `supported_models()`, `api_client`/`GeminiApiClient`
+  construction (tracking headers, `enterprise` flag, base-URL/API-version
+  resolution), and `_configured_api_version`/
+  `_normalize_base_url_and_api_version` (C0123, C0124, C0129, C0130). Also
+  added `google_client_headers` (`get_client_labels`/`get_tracking_headers`/
+  `merge_tracking_headers`, C0133 partial). 25 new tests.
+- **New dependency, disclosed:** the `reqwest` crate (`rustls-tls`
+  feature, no native/OpenSSL TLS) as the HTTP/SSE transport for the Gemini
+  REST API. This is the sovereignty-sensitive dependency decision the
+  Phase 3 batch 1 `regex` note explicitly contrasted itself with — every
+  sibling Rusty-Mill repo under the platform directory
+  (`rusty_time`/`rusty_err`/`rustils_async`/`rusty_tokio`/`rusty_json`/
+  `rusty_std`/`rusty_uuid`/`rusty_serde`) was checked for an HTTP/TLS
+  candidate the manifest's own sibling-check methodology names
+  (`rusty_http`/`rusty_request`, `rusty_tls`) — none exists. Only the
+  REST/SSE transport is decided here; the Live API's WebSocket transport
+  is a separate decision for the batch that implements `connect()`.
+- **Adaptation, disclosed:** `client_kwargs` (the source's free-form dict
+  merged into the `genai.Client` constructor, capable of overriding any
+  constructor argument) has no well-typed Rust equivalent without knowing
+  which keys matter, so it stays an inert opaque placeholder — documented
+  in `gemini.rs`'s module doc, same treatment as `tools_dict` in
+  `llm_request.rs`.
+- **Scope decision:** this batch covers only pure configuration logic
+  testable without a live network call. Deferred to further batches:
+  `generate_content_async`'s actual REST/SSE wire calls, context-cache
+  integration, and interactions-API delegation (C0125/C0126/C0128 — need
+  real `GenerateContentConfig`/`GenerateContentResponse`/`Tool`/
+  `FunctionDeclaration` wire types beyond today's load-bearing-subset
+  `LlmRequest`/`LlmResponse`); `_ResourceExhaustedError` (C0127 — wraps an
+  HTTP error that only exists once real calls exist); the Live
+  `connect()`/`GeminiLlmConnection`/computer-use preprocessing
+  (C0131/C0132/C0135-C0139 — need a WebSocket transport decision);
+  redacted request/response debug logging (C0134 — needs the real wire
+  types above); and `GeminiContextCacheManager` (C0140-C0143 — needs a
+  SHA-256 crate decision plus the cache-creation HTTP call). See
+  `crates/adk-models/src/gemini.rs`'s module doc for the full breakdown.
+- 4 rows marked `DONE` with per-row test-name evidence in
+  `capability-manifest.md`; Phase 3 sits at 19 of 43 rows complete.
+
 ## PR #TBD — Phase 3 batch 1: model layer core (BaseLlm/LlmRequest/LlmResponse/LLMRegistry)
 **2026-08-21** · (link added once this PR is opened)
 
