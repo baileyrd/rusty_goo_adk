@@ -30,3 +30,21 @@ rusty_tokio = { git = "https://github.com/baileyrd/rusty_tokio", rev = "6e6f1847
 # isn't a sovereignty-sensitive surface the way an HTTP client or crypto
 # lib would be, so it's adopted directly rather than hand-rolled.
 regex = "1"
+# Gemini native backend (Phase 3 batch 2) needs a real HTTP client to talk
+# to the Gemini/Vertex AI REST API — this *is* the sovereignty-sensitive
+# surface the `regex` comment above contrasts itself with, so it gets the
+# same scrutiny as the `rusty_tokio` runtime decision. Checked every
+# sibling Rusty-Mill repo under the platform directory
+# (rusty_time/rusty_err/rustils_async/rusty_tokio/rusty_json/rusty_std/
+# rusty_uuid/rusty_serde) for an HTTP/TLS candidate the manifest's own
+# sibling-check methodology names (`rusty_http`/`rusty_request`,
+# `rusty_tls`) — none exists. `reqwest` is adopted with the `rustls-tls`
+# feature (not `native-tls`/openssl) so the dependency is pure-Rust TLS
+# with no system OpenSSL requirement, matching the sandboxed/CI
+# environment this workspace builds in. Only the REST/SSE transport is
+# decided here; the Live API's WebSocket transport (C0131/C0135-C0139) is
+# its own decision, deferred to the batch that implements `connect()`.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+] }
