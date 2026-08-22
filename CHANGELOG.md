@@ -80,12 +80,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   under any ambient executor), driven via `rusty_tokio::spawn_blocking` so
   a slow HTTP call doesn't stall an async worker thread. Documented in
   the workspace `Cargo.toml` and `gemini.rs`'s module doc.
+- `Gemini::prepare_live_connect_config`/`Gemini::live_api_version` (Phase
+  3 batch 4, C0131 config-prep half): everything `Gemini.connect()` does
+  to `llm_request.live_connect_config` before opening the actual Live
+  WebSocket connection — tracking-header merging (gated on `http_options`
+  already being present, matching the source's own behavior), forwarding
+  `speech_config`/`tools`/`thinking_config`/`safety_settings`, the
+  unconditional `system_instruction` assignment, and validating
+  transparent session resumption is Vertex-AI-only. Extends
+  `LlmRequest.live_connect_config` from an opaque placeholder to a real
+  narrowed `LiveConnectConfigStub`.
 - **Scope decision:** the SSE-streaming half of `generate_content_async`
   (`stream=true`, `StreamingResponseAggregator`), context-cache
-  integration, interactions-API delegation, the Live `connect()`/
-  `GeminiLlmConnection`, redacted request/response logging, and
-  `GeminiContextCacheManager` (C0125's streaming half, C0126, C0128,
-  C0131-C0143) are deferred to further batches — see
+  integration, interactions-API delegation, the actual Live WebSocket
+  handshake, all of `GeminiLlmConnection` (its `receive()` alone is a
+  ~370-line stateful message-translation engine — deserves its own batch
+  rather than being squeezed in alongside config-prep), redacted
+  request/response logging, and `GeminiContextCacheManager` (C0125's
+  streaming half, C0126, C0128, the rest of C0131, C0132, C0135-C0143)
+  are deferred to further batches — see
   `crates/adk-models/src/gemini.rs`'s module doc for exactly what's left
   and why.
 ### Changed
