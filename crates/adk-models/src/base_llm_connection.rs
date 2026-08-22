@@ -1,19 +1,41 @@
 //! Capability C0106: `BaseLlmConnection`, ported from
 //! `google.adk.models.base_llm_connection`.
+//!
+//! **Adaptation, Phase 3 batch 5**: `send_realtime`'s `blob` parameter was
+//! an opaque `Value` placeholder until `GeminiLlmConnection` (C0138) needed
+//! to type-dispatch on it — now [`RealtimeInput`], the source's
+//! `Union[types.Blob, types.ActivityStart, types.ActivityEnd,
+//! types.LiveClientRealtimeInput]`. Only `LiveClientRealtimeInput`'s
+//! `audio_stream_end` field is modeled for the fourth variant: the source
+//! itself only handles that one field there too (`gemini_llm_connection.py`
+//! logs "Unary LiveClientRealtimeInput not fully supported yet" for
+//! anything else), so a dedicated `AudioStreamEnd` variant is a faithful
+//! port of what's actually implemented, not a narrowing.
 
 use std::future::Future;
 use std::pin::Pin;
 
-use adk_genai::content::Content;
+use adk_genai::content::{Content, MediaBlobStub};
 
 use crate::llm_response::LlmResponse;
 
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Debug, rusty_err::Error)]
 pub enum ConnectionError {
     #[error("{0}")]
     Failed(String),
+}
+
+/// See the module doc's adaptation note.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RealtimeInput {
+    /// `types.Blob` — inline binary media (audio/image), sent in realtime.
+    Blob(MediaBlobStub),
+    ActivityStart,
+    ActivityEnd,
+    /// The only `types.LiveClientRealtimeInput` field the source handles.
+    AudioStreamEnd,
 }
 
 /// The base trait for a live model connection.
@@ -36,11 +58,12 @@ pub trait BaseLlmConnection: Send + Sync {
         self.send_content(content)
     }
 
-    /// Sends a chunk of audio or a frame of video in realtime — `blob` is
-    /// an opaque `types.Blob` placeholder.
+    /// Sends a chunk of audio/video/activity-boundary input in realtime —
+    /// C0138 (`GeminiLlmConnection::send_realtime`) type-dispatches on
+    /// which [`RealtimeInput`] variant this is.
     fn send_realtime<'a>(
         &'a self,
-        blob: rusty_serde::value::Value,
+        input: RealtimeInput,
     ) -> BoxFuture<'a, Result<(), ConnectionError>>;
 
     fn receive<'a>(&'a self) -> BoxFuture<'a, Result<Vec<LlmResponse>, ConnectionError>>;
@@ -76,7 +99,7 @@ mod tests {
 
         fn send_realtime<'a>(
             &'a self,
-            _blob: rusty_serde::value::Value,
+            _input: RealtimeInput,
         ) -> BoxFuture<'a, Result<(), ConnectionError>> {
             Box::pin(async { Ok(()) })
         }

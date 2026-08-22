@@ -14,3 +14,4 @@ rusty_err = { workspace = true }
 rusty_tokio = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
+tungstenite = { workspace = true }

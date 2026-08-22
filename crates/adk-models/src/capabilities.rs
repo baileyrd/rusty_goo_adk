@@ -81,6 +81,27 @@ pub fn gemini_output_schema_and_tools(model_name: &str) -> bool {
     get_google_llm_variant() == GoogleLlmVariant::VertexAi && is_gemini_model(Some(model_name))
 }
 
+/// `utils/model_name_utils.py::is_gemini_3_5_live_translate` — forward-pulled
+/// for `GeminiLlmConnection` (Phase 3 batch 5), same rationale as the module
+/// doc's other forward-pulls.
+pub fn is_gemini_3_5_live_translate(model_string: Option<&str>) -> bool {
+    let Some(model_string) = model_string.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    extract_model_name(model_string).starts_with("gemini-3.5-live-translate")
+}
+
+/// `utils/model_name_utils.py::_is_gemini_3_x_live`.
+pub fn is_gemini_3_x_live(model_string: Option<&str>) -> bool {
+    let Some(model_string) = model_string.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let model_name = extract_model_name(model_string);
+    model_name.starts_with("gemini-3.")
+        && model_name.contains("-live")
+        && !is_gemini_3_5_live_translate(Some(model_string))
+}
+
 /// Resolved capabilities for an LLM instance — an immutable snapshot a
 /// model reports via `BaseLlm::capabilities`, rather than a caller
 /// re-deriving support from the model name/type.
@@ -145,6 +166,29 @@ mod tests {
         assert!(!is_gemini_model(Some("gpt-4")));
         assert!(!is_gemini_model(None));
         assert!(!is_gemini_model(Some("")));
+    }
+
+    #[test]
+    fn is_gemini_3_x_live_matches_a_gemini_3_live_model() {
+        assert!(is_gemini_3_x_live(Some("gemini-3.0-live")));
+        assert!(!is_gemini_3_x_live(Some("gemini-2.5-live")));
+        assert!(!is_gemini_3_x_live(Some("gemini-3.0-flash")));
+        assert!(!is_gemini_3_x_live(None));
+    }
+
+    #[test]
+    fn is_gemini_3_x_live_excludes_the_3_5_live_translate_variant() {
+        assert!(!is_gemini_3_x_live(Some("gemini-3.5-live-translate")));
+        assert!(is_gemini_3_5_live_translate(Some(
+            "gemini-3.5-live-translate"
+        )));
+    }
+
+    #[test]
+    fn is_gemini_3_5_live_translate_requires_the_exact_prefix() {
+        assert!(!is_gemini_3_5_live_translate(Some("gemini-3.0-live")));
+        assert!(!is_gemini_3_5_live_translate(None));
+        assert!(!is_gemini_3_5_live_translate(Some("")));
     }
 
     #[test]
