@@ -22,6 +22,50 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 5: `contents.py`'s standalone event/content transforms
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::contents` — the standalone, non-orchestrating
+  helpers `flows/llm_flows/contents.py`'s `_get_contents` pipeline is
+  built from:
+  - `is_part_invisible`/`contains_empty_content` (C0189, DONE): a part is
+    never invisible if it carries a function call/response, a
+    thought_signature, or a server-side tool call/result; an event is
+    empty only if every part is invisible and it carries no
+    transcription/compaction action.
+  - `is_event_belongs_to_branch`, `is_direct_transfer`, `is_auth_event`,
+    `is_request_confirmation_event`, `is_adk_framework_event`,
+    `should_include_event_in_context` (C0183, partial): branch-membership
+    and event-kind visibility predicates.
+  - `copy_content_for_request` (C0181, partial): strips synthetic
+    `adk-*`-prefixed function-call/response ids when requested — the
+    mechanism a future backend-specific policy will call into.
+  - `drop_orphaned_function_responses`, `merge_function_response_events`,
+    `rearrange_events_for_latest_function_response`,
+    `rearrange_events_for_async_function_responses_in_history`
+    (C0186/C0187, DONE): orphan-response dropping and both
+    function-call/response rearrangement passes. `bisect_left` translated
+    as `Vec::partition_point`.
+- **Added:** `Part.tool_call`/`tool_response: Option<Value>` in
+  `adk-genai` — opaque placeholders for a server-side (model-run) tool
+  call/result, distinct from `function_call`/`function_response`, needed
+  for `is_part_invisible`'s "never invisible" exception.
+- **Adaptation, disclosed:** `drop_orphaned_function_responses` returns
+  the dropped ids alongside the filtered events instead of logging a
+  warning internally — no logging framework has been adopted by this
+  workspace yet, the same class of omission `debug_log.rs` already
+  disclosed.
+- **Scope, disclosed:** this batch deliberately excludes
+  `_get_contents`/`_get_current_turn_contents` themselves (the ~185-line
+  orchestrating functions, plus the `_ContentLlmRequestProcessor` that
+  wraps them), cross-agent transcript fencing (C0184, `_fencing.py` —
+  prompt-injection-relevant, deserves its own focused batch), and
+  compaction-aware history reconstruction (C0185, needs `EventCompaction`
+  semantics this batch doesn't build). C0181's actual FC-id-preservation
+  *policy* stays deferred to Phase 10 (the backends it applies to don't
+  exist in this port yet).
+- 24 new tests. Full workspace gate green.
+
 ## PR #TBD — Phase 4 batch 4: the `instructions` request processor
 **2026-08-23** · (link added once this PR is opened)
 

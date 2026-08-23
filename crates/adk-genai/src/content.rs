@@ -120,6 +120,17 @@ pub struct Part {
     /// Opaque placeholder for `types.CodeExecutionResult`.
     #[rusty_serde(default)]
     pub code_execution_result: Option<Value>,
+    /// Opaque placeholder for `types.ToolCall` — a server-side (model-run)
+    /// tool invocation, distinct from `function_call` (added in Phase 4
+    /// batch 5, C0189: `flows/llm_flows/contents.py`'s `_is_part_invisible`
+    /// treats a part carrying one as never invisible, since it must be
+    /// echoed back to the model on the next request).
+    #[rusty_serde(default)]
+    pub tool_call: Option<Value>,
+    /// Opaque placeholder for `types.ToolResponse` — the response half of
+    /// `tool_call`. See that field's doc.
+    #[rusty_serde(default)]
+    pub tool_response: Option<Value>,
 }
 
 impl Part {
