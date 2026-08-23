@@ -367,6 +367,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     `_add_instructions_to_user_content` — remains deferred pending
     `LlmAgent` wired into `BaseAgent`'s tree, the same blocker every other
     Phase 4 processor has disclosed.
+  - `interactions` module (C0174, partial): the `interactions_processor`
+    request processor's core logic — `is_event_in_branch`/
+    `find_previous_interaction_state` finds the most recent branch-aware
+    `interaction_id`/`environment_id` for the current agent, to enable
+    stateful conversation chaining via the Gemini Interactions API.
+  - `context_cache` module (C0175, partial): the `context_cache_processor`
+    request processor's core logic — `find_cache_info_from_events` scans
+    session history backward for the agent's most recent cache metadata
+    (incrementing `invocations_used` when it's an active cache carried
+    over from a prior invocation) and prompt token count;
+    `apply_context_cache` assembles both into `LlmRequest`'s already-real
+    `cache_config`/`cache_metadata`/`cacheable_contents_token_count`
+    fields. Adaptation: `Event.cache_metadata` (opaque `Value`) is parsed
+    back into a real `CacheMetadata` via its own `Deserialize` impl rather
+    than `Event` holding a typed field directly — `adk-events` sits below
+    `adk-models` in the crate graph and depending on it would cycle;
+    `usage_metadata`'s `promptTokenCount` key is read directly since no
+    typed `UsageMetadata` exists in this port yet.
+  - Both new modules are free-function core logic only, not yet wired as
+    real `BaseLlmRequestProcessor`s — same "needs `LlmAgent` in
+    `BaseAgent`'s tree" scope note as `basic`/`identity`/`instructions`.
 ### Changed
 ### Fixed
 ### Security

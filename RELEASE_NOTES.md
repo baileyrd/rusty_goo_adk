@@ -22,6 +22,42 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 9: `interactions_processor` + `context_cache_processor`
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::interactions` (C0174, partial) — the
+  `interactions_processor` request processor's core logic:
+  `is_event_in_branch` (whether an event belongs to a branch, or the
+  root when unbranched) and `find_previous_interaction_state` (scans
+  session events in reverse for the current agent's most recent
+  `interaction_id`/`environment_id`, skipping events outside the current
+  branch) — used to chain stateful Gemini Interactions API conversations
+  across turns.
+- **Added:** `adk_flows::context_cache` (C0175, partial) — the
+  `context_cache_processor` request processor's core logic:
+  `find_cache_info_from_events` scans session history backward for the
+  agent's most recent cache metadata (incrementing `invocations_used`
+  when the cache is active and carried over from a prior invocation) and
+  prompt token count; `apply_context_cache` assembles both into
+  `LlmRequest`'s existing real `cache_config`/`cache_metadata`/
+  `cacheable_contents_token_count` fields.
+- **Adaptation, disclosed:** `Event.cache_metadata` (an opaque `Value`
+  placeholder) is parsed back into a real
+  `adk_models::cache_metadata::CacheMetadata` via its own `Deserialize`
+  impl (`rusty_serde::json::from_value`) rather than `Event` holding a
+  typed field directly — `adk-events` sits below `adk-models` in the
+  crate graph, so depending on it directly would cycle (the same
+  constraint `adk-flows`'s own top-level module doc already discloses
+  for `canonical_model`). `usage_metadata`'s `promptTokenCount` key is
+  read directly since no typed `UsageMetadata` exists in this port yet.
+- **Scope, disclosed:** both modules are free-function core logic only —
+  not yet wired as real `BaseLlmRequestProcessor`s reading through
+  `InvocationContext`, the same "needs `LlmAgent` wired into
+  `BaseAgent`'s tree" scope note every other Phase 4 processor
+  (`basic`/`identity`/`instructions`) has already disclosed.
+- 18 new tests (10 in `interactions.rs`, 8 in `context_cache.rs`). Full
+  workspace gate green (121 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 8: `_get_contents`/`_get_current_turn_contents` orchestration
 **2026-08-23** · (link added once this PR is opened)
 
