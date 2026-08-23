@@ -425,6 +425,21 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     session history, and re-executing it — all need `BaseTool`/
     `ToolConfirmation`/`ToolContext` (Phase 8/9), which don't exist in
     this port yet.
+  - `functions_utils` module (C0196, partial): a slice of `functions.py`'s
+    helpers — `merge_parallel_function_response_events` (concatenates
+    parallel tool-call response events' content parts and deep-merges
+    their `EventActions`, round-tripping through `Value` via
+    `to_value`/`from_value` and generically deep-merging the resulting
+    maps rather than hand-writing bespoke per-field rules — mirrors the
+    source's own `model_dump`+`deep_merge_dicts`+`model_validate` exactly,
+    including `render_ui_widgets` aggregating additively across events
+    instead of last-wins) and the client function-call-id lifecycle
+    helpers (`generate_client_function_call_id`,
+    `populate_client_function_call_id`, `remove_client_function_call_id`,
+    `get_long_running_function_calls`, `find_event_by_function_call_id`,
+    `find_matching_function_call`). **Not** ported:
+    `build_auth_request_event`/`generate_auth_event`/
+    `generate_request_confirmation_event` — need `AuthConfig` (Phase 9).
 ### Changed
 ### Fixed
 ### Security

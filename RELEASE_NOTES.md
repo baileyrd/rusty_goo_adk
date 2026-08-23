@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 13: `functions.py` merge + client-id helpers
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::functions_utils` (C0196, partial) — a slice of
+  `functions.py`'s helpers:
+  - `merge_parallel_function_response_events`: concatenates parallel
+    tool-call response events' content parts and deep-merges their
+    `EventActions`. The merge round-trips each event's `actions` through
+    `Value` (`rusty_serde::json::to_value`/`from_value`) and generically
+    deep-merges the resulting maps — mirroring the source's own
+    `model_dump(exclude_none=True)` + `deep_merge_dicts` +
+    `model_validate` approach exactly, rather than hand-writing bespoke
+    per-field merge rules that could silently diverge from it. A
+    `None`/absent field from a later event never overwrites an earlier
+    value (matching `exclude_none=True`); `render_ui_widgets` is popped
+    out before the generic merge and aggregated additively across every
+    event instead of last-wins, then reattached — verified by dedicated
+    tests for both behaviors.
+  - Client function-call-id lifecycle helpers:
+    `generate_client_function_call_id`, `populate_client_function_call_id`,
+    `remove_client_function_call_id`, `get_long_running_function_calls`
+    (takes an `is_long_running` callback rather than a
+    `tools_dict: dict[str, BaseTool]`), `find_event_by_function_call_id`,
+    `find_matching_function_call`.
+- **Scope, disclosed:** `build_auth_request_event`/`generate_auth_event`/
+  `generate_request_confirmation_event` (the "auth/confirmation request
+  events" half of C0196) are not ported — they need `AuthConfig`
+  (Phase 9), which doesn't exist in this port yet.
+- 13 new tests. Full workspace gate green (159 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 12: `request_confirmation` dedup pre-pass
 **2026-08-23** · (link added once this PR is opened)
 
