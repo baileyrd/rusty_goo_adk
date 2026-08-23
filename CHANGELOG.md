@@ -194,6 +194,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   pre-existing default headers. `LlmRequest.config` gained a new
   `http_options: Option<HttpOptionsStub>` field (reusing the existing
   stub type from the Live-connect config).
+- `debug_log::build_request_log`/`build_response_log` (Phase 3 batch 9,
+  C0134): redacted debug-level request/response logging, wired into
+  `Gemini::generate_content` under a lightweight `ADK_DEBUG_LOGGING`
+  env-var gate (no logging framework has been adopted by this workspace
+  yet). Redacts `inline_data`/`file_data`'s binary payload (keeping
+  `mime_type`), `http_options.headers` (the credential-bearing field this
+  port models), and — since `config.tools` isn't typed yet (C0116) —
+  fully excludes `tools` from the config log and leaves the "Functions"
+  section always empty, the same effect the source's own fallback
+  exclusion branch produces, just taken unconditionally.
+  `GenerateContentResponse` and its nested types gained a `Serialize`
+  impl (previously deserialize-only) so a parsed response can round-trip
+  into the log's raw-JSON dump.
 ### Changed
 ### Fixed
 ### Security
