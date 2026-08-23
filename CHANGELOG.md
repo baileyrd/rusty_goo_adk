@@ -116,15 +116,23 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   `filter_audio_parts` for real. `BaseLlmConnection::send_realtime`'s
   `blob` parameter is retroactively upgraded from an opaque `Value` to
   the real `RealtimeInput` enum for the same reason.
+- `GeminiLlmConnection::receive()` (Phase 3 batch 6, C0139): the Live
+  event→`LlmResponse` translation engine — usage-metadata remap,
+  cross-message grounding-metadata accumulation with index-offset
+  merging, streamed text/thought aggregation, transcription streaming
+  (persisted across `receive()` calls, model-variant-dependent),
+  Gemini-3.x-variant tool-call buffering, session-resumption/
+  voice-activity/GoAway passthrough. Split into a pure, directly-tested
+  `process_message` core plus a thin real-socket read loop.
 - **Scope decision:** the SSE-streaming half of `generate_content_async`
   (`stream=true`, `StreamingResponseAggregator`), context-cache
   integration, interactions-API delegation, the actual Live WebSocket
   handshake (the rest of C0131 — opening the connection to Google's Live
-  endpoint), `receive()` (C0139), `_adapt_computer_use_tool`/
-  `_preprocess_request` (C0132), redacted request/response logging, and
-  `GeminiContextCacheManager` are deferred to further batches — see
-  `crates/adk-models/src/gemini.rs`'s and `gemini_llm_connection.rs`'s
-  module docs for exactly what's left and why.
+  endpoint), `_adapt_computer_use_tool`/`_preprocess_request` (C0132),
+  redacted request/response logging, and `GeminiContextCacheManager` are
+  deferred to further batches — see `crates/adk-models/src/gemini.rs`'s
+  and `gemini_llm_connection.rs`'s module docs for exactly what's left
+  and why.
 ### Changed
 ### Fixed
 ### Security
