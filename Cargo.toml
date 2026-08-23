@@ -76,3 +76,22 @@ tungstenite = { version = "0.30", default-features = false, features = [
     "handshake",
     "rustls-tls-webpki-roots",
 ] }
+# `GeminiContextCacheManager` (Phase 3 batch 5, C0140-C0143) needs a stable
+# content hash for its cache-validity fingerprint (`_generate_cache_fingerprint`
+# in the source — SHA-256, truncated to 16 hex chars). Checked every sibling
+# Rusty-Mill repo under the platform directory (same list as the `reqwest`/
+# `tungstenite` decisions above) for a hashing/crypto candidate — none
+# exists. `sha2` (RustCrypto) is adopted: pure Rust, no system OpenSSL, the
+# same "well-audited standard crate for a non-sovereignty-sensitive surface"
+# rationale as `regex`. The fingerprint only needs to be internally
+# consistent (same request state hashes the same, different state hashes
+# differently) — it's never compared against Python's own hash — so the
+# exact byte-for-byte canonicalization doesn't need to match the source,
+# only the property that identical logical content produces identical
+# output.
+sha2 = "0.10"
+# The same cache manager needs to parse the Gemini API's RFC3339
+# `expireTime` response field into a Unix timestamp (`CacheMetadata.expire_time`
+# is a `f64` epoch, matching the source's `datetime.timestamp()`) — reused
+# from `rusty_time` (already declared above) rather than adding a second
+# date/time crate.

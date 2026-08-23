@@ -22,6 +22,66 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — GeminiContextCacheManager (Phase 3 batch 7, C0140-C0143)
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `crates/adk-models/src/gemini_context_cache_manager.rs` — a
+  full port of `GeminiContextCacheManager`, the explicit context-cache
+  lifecycle manager for Gemini models. Covers the `handle_context_caching`
+  state machine (reuse a valid active cache → clean up and recreate an
+  invalid one → fall back to a fingerprint-only record when recreation
+  isn't warranted or fails), model-specific minimum cache-token floors
+  (`gemini-2.5-*` → 2048, `gemini-3*` → 4096), SHA-256 cache-validity
+  fingerprinting over model/scope/system-instruction/tools/first-N-contents,
+  gated cache creation (previous-response token count vs. both
+  `cache_config.min_tokens` and the model's own floor, scaled by an
+  estimated cacheable-prefix share), best-effort cache cleanup, and
+  request truncation to the uncached suffix.
+- **Scope decision:** wiring this manager into
+  `Gemini::generate_content_async` (C0126 — the source's
+  `if llm_request.cache_config and not self.use_interactions_api` block)
+  stays deferred, already noted in `gemini.rs`'s module doc. This PR
+  builds and tests the manager standalone against a local mock
+  `cachedContents` HTTP endpoint — the same "build it standalone, wire it
+  in later" split used for `GeminiLlmConnection` versus `Gemini::connect()`
+  two batches ago.
+- **Adaptation, disclosed:** the source is constructed with one
+  all-in-one `google.genai.Client` that already carries its own auth;
+  this port's `GeminiContextCacheManager::new` instead takes the same
+  `GeminiApiClient` `Gemini::api_client()` builds, plus the resolved
+  backend variant and a pre-resolved auth header — equivalent, since the
+  source itself constructs a fresh manager per call
+  (`GeminiContextCacheManager(self.api_client)`).
+- **Adaptation, disclosed:** the cache fingerprint never crosses the
+  Rust/Python boundary (it's only ever compared against a fingerprint
+  this same code produced earlier), so it doesn't need to match the
+  source's `json.dumps(sort_keys=True)` output byte-for-byte — only be
+  internally deterministic, which a fixed-field-order `Value` JSON dump
+  is. `tools`/`tool_config` stay opaque `Value` placeholders (not modeled
+  yet, C0116), so unlike the source's own reordering-tolerant
+  canonicalization, a reordered-but-equivalent tools list will (safely)
+  miss the cache rather than (unsafely) hit a stale one.
+- **New dependency, disclosed:** `sha2` (RustCrypto) — checked every
+  sibling Rusty-Mill repo for a hashing/crypto candidate first, none
+  exists; pure Rust, no system OpenSSL, same rationale as `regex`. Also
+  newly wired in: `rusty_time` (already a workspace dependency, unused
+  until now) to parse the Gemini API's RFC 3339 `expireTime` response
+  field into a Unix timestamp.
+- **Adaptation, disclosed:** `_cache_scope`'s `project`/`location` keys
+  (Vertex-AI-only) never populate — `GeminiApiClient` doesn't model a
+  Vertex AI project/location, matching `gemini.rs`'s existing
+  `GeminiCallError::VertexAiAuthNotSupported` deferral. `LlmRequest.config`
+  (`GenerateContentConfigStub`) gained two new opaque fields this batch
+  needed: `tool_config: Option<Value>` and `cached_content: Option<String>`.
+- **Testing caveat:** no real Gemini `cachedContents` endpoint was
+  exercised — cache-creation/cleanup tests run against a local hand-rolled
+  HTTP mock server (the same dependency-free pattern used throughout this
+  migration's Gemini REST/Live tests), so the request/response wire shape
+  is a best-effort reconstruction of the documented public API, not
+  verified against the real service the way `gemini_demo`'s
+  `generateContent` call was in the previous PR.
+- 29 new tests; full workspace gate (`cargo build/test/clippy/fmt`) green.
+
 ## PR #TBD — Runnable demo examples for Gemini and Ollama
 **2026-08-23** · (link added once this PR is opened)
 

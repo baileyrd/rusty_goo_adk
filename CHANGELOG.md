@@ -151,6 +151,31 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   against a local HTTP test server speaking Ollama's documented response
   shape — the same dependency-free pattern used for the Gemini
   transports.
+- `GeminiContextCacheManager` (Phase 3 batch 7, C0140-C0143): the full
+  explicit context-cache lifecycle — the `handle_context_caching` state
+  machine (reuse-valid → invalid-cleanup-recreate → fingerprint-mismatch →
+  fresh-fingerprint-only → no-prior-metadata → fresh-fingerprint-only),
+  model-specific minimum cache-token floors (`gemini-2.5-*`→2048,
+  `gemini-3*`→4096), SHA-256 cache-validity fingerprinting, gated cache
+  creation (token-minimum + prefix-token estimation), best-effort cleanup,
+  and request truncation to the uncached suffix. Built and tested
+  standalone against a local mock `cachedContents` HTTP endpoint — wiring
+  it into `Gemini::generate_content_async` (C0126) stays deferred, the
+  same "build it standalone, wire it in later" split used for
+  `GeminiLlmConnection` versus `Gemini::connect()`.
+- **New dependency, disclosed:** `sha2` (RustCrypto) for the cache
+  manager's fingerprint hash — checked every sibling Rusty-Mill repo (none
+  has a hashing/crypto candidate); pure Rust, no system OpenSSL, same
+  rationale as `regex`. Reused `rusty_time` (already a workspace
+  dependency) to parse the Gemini API's RFC 3339 `expireTime` response
+  field into a Unix timestamp.
+- **Adaptation, disclosed:** the cache fingerprint's canonical JSON is a
+  Rust-native SHA-256 digest over a deterministically field-ordered
+  `Value` map, not the source's `json.dumps(sort_keys=True)` over a Python
+  dict — it's only ever compared against a fingerprint this same code
+  produced earlier, never against Python's, so only internal determinism
+  matters. `LlmRequest.config` gained `tool_config`/`cached_content`
+  fields (opaque placeholders) the cache manager needed to read/clear.
 - Runnable demo examples for both backends —
   `cargo run -p adk-models --example gemini_demo` /
   `--example ollama_demo`. Each tries a real server first (a real Gemini

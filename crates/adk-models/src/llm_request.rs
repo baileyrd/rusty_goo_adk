@@ -55,6 +55,17 @@ pub struct GenerateContentConfigStub {
     /// Opaque placeholder — see the module doc.
     #[rusty_serde(default)]
     pub safety_settings: Option<Value>,
+    /// Opaque placeholder for `types.ToolConfig` — added in Phase 3 batch 7
+    /// (`GeminiContextCacheManager`, C0141/C0143) since the fingerprint and
+    /// `_apply_cache_to_request` both read/clear it, without needing its
+    /// internal shape.
+    #[rusty_serde(default)]
+    pub tool_config: Option<Value>,
+    /// The active cache's resource name, set by
+    /// `GeminiContextCacheManager::apply_cache_to_request` (C0143) once a
+    /// request is routed through an explicit cache.
+    #[rusty_serde(default)]
+    pub cached_content: Option<String>,
 }
 
 /// Narrowed placeholder for `google.genai.types.HttpOptions`, as embedded
