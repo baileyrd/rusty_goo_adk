@@ -18,6 +18,7 @@
 
 pub mod basic;
 pub mod canonical_model;
+pub mod contents;
 pub mod identity;
 pub mod instructions;
 pub mod instructions_utils;

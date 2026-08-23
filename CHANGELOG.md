@@ -292,6 +292,32 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     already-`Content`-shaped value, not the source's full `ContentUnion`
     transformer; Jinja2-mode template rendering is out of scope (an
     explicit opt-in nothing in this port ever requests).
+  - `contents` module (C0181, C0183, C0186, C0187, C0189): the standalone
+    event/content-list transforms `flows/llm_flows/contents.py`'s
+    `_get_contents` pipeline is built from — invisible-part/empty-content
+    filtering (C0189, DONE), branch-membership and event-kind filtering
+    (`is_event_belongs_to_branch`, `is_direct_transfer`, `is_auth_event`,
+    `is_request_confirmation_event`, `is_adk_framework_event`,
+    `should_include_event_in_context` — C0183, partial: the visibility
+    predicates are done, wiring the already-built
+    `adk_events::rewind::apply_rewinds` into the top-level orchestration
+    is deferred), function-call-id preservation mechanism
+    (`copy_content_for_request` — C0181, partial: mechanism only, the
+    backend-specific policy is deferred to Phase 10), and orphan-response
+    dropping plus both async/latest function-response rearrangement
+    passes (`drop_orphaned_function_responses`,
+    `rearrange_events_for_latest_function_response`,
+    `rearrange_events_for_async_function_responses_in_history`,
+    `merge_function_response_events` — C0186/C0187, DONE; `bisect_left`
+    translated as `Vec::partition_point`). Added `Part.tool_call`/
+    `tool_response: Option<Value>` (opaque placeholders for a server-side
+    tool call/result, distinct from `function_call`/`function_response`)
+    for `is_part_invisible`'s "never invisible" exception. **Scope,
+    disclosed:** the `_get_contents`/`_get_current_turn_contents`
+    orchestration and `_ContentLlmRequestProcessor` wiring, cross-agent
+    transcript fencing (C0184), and compaction-aware history
+    reconstruction (C0185) are each deferred to their own dedicated
+    batches.
 ### Changed
 ### Fixed
 ### Security
