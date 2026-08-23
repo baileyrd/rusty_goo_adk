@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 7: `_content_compaction.py`, compaction-aware history reconstruction
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::compaction`, porting `flows/llm_flows/_content_compaction.py`
+  (C0185) in full:
+  - `process_compaction_events`: resolves overlapping compaction
+    summaries (a wider or later-indexed summary subsumes a narrower or
+    earlier one it fully covers), materializes each surviving summary as
+    a synthetic event at its compaction end timestamp — attributed to
+    the given agent name (falling back to `"model"`) so the agent reads
+    its own compacted history as its own prior turns — and filters raw
+    events whose timestamp falls inside any kept compaction range.
+  - `recover_compacted_function_calls`: re-injects a compacted
+    function-call event verbatim (preserving parallel-call thought
+    signatures, which only the first part carries) ahead of a surviving
+    function-response that would otherwise be orphaned — the clearest
+    case being a long-running tool call compacted along with its
+    placeholder response, with the real result arriving after resume.
+    Recovers compacted sibling responses too, so a parallel sibling
+    doesn't surface as a phantom pending call.
+- **Changed:** `EventCompaction.compacted_content` (C0027, `adk-events`)
+  narrowed from a placeholder JSON `Value` to a real
+  `adk_genai::content::Content` — `process_compaction_events` needs a
+  genuine `Content` to build the synthetic summary event's own `content`
+  field, and `adk-events` already depends on `adk-genai` for `Event.content`
+  itself, so this closes a gap that was only left open pending Phase 3
+  (which has since landed).
+- **Adaptation, disclosed:** the source's defensive `is None` checks on
+  `EventCompaction.start_timestamp`/`end_timestamp`/`compacted_content`
+  are omitted — the Rust struct's fields are already non-optional
+  (matching the source's own pydantic model, which declares them
+  required), so the type system already guarantees they're present
+  whenever `actions.compaction` is `Some`.
+- 9 new tests. Full workspace gate green (90 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 6: `_fencing.py`, prompt-injection fencing for cross-agent transcripts
 **2026-08-23** · (link added once this PR is opened)
 

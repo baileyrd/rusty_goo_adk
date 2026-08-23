@@ -18,6 +18,7 @@
 
 pub mod basic;
 pub mod canonical_model;
+pub mod compaction;
 pub mod contents;
 pub mod fencing;
 pub mod identity;
