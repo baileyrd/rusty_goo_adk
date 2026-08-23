@@ -22,6 +22,30 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 12: `request_confirmation` dedup pre-pass
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::request_confirmation` (C0172, partial) — the
+  `request_confirmation` request processor's pure, tool-infrastructure-
+  free dedup pre-pass:
+  - `get_original_function_call_args`: extracts the `originalFunctionCall`
+    payload out of an `adk_request_confirmation` call's args, `None` if
+    absent or not itself a map (malformed).
+  - `map_confirmation_to_original_fc_ids`: maps each confirmation
+    function-call id back to the original function-call id it confirms,
+    scanning every function call in session events — the cheap,
+    validation-free pre-pass so already-consumed confirmations can be
+    dropped *before* the expensive strict re-validation the source
+    performs downstream.
+- **Scope, disclosed:** parsing a `ToolConfirmation` out of a
+  confirmation response, resolving/validating the confirmed tool against
+  session history (`_resolve_confirmation_targets`), and re-executing it
+  (`functions.handle_function_call_list_async`) are **not** ported — all
+  need `BaseTool`/`ToolConfirmation`/`ToolContext` (Phase 8/9), which
+  don't exist in this port yet, the same blocker `agent_transfer.rs`/
+  `output_schema.rs` already disclose for their own Phase 8 gaps.
+- 6 new tests. Full workspace gate green (146 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 11: `agent_transfer` — transfer targets + instruction text
 **2026-08-23** · (link added once this PR is opened)
 
