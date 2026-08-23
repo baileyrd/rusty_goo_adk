@@ -13,3 +13,4 @@ adk-models = { path = "../adk-models" }
 rusty_serde = { workspace = true }
 rusty_err = { workspace = true }
 rusty_tokio = { workspace = true }
+regex = { workspace = true }

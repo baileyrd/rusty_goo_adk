@@ -39,6 +39,7 @@ dependencies = [
  "adk-events",
  "adk-genai",
  "adk-models",
+ "regex",
  "rusty_err",
  "rusty_serde",
  "rusty_tokio",

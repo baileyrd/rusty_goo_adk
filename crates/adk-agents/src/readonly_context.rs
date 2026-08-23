@@ -3,6 +3,7 @@
 
 use rusty_serde::value::Value;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::invocation_context::InvocationContext;
 use crate::run_config::RunConfig;
@@ -43,6 +44,15 @@ impl ReadonlyContext {
 
     pub fn session(&self) -> &Session {
         &self.invocation_context.session
+    }
+
+    /// The invocation's artifact service, if one is configured. Added for
+    /// `adk-flows`'s `inject_session_state` (C0170), which needs it to
+    /// resolve `{artifact.name}` template references.
+    pub fn artifact_service(
+        &self,
+    ) -> Option<&Arc<dyn crate::services::ArtifactService + Send + Sync>> {
+        self.invocation_context.artifact_service.as_ref()
     }
 
     /// The id of the user. READONLY.

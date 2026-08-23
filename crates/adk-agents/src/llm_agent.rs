@@ -149,7 +149,11 @@ impl Default for Instruction {
 }
 
 impl Instruction {
-    fn is_set(&self) -> bool {
+    /// `pub`: reused by `adk-flows`'s `instructions` request processor
+    /// (C0170) to decide whether `global_instruction`/`instruction` has
+    /// anything to append, without needing its own duplicate copy of this
+    /// truthiness check.
+    pub fn is_set(&self) -> bool {
         !matches!(self, Instruction::Static(s) if s.is_empty())
     }
 }

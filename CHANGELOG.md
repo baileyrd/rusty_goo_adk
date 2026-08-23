@@ -280,6 +280,18 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     parameters rather than reading them off `LlmAgent` (which has neither
     field yet, since it isn't wired into `BaseAgent`'s tree), same scope
     note as `basic`.
+  - `instructions::build_instructions` (C0170, partial): the
+    `instructions` request processor — global/static/dynamic instruction
+    assembly, deferring to a new `instructions_utils::inject_session_state`
+    (the regex-based `{state_var}`/`{artifact.name}` template engine) for
+    state/artifact interpolation. `ReadonlyContext` gained an
+    `artifact_service()` accessor and `Instruction::is_set` became `pub`
+    to support it. **Scope, disclosed:** global_instruction reads the
+    given agent's own field rather than walking to the tree root (no tree
+    yet); `static_instruction` only interprets a plain string or an
+    already-`Content`-shaped value, not the source's full `ContentUnion`
+    transformer; Jinja2-mode template rendering is out of scope (an
+    explicit opt-in nothing in this port ever requests).
 ### Changed
 ### Fixed
 ### Security

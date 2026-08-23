@@ -22,6 +22,50 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 4: the `instructions` request processor
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::instructions::build_instructions` — the
+  `instructions` request processor: appends the deprecated
+  `global_instruction` (with state injection), the `static_instruction`
+  (stable prefix, via `Instructions::Content`), and the dynamic
+  `instruction` — as the system instruction when no static instruction
+  exists, or as a dynamic user-content turn when one does — matching the
+  source's branching exactly.
+- **Added:** `adk_flows::instructions_utils::inject_session_state` — the
+  regex-based `{state_var}`/`{state_var?}`/`{artifact.name}` template
+  engine every agent instruction string is rendered through. Handles
+  `app:`/`user:`/`temp:`-prefixed and bare state variable names, optional
+  (`?`-suffixed) references, artifact lookups through the invocation's
+  `ArtifactService`, and Python-matching `None`/`True`/`False` value
+  rendering.
+- `ReadonlyContext` gained an `artifact_service()` accessor (needed by
+  `inject_session_state`'s artifact-lookup branch); `Instruction::is_set`
+  became `pub` (needed by `build_instructions` to decide whether
+  `global_instruction`/`instruction` has anything to append).
+- **New dependency, disclosed:** `regex` in `adk-flows` — already a
+  vetted workspace dependency (adopted in `adk-models` for model-name
+  pattern matching), reused here for the template-variable pattern
+  (`\{+[^{}]*\}+`) rather than hand-rolling an equivalent scanner.
+- **Scope decision, disclosed:** only the source's default regex-based
+  template engine is ported — Jinja2 mode is an explicit opt-in
+  (`use_jinja2=True`) nothing in this port's own processors ever
+  requests, and needs an optional Python package with no Rust
+  equivalent decision made yet. `global_instruction` reads the given
+  agent's own field rather than walking to the invocation's root agent
+  (no `BaseAgent` tree yet — the same deferral `canonical_model` already
+  disclosed for ancestor-chain fallback). `static_instruction` only
+  interprets a plain string or an already-`Content`-shaped value, not the
+  source's full `ContentUnion` transformer (which needs the whole
+  `google-genai` SDK type system, out of scope per Phase 3's own module
+  docs).
+- **Adaptation, disclosed:** `str(value)`'s exact Python formatting isn't
+  reproduced for floats/dicts/lists (JSON formatting stands in instead);
+  it is exact for strings, `None`/`True`/`False`, and integers — the
+  common case for instruction template variables.
+- 17 new tests (7 in `instructions.rs`, 10 in `instructions_utils.rs`).
+  Full workspace gate green (43 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 3: the `identity` request processor
 **2026-08-23** · (link added once this PR is opened)
 
