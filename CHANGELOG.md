@@ -151,6 +151,15 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   against a local HTTP test server speaking Ollama's documented response
   shape — the same dependency-free pattern used for the Gemini
   transports.
+- Runnable demo examples for both backends —
+  `cargo run -p adk-models --example gemini_demo` /
+  `--example ollama_demo`. Each tries a real server first (a real Gemini
+  API key from the environment; a real local Ollama at `OLLAMA_HOST`/
+  `localhost:11434`) and falls back to a local one-shot mock server
+  speaking the same wire shape when none is available, so both run with
+  zero setup. Verified against the real Gemini API in this session
+  (`gemini-3.5-flash-lite` returned a real model response) and against
+  the mock fallback for both backends.
 ### Changed
 ### Fixed
 ### Security

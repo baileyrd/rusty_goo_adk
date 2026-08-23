@@ -22,6 +22,29 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Runnable demo examples for Gemini and Ollama
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added, at the user's request:** `examples/gemini_demo.rs` and
+  `examples/ollama_demo.rs` in `adk-models` — runnable, end-to-end
+  demonstrations of each backend. `cargo run -p adk-models --example
+  gemini_demo` (or `ollama_demo`) builds a real `LlmRequest`, sends it,
+  and prints the model's reply.
+- Each demo tries a real server first — `gemini_demo` uses a real
+  `GOOGLE_API_KEY`/`GEMINI_API_KEY` from the environment if set;
+  `ollama_demo` probes `OLLAMA_HOST`/`localhost:11434` for a real
+  Ollama instance — and falls back to a local one-shot mock server
+  speaking the same wire shape when neither is available, so both run
+  with zero setup.
+- **Verified for real in this session:** `gemini_demo` against the
+  actual Gemini API (an available key made the real call; older model
+  names returned real 404s pointing at their replacements, and
+  `gemini-3.5-flash-lite` returned a genuine model response) — the
+  first live, non-mocked confirmation that the Phase 3 REST
+  implementation (batches 2-3) actually works against the real
+  service. Both demos also verified against their mock fallback (no
+  Ollama server was reachable in this sandbox).
+
 ## PR #TBD — OllamaLlm: a real, testable local-Ollama backend
 **2026-08-23** · (link added once this PR is opened)
 
