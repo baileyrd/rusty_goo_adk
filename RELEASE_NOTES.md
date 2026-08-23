@@ -22,6 +22,44 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Gemini REST-path tracking headers (Phase 3 batch 8, closing C0133)
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `Gemini::apply_tracking_headers` — the REST-call counterpart
+  to `prepare_live_connect_config`'s tracking-header merge, closing out
+  C0133 (the Live-path half landed in Phase 3 batch 4; `get_tracking_headers`/
+  `merge_tracking_headers` themselves landed in batch 2). Unconditionally
+  creates `llm_request.config.http_options` if it's absent — a genuine,
+  previously-undocumented divergence from the Live path's own gating
+  (`prepare_live_connect_config` only touches an *already-present*
+  `http_options`, matching the source's own two different gates at its two
+  call sites) — merges ADK's tracking headers into it (overriding any
+  pre-set value for the same header, same de-dup-by-token behavior as the
+  Live path), and forwards the resolved `api_version` when one is
+  configured.
+- Wired into `Gemini::generate_content`: called right after
+  `maybe_append_user_content`, and the resolved tracking headers are
+  attached explicitly to the outgoing HTTP request (in addition to
+  whatever the client's own default headers are).
+- **Adaptation, disclosed:** the source's SDK fully replaces the outgoing
+  request's headers server-side before sending; `reqwest` has no
+  "override this default header" primitive exposed to callers, and this
+  port can't introspect an already-built injected `reqwest::blocking::Client`'s
+  default headers to merge against them the way Python reads back
+  `http_options.headers or {}`. So tracking headers are attached via a
+  second explicit `.header()` call — the ADK tracking value is always
+  present on the wire either way, but when the client also sets a default
+  header of the same name, the outgoing request may carry two header
+  lines rather than one merged value. The important behavioral case (an
+  injected client is still guaranteed to carry ADK's tracking header) is
+  preserved and tested.
+- `LlmRequest.config` (`GenerateContentConfigStub`) gains a new
+  `http_options: Option<HttpOptionsStub>` field, reusing the existing stub
+  type from `live_connect_config`.
+- 4 new tests, including one against a local mock HTTP server asserting
+  the tracking header actually reaches the wire for an injected client.
+  Full workspace gate green.
+
 ## PR #TBD — GeminiContextCacheManager (Phase 3 batch 7, C0140-C0143)
 **2026-08-23** · (link added once this PR is opened)
 

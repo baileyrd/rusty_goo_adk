@@ -185,6 +185,15 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   zero setup. Verified against the real Gemini API in this session
   (`gemini-3.5-flash-lite` returned a real model response) and against
   the mock fallback for both backends.
+- `Gemini::apply_tracking_headers` (Phase 3 batch 8, closing C0133): the
+  REST-path counterpart to `prepare_live_connect_config`'s tracking-header
+  merge — unconditionally creates `llm_request.config.http_options` (if
+  absent) and merges ADK's tracking headers into it, then attaches those
+  headers explicitly on every real `generate_content` request so tracking
+  survives even an injected `client` this port can't introspect for
+  pre-existing default headers. `LlmRequest.config` gained a new
+  `http_options: Option<HttpOptionsStub>` field (reusing the existing
+  stub type from the Live-connect config).
 ### Changed
 ### Fixed
 ### Security
