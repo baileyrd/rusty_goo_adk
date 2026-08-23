@@ -22,6 +22,45 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 6: `_fencing.py`, prompt-injection fencing for cross-agent transcripts
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::fencing`, porting `flows/llm_flows/_fencing.py`
+  (C0184) in full:
+  - `quote_untrusted`/`elide_quote_markers`: wraps relayed text between
+    literal begin/end markers and states, in the message itself, that the
+    fenced content is data to read and never instructions to follow.
+    Markers already present in the payload are elided first, so quoted
+    content can't forge the end of its own block and keep speaking as the
+    framework.
+  - `is_other_agent_reply`: whether an event is a reply from an agent
+    other than the current one, including the live/bidi-mode carve-out
+    where any non-user author (even the current agent, post-transfer) is
+    treated as "other".
+  - `present_other_agent_message`: reformats another agent's event as
+    `role='user'` context — `[agent_name] said:`/`thought:` for text,
+    `[agent_name] called tool ... with parameters:` /
+    `` [agent_name] `tool` tool returned result: `` for function
+    calls/responses (each fenced via `quote_untrusted`), and blob parts
+    (`inline_data`/`file_data`/`executable_code`/`code_execution_result`)
+    relayed unfenced on their own part type — fencing means flattening
+    into the text channel, which blobs can't do at all and which would
+    drop code/output pairing.
+- **Adaptation, disclosed:** `function_call.args`/
+  `function_response.response` (both `BTreeMap<String, Value>`) are
+  rendered as compact JSON rather than reproducing Python's `str(dict)`
+  repr — the same lower-fidelity stand-in
+  `instructions_utils::value_to_display_string` already disclosed for
+  dict/list values. `None` (an absent map) still renders as the literal
+  string `"None"`, matching Python's `str(None)` exactly.
+- **Scope, disclosed:** this module is fully self-contained and needed no
+  new subsystems (`Event`/`Content`/`Part` were already real types). What
+  still needs building is the *caller* — `contents.py`'s `_get_contents`
+  orchestration decides *when* an event needs this applied, and that
+  orchestration remains its own deferred future batch (see the
+  batch-5 entry below).
+- 14 new tests. Full workspace gate green (81 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 5: `contents.py`'s standalone event/content transforms
 **2026-08-23** · (link added once this PR is opened)
 
