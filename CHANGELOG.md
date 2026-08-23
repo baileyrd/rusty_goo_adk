@@ -388,6 +388,16 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   - Both new modules are free-function core logic only, not yet wired as
     real `BaseLlmRequestProcessor`s — same "needs `LlmAgent` in
     `BaseAgent`'s tree" scope note as `basic`/`identity`/`instructions`.
+  - `output_schema` module (C0178, partial): the `_output_schema_processor`
+    request processor's gating decision
+    (`should_apply_output_schema_processor` — output_schema set, tools
+    non-empty, the model can't honor both together, and not task mode),
+    its instruction text, and the two standalone helpers that read back a
+    completed structured response (`create_final_model_response_event`,
+    `get_structured_model_response`). **Not** ported: actually injecting
+    a `SetModelResponseTool` into the request — both the tool itself and
+    `LlmRequest::append_tools` (C0116) need `BaseTool` (Phase 8), which
+    doesn't exist in this port yet.
 ### Changed
 ### Fixed
 ### Security

@@ -22,6 +22,29 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 10: `_output_schema_processor` gating + read-back helpers
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::output_schema` (C0178, partial) — the
+  `_output_schema_processor` request processor's gating decision and
+  read-back helpers:
+  - `should_apply_output_schema_processor`: whether the processor would
+    inject a `set_model_response` tool for this request — `output_schema`
+    set, `tools` non-empty, the resolved model's capabilities can't honor
+    output schema and tools together, and the agent isn't in task mode.
+  - `OUTPUT_SCHEMA_TOOL_INSTRUCTION`: the instruction text appended
+    alongside the injected tool, verbatim from the source.
+  - `create_final_model_response_event`/`get_structured_model_response`:
+    builds a plain-text model-response event from a validated
+    `set_model_response` result, and reads one back out of a function-
+    response event's `actions.set_model_response`.
+- **Scope, disclosed:** actually injecting a `SetModelResponseTool` into
+  the request (`llm_request.append_tools`) is **not** ported — both the
+  tool itself and `LlmRequest::append_tools` (C0116) need `BaseTool`
+  (Phase 8), which doesn't exist in this port yet; `append_tools`'s own
+  module doc in `adk-models` already discloses this same blocker.
+- 8 new tests. Full workspace gate green (129 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 9: `interactions_processor` + `context_cache_processor`
 **2026-08-23** · (link added once this PR is opened)
 
