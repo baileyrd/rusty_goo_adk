@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — OllamaLlm: a real, testable local-Ollama backend
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added, at the user's request:** `OllamaLlm` — a `BaseLlm` backend that
+  talks directly to a local Ollama server's native `/api/chat` HTTP
+  endpoint. Requested explicitly as a parallel track alongside the
+  ongoing Gemini backend work (not a replacement for it): Ollama's API
+  is well-documented, stable, and — unlike Gemini's Live API — actually
+  runnable and verifiable against a real local server.
+- **Scope, disclosed:** this is *not* a port of the source's
+  `LiteLlm(BaseLlm)` class (`models/lite_llm.py`, Phase 10, C0557 — a
+  universal wrapper around the third-party `litellm` Python package,
+  itself covering 14 providers with substantial provider-specific
+  behavior, C0557-C0574, ~18 manifest rows). Porting that starts with a
+  Rust equivalent of `litellm` that doesn't exist and is a far larger
+  undertaking than "connect to Ollama." What's built here instead:
+  model registration for the `ollama/…`/`ollama_chat/…` prefixes (2 of
+  the 14 provider regexes from C0560), the `ollama_chat`
+  content-flattening quirk from C0567 (`_flatten_ollama_content` —
+  Ollama's chat endpoint rejects multi-part `content` when it's
+  text-only), and non-streaming request/response translation over a
+  real HTTP call. Tool-calling (needs `BaseTool`, deferred the same way
+  as `LlmRequest.append_tools`/C0116), streaming, and every non-Ollama
+  provider stay out of scope. No manifest rows are marked `DONE` — the
+  C0540-C0587 LiteLLM cluster describes substantially more than this
+  covers, and this addition isn't itself a capability discovered in the
+  source inventory, so it doesn't claim a manifest row of its own.
+- **Adaptation, disclosed:** the source's own registration regex is
+  `ollama/(?!gemma3).*` (a negative lookahead excluding `Gemma3Ollama`'s
+  models). Rust's `regex` crate has no lookaround support at all, so
+  that pattern can't be expressed as a registry regex. The exclusion is
+  enforced in code instead (`parse_provider` rejects `ollama/gemma3*` at
+  call time) — functionally equivalent here, since no competing
+  `Gemma3Ollama`-equivalent entry exists to conflict with.
+- **Testing note:** no Ollama server was reachable in the sandbox this
+  was built in (`curl http://localhost:11434` refused), so the 13 new
+  tests run against a local, dependency-free HTTP test server speaking
+  Ollama's documented `/api/chat` response shape — the same pattern used
+  for the Gemini REST/WS transports. Point `OllamaLlm` at a real local
+  Ollama instance (default `http://localhost:11434`, or `OLLAMA_HOST`)
+  to exercise it against the real thing.
+
 ## PR #TBD — Phase 3 batch 6: GeminiLlmConnection.receive()
 **2026-08-23** · (link added once this PR is opened)
 

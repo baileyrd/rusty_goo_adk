@@ -133,6 +133,24 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   deferred to further batches — see `crates/adk-models/src/gemini.rs`'s
   and `gemini_llm_connection.rs`'s module docs for exactly what's left
   and why.
+- `OllamaLlm` — a real, directly-testable `BaseLlm` backend talking to a
+  local Ollama server's native `/api/chat` endpoint, added at the user's
+  explicit request alongside (not instead of) the Gemini backend work.
+  **Not** a port of the source's `LiteLlm(BaseLlm)` class (Phase 10,
+  C0557 — a universal wrapper around the third-party `litellm` package
+  covering 14 providers with their own quirks, C0557-C0574); no
+  manifest rows are marked `DONE` by this addition, since it covers
+  substantially less. Model registration for `ollama/…`/`ollama_chat/…`
+  (2 of the 14 provider regexes in C0560, excluding `ollama/gemma3.*` to
+  match the source's own `Gemma3Ollama` carve-out — enforced in code
+  rather than in the registry regex, since Rust's `regex` crate has no
+  lookahead support and the source's own pattern uses one), and the
+  `ollama_chat` content-flattening quirk from C0567. Tool-calling,
+  streaming, and every non-Ollama provider stay out of scope. No Ollama
+  server was reachable in the sandbox this was built in, so tests run
+  against a local HTTP test server speaking Ollama's documented response
+  shape — the same dependency-free pattern used for the Gemini
+  transports.
 ### Changed
 ### Fixed
 ### Security
