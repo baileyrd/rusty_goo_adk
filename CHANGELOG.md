@@ -217,6 +217,23 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   C0125's own SSE-streaming gap — there's no streaming path to populate
   yet, so C0126 stays `REQUIRED` in the manifest rather than `DONE` until
   that lands too.
+- `Gemini::generate_content_stream` and `streaming_utils::StreamingResponseAggregator`
+  (Phase 3 batch 11, closing C0125's SSE-streaming half and C0126's
+  streaming half): a real `streamGenerateContent?alt=sse` call, parsed
+  into Server-Sent-Events and aggregated into partial `LlmResponse`s plus
+  one final aggregated response, wired into
+  `BaseLlm::generate_content_async`'s `stream: true` branch (previously
+  always an error). Cache metadata is populated only into the final
+  aggregated response, matching the source. **Scope, disclosed:** only
+  the source's "non-progressive" (legacy, text-only) aggregation mode is
+  ported — its newer JSONPath-addressed partial-function-call-argument
+  streaming mode is feature-flagged in the source and needs typed
+  function-call/tool machinery (C0116, Phase 8) this port doesn't have
+  yet. **Adaptation:** the aggregator returns a `Vec<LlmResponse>` per
+  chunk rather than a true generator, and the full SSE body is read up
+  front rather than incrementally — `generate_content_async`'s own
+  contract already collects everything into one `Vec` before returning,
+  so neither loses anything a caller could observe.
 ### Changed
 ### Fixed
 ### Security

@@ -31,3 +31,4 @@ pub mod llm_request;
 pub mod llm_response;
 pub mod ollama;
 pub mod registry;
+pub mod streaming_utils;
