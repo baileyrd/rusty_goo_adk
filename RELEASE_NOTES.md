@@ -22,6 +22,57 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 3 batch 6: GeminiLlmConnection.receive()
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `GeminiLlmConnection::receive()` (C0139) — the Live
+  event→`LlmResponse` translation engine, ported branch-for-branch from
+  the source's ~370-line `receive()`: usage-metadata remap (Live API's
+  `responseTokenCount` → `GenerateContentResponseUsageMetadata`'s
+  `candidatesTokenCount`, etc.), cross-message grounding-metadata
+  accumulation (append-unique string-list fields, chunk extension,
+  index-offset-shifted support remapping), streamed text/thought
+  aggregation (tracked by part *index* rather than the source's `id()`
+  object identity — equivalent here, since parts in one list never alias
+  or reorder), transcription streaming persisted across `receive()`
+  calls (matching the source's own instance-field buffers), Gemini-3.x-
+  variant-dependent tool-call buffering (immediate yield vs. buffered
+  until `turn_complete`), and session-resumption/voice-activity/GoAway
+  passthrough. Split into [`process_message`] — a pure function taking
+  one parsed message plus mutable aggregation state, fully unit-tested
+  without any socket — and a thin `receive()` loop that reads real
+  frames through it. 13 new tests, including two end-to-end reads over
+  a real local WebSocket connection.
+- **New wire-shape module:** `live_server_message.rs` — `LiveServerMessage`
+  and its nested shapes (`LiveUsageMetadata`/`ServerContent`/
+  `Transcription`/`ToolCall`), continuing the same "minimal real subset,
+  best-effort protocol reconstruction" discipline as the send-side
+  envelopes from batch 5.
+- **Adaptation, deliberate:** `grounding_metadata` stays an opaque
+  `Value` end to end, and its merge logic operates generically over
+  `Value::Map` entries (append-unique any list-of-strings field,
+  special-cased `grounding_chunks`/`grounding_supports`, overwrite
+  otherwise) rather than naming every `GroundingMetadata` sub-field —
+  actually *more* faithful here than a fully-typed struct would be,
+  since the source's own `_merge_grounding_metadata` is itself generic
+  over whatever keys a response happens to contain.
+- **Omitted, disclosed:** the source's one warning-only branch (logging
+  when `retrieval_queries` is present but `grounding_chunks` is empty,
+  with no effect on any yielded response) is dropped rather than
+  plumbed through a logging framework this workspace hasn't adopted.
+- **Confidence caveat carried forward:** same as batch 5's send-side
+  envelopes — `LiveServerMessage`'s shape is a best-effort
+  reconstruction of Google's public Multimodal Live API, not something
+  `google/adk-python` itself specifies, and remains unverified against a
+  live endpoint.
+- 1 row marked `DONE` with test-name evidence (C0139). Phase 3 is now
+  26 of 43 rows complete; the remaining rows split into the actual Live
+  WebSocket handshake (the rest of C0131), computer-use/preprocess
+  adaptation (C0132), redacted debug logging (C0133/C0134),
+  `GeminiContextCacheManager` (C0140-C0143), SSE streaming/context-cache/
+  interactions-API integration (C0125/C0126/C0128), and the LiteLLM/
+  lazy-provider-registration cluster (C0109/C0111-C0113).
+
 ## PR #TBD — Phase 3 batch 5: GeminiLlmConnection send-side methods
 **2026-08-22** · (link added once this PR is opened)
 

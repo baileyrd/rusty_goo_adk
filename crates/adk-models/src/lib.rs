@@ -21,6 +21,7 @@ pub mod generate_content_request;
 pub mod generate_content_response;
 pub mod google_client_headers;
 pub mod live_connection;
+pub mod live_server_message;
 pub mod llm_request;
 pub mod llm_response;
 pub mod registry;
