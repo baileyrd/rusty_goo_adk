@@ -22,6 +22,69 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — SSE streaming for Gemini (Phase 3 batch 11, closing C0125 and C0126)
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `Gemini::generate_content_stream` — a real
+  `POST .../models/{model}:streamGenerateContent?alt=sse` call, its
+  response body parsed into Server-Sent-Events (`parse_sse_events`) and
+  fed through `crate::streaming_utils::StreamingResponseAggregator` to
+  produce a `Vec<LlmResponse>`: one per-chunk partial (marked
+  `partial: true`), a flushed merged-text event whenever buffered text
+  needs to give way to a non-text/terminal chunk, and one final
+  non-partial aggregated response. Wired into
+  `BaseLlm::generate_content_async`'s `stream: true` branch, which
+  previously always returned an error — closes C0125.
+- **Added:** `crates/adk-models/src/streaming_utils.rs` —
+  `StreamingResponseAggregator`, ported from
+  `google.adk.utils.streaming_utils`. Tracks buffered text/thought text,
+  the last-reported usage/grounding/citation metadata, and the finish
+  reason across chunks; `close()` produces the final aggregated response,
+  surfacing a non-STOP finish reason (or prompt feedback, when there's no
+  candidate at all) as an error, matching the source's precedence exactly.
+- **Refactored:** extracted `Gemini::prepare_call` — the setup shared by
+  both the non-streaming and streaming real calls (`maybe_append_user_content`,
+  the model-name check, auth resolution, C0126's cache-manager invocation,
+  `apply_tracking_headers`) — out of `generate_content`, so
+  `generate_content_stream` doesn't duplicate it.
+- Closes the streaming half of **C0126**: cache metadata is populated only
+  into the final aggregated streaming response, never the partials,
+  matching the source's own `if cache_metadata and cache_manager is not
+  None: cache_manager.populate_cache_metadata_in_response(close_result,
+  cache_metadata)` — which only runs after the aggregator's `close()`.
+- **Scope decision, disclosed:** the source's `StreamingResponseAggregator`
+  has two aggregation modes switched on a feature flag
+  (`FeatureName.PROGRESSIVE_SSE_STREAMING`): the legacy text-only mode
+  this PR ports, and a newer mode that preserves part ordering and streams
+  function-call arguments incrementally via JSONPath-addressed partial
+  args. This workspace has adopted no feature-flag registry (Phase 12's
+  `features/` isn't built) and no typed function-call/tool machinery to
+  stream partial arguments into (`config.tools`/`FunctionDeclaration` stay
+  opaque, C0116, Phase 8's `BaseTool`) — the progressive mode has nothing
+  to be built on top of yet, so only the legacy mode is ported.
+- **Adaptation, disclosed:** the source's `process_response` is an
+  `AsyncGenerator`; the ported `process_response` returns a plain
+  `Vec<LlmResponse>` instead, and the whole SSE response body is read up
+  front rather than incrementally (via `reqwest::blocking`'s `.text()`)
+  — `BaseLlm::generate_content_async`'s own contract already collects a
+  whole call's responses into one `Vec` before returning anything to the
+  caller, so there's no incremental consumer either change could lose
+  fidelity against.
+- **Fixed, disclosed (caught while porting, not by a failing test):** the
+  source's per-chunk text check (`if ... parts[0].text:`) relies on
+  Python's string truthiness — an empty string is falsy. The Rust port's
+  first draft checked `Option::is_some()` instead, which would have
+  treated a chunk with `text: ""` as "has real text to accumulate" rather
+  than falling through to the flush/passthrough branch. Fixed before
+  landing, with a dedicated regression test
+  (`an_empty_string_text_part_is_treated_as_no_text_matching_pythons_truthiness`).
+- 8 new tests in `gemini.rs` (SSE parsing, end-to-end streaming through
+  both `generate_content_stream` and the `BaseLlm` trait method, cache
+  metadata placement) plus 11 tests in `streaming_utils.rs` (text/thought
+  accumulation, flush timing including the inline-data and empty-string
+  edge cases, usage-metadata persistence, error/finish-reason precedence
+  in `close()`). Full workspace gate green (209 passing in `adk-models`).
+
 ## PR #TBD — Wire GeminiContextCacheManager into generate_content (Phase 3 batch 10, non-streaming half of C0126)
 **2026-08-23** · (link added once this PR is opened)
 

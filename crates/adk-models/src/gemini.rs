@@ -1,6 +1,5 @@
-//! Capabilities C0123-C0125 (partial), C0126 (partial), C0127, C0129-C0131
-//! (C0131 partial), C0133, C0134: `Gemini`, ported from
-//! `google.adk.models.google_llm`.
+//! Capabilities C0123-C0127, C0129-C0131 (C0131 partial), C0133, C0134:
+//! `Gemini`, ported from `google.adk.models.google_llm`.
 //!
 //! **Scope of batch 2 (config layer)**: the config shape, `supported_models()`,
 //! base-URL/API-version resolution, and API-client construction — pure
@@ -36,22 +35,31 @@
 //! 2's `api_client` construction.
 //!
 //! **Scope of batch 10 (C0126, non-streaming half)**: [`Gemini::generate_content`]
-//! now invokes [`crate::gemini_context_cache_manager::GeminiContextCacheManager`]
+//! invokes [`crate::gemini_context_cache_manager::GeminiContextCacheManager`]
 //! in the same place the source does — before tracking headers are merged
 //! in, gated on `llm_request.cache_config.is_some() && !self.use_interactions_api`
 //! — and populates the resulting cache metadata into the returned
-//! [`LlmResponse`]. The streaming half (populating cache metadata into a
-//! `StreamingResponseAggregator`'s responses) has nothing to wire into
-//! yet — it's deferred alongside C0125's own SSE-streaming gap below.
+//! [`LlmResponse`].
+//!
+//! **Scope of batch 11 (C0125's SSE-streaming half, and C0126's streaming
+//! half)**: [`Gemini::generate_content_stream`] — a real
+//! `streamGenerateContent?alt=sse` call, its response parsed into
+//! Server-Sent-Events (see [`parse_sse_events`]) and translated by
+//! [`crate::streaming_utils::StreamingResponseAggregator`] into partials
+//! plus one final aggregated response, matching the source's own
+//! `StreamingResponseAggregator` — see that module's doc for the one
+//! adaptation it needed (Python truthiness on an empty-string `text`
+//! field) and its own disclosed scope narrowing (no progressive/JSONPath
+//! function-call-argument streaming — nothing to build that on top of
+//! yet). Cache metadata (C0126's streaming half) is populated only into
+//! the final aggregated response, matching the source exactly. Wired into
+//! `BaseLlm::generate_content_async`'s `stream: true` branch, which
+//! previously always errored.
 //!
 //! Still deferred to later batches, each needing its own foundational
-//! decision or wire-format work this batch doesn't have yet:
-//!   - The SSE-streaming half of C0125 (`stream=true`,
-//!     `StreamingResponseAggregator`) and its own half of C0126 (populating
-//!     cache metadata into streamed responses), and C0128 (interactions-API
-//!     delegation) — streaming needs an SSE-parsing decision on top of the
-//!     transport this batch already has; interactions needs capabilities
-//!     from later batches.
+//! decision or capability this batch doesn't have yet:
+//!   - C0128 (interactions-API delegation) — needs capabilities from a
+//!     later batch.
 //!   - The actual Live WebSocket handshake (the rest of C0131 —
 //!     `_live_api_client`, opening the connection) and all of
 //!     `GeminiLlmConnection` (C0132, C0135-C0139) — `receive()` alone is a
@@ -117,6 +125,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rusty_serde::value::Value;
 
 use crate::base_llm::BaseLlm;
+use crate::cache_metadata::CacheMetadata;
 use crate::capabilities::{
     gemini_output_schema_and_tools, get_google_llm_variant, GoogleLlmVariant,
 };
@@ -544,6 +553,58 @@ impl Gemini {
         format!("{base_url}/{api_version}/models/{model}:generateContent")
     }
 
+    /// Shared setup for both the non-streaming and streaming real calls:
+    /// `maybe_append_user_content`, the model-name check, auth resolution,
+    /// C0126's context-cache invocation (gated exactly like the source),
+    /// and `apply_tracking_headers` — everything that happens to
+    /// `llm_request` before either call builds its own URL/body. Mutates
+    /// `llm_request` in place, matching the source (which mutates the same
+    /// request object throughout `generate_content_async`).
+    async fn prepare_call(
+        &self,
+        llm_request: &mut LlmRequest,
+    ) -> Result<
+        (
+            String,
+            Option<(&'static str, String)>,
+            Option<(
+                crate::gemini_context_cache_manager::GeminiContextCacheManager,
+                CacheMetadata,
+            )>,
+        ),
+        GeminiCallError,
+    > {
+        crate::base_llm::maybe_append_user_content(llm_request);
+        let model = llm_request
+            .model
+            .clone()
+            .ok_or(GeminiCallError::MissingModel)?;
+
+        let auth_header = self.resolve_auth_header()?;
+
+        // C0126: invoked in the same place the source invokes it, before
+        // tracking headers are merged in.
+        let cache_manager_and_metadata = if llm_request.cache_config.is_some()
+            && !self.use_interactions_api
+        {
+            let cache_manager = crate::gemini_context_cache_manager::GeminiContextCacheManager::new(
+                self.api_client(),
+                self.api_backend(),
+                auth_header.clone(),
+            );
+            let cache_metadata = cache_manager
+                .handle_context_caching(llm_request)
+                .await
+                .map_err(|e| GeminiCallError::ContextCache(e.to_string()))?;
+            cache_metadata.map(|metadata| (cache_manager, metadata))
+        } else {
+            None
+        };
+
+        self.apply_tracking_headers(llm_request);
+        Ok((model, auth_header, cache_manager_and_metadata))
+    }
+
     /// C0125 (non-streaming only — see the module doc): sends a real,
     /// non-streaming `generateContent` request and maps the response into
     /// an [`LlmResponse`]. The concrete, structured counterpart to
@@ -554,38 +615,9 @@ impl Gemini {
         llm_request: &LlmRequest,
     ) -> Result<LlmResponse, GeminiCallError> {
         let mut llm_request = llm_request.clone();
-        crate::base_llm::maybe_append_user_content(&mut llm_request);
-        let model = llm_request
-            .model
-            .clone()
-            .ok_or(GeminiCallError::MissingModel)?;
+        let (model, auth_header, cache_manager_and_metadata) =
+            self.prepare_call(&mut llm_request).await?;
 
-        let auth_header = self.resolve_auth_header()?;
-
-        // C0126 (non-streaming half — see the module doc): invoked in the
-        // same place the source invokes it, before tracking headers are
-        // merged in. The streaming half (populating cache metadata into a
-        // `StreamingResponseAggregator`'s responses) stays deferred
-        // alongside C0125's own SSE-streaming gap — there's no streaming
-        // path to populate yet.
-        let cache_manager_and_metadata = if llm_request.cache_config.is_some()
-            && !self.use_interactions_api
-        {
-            let cache_manager = crate::gemini_context_cache_manager::GeminiContextCacheManager::new(
-                self.api_client(),
-                self.api_backend(),
-                auth_header.clone(),
-            );
-            let cache_metadata = cache_manager
-                .handle_context_caching(&mut llm_request)
-                .await
-                .map_err(|e| GeminiCallError::ContextCache(e.to_string()))?;
-            cache_metadata.map(|metadata| (cache_manager, metadata))
-        } else {
-            None
-        };
-
-        self.apply_tracking_headers(&mut llm_request);
         let client = self.api_client();
         let url = self.generate_content_url(&model);
         // C0133: sent explicitly per-request (not just relying on the
@@ -654,6 +686,136 @@ impl Gemini {
         }
         Ok(llm_response)
     }
+
+    fn generate_content_stream_url(&self, model: &str) -> String {
+        let client = self.api_client();
+        let base_url = client
+            .base_url
+            .clone()
+            .unwrap_or_else(|| DEFAULT_GEMINI_API_BASE_URL.to_string());
+        let api_version = client
+            .api_version
+            .clone()
+            .unwrap_or_else(|| DEFAULT_GEMINI_API_VERSION.to_string());
+        let base_url = base_url.trim_end_matches('/');
+        format!("{base_url}/{api_version}/models/{model}:streamGenerateContent?alt=sse")
+    }
+
+    /// C0125 (the SSE-streaming half — see the module doc for what's
+    /// deliberately narrower than the source): sends a real
+    /// `streamGenerateContent?alt=sse` request and translates the
+    /// resulting Server-Sent-Events stream into a `Vec<LlmResponse>` via
+    /// [`crate::streaming_utils::StreamingResponseAggregator`] — partials
+    /// in wire order, then one final aggregated response with C0126's
+    /// cache metadata populated into it (matching the source, which only
+    /// populates the final aggregated response for a streaming call, never
+    /// the partials).
+    pub async fn generate_content_stream(
+        &self,
+        llm_request: &LlmRequest,
+    ) -> Result<Vec<LlmResponse>, GeminiCallError> {
+        let mut llm_request = llm_request.clone();
+        let (model, auth_header, cache_manager_and_metadata) =
+            self.prepare_call(&mut llm_request).await?;
+
+        let client = self.api_client();
+        let url = self.generate_content_stream_url(&model);
+        let tracking_headers: Vec<(String, String)> = llm_request
+            .config
+            .http_options
+            .as_ref()
+            .and_then(|h| h.headers.clone())
+            .map(|h| h.into_iter().collect())
+            .unwrap_or_default();
+        let body = build_request_body(&llm_request);
+        let body_json = rusty_serde::json::to_string(&body)
+            .map_err(|e| GeminiCallError::Parse(e.to_string()))?;
+
+        if crate::debug_log::debug_logging_enabled() {
+            eprintln!("{}", crate::debug_log::build_request_log(&llm_request));
+        }
+
+        let outcome = rusty_tokio::spawn_blocking(move || -> Result<(u16, String), String> {
+            let mut request = client
+                .http
+                .post(&url)
+                .header("content-type", "application/json")
+                .body(body_json);
+            if let Some((name, value)) = auth_header {
+                request = request.header(name, value);
+            }
+            for (name, value) in tracking_headers {
+                request = request.header(name, value);
+            }
+            let response = request.send().map_err(|e| e.to_string())?;
+            let status = response.status().as_u16();
+            // The full SSE body is read up front rather than incrementally:
+            // `BaseLlm::generate_content_async`'s own contract already
+            // collects a whole call's responses into one `Vec` before
+            // returning anything to the caller (see `base_llm.rs`'s module
+            // doc) — there is no incremental consumer downstream for a
+            // true chunk-at-a-time read to feed, so reading the whole body
+            // first is behaviorally identical from every caller's
+            // perspective.
+            let text = response.text().map_err(|e| e.to_string())?;
+            Ok((status, text))
+        })
+        .await;
+
+        let (status, text) = match outcome {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(message)) => return Err(GeminiCallError::Transport(message)),
+            Err(join_error) => return Err(GeminiCallError::Transport(join_error.to_string())),
+        };
+
+        if !(200..300).contains(&status) {
+            return Err(map_http_error(status, text));
+        }
+
+        let mut responses = Vec::new();
+        let mut aggregator = crate::streaming_utils::StreamingResponseAggregator::new();
+        for event_data in parse_sse_events(&text) {
+            let parsed: GenerateContentResponse = rusty_serde::json::from_str(&event_data)
+                .map_err(|e| GeminiCallError::Parse(e.to_string()))?;
+            if crate::debug_log::debug_logging_enabled() {
+                eprintln!("{}", crate::debug_log::build_response_log(&parsed));
+            }
+            responses.extend(aggregator.process_response(parsed));
+        }
+        if let Some(mut closed) = aggregator.close() {
+            if let Some((cache_manager, cache_metadata)) = &cache_manager_and_metadata {
+                cache_manager.populate_cache_metadata_in_response(&mut closed, cache_metadata);
+            }
+            responses.push(closed);
+        }
+
+        Ok(responses)
+    }
+}
+
+/// Parses a Server-Sent-Events response body into each event's `data:`
+/// payload (multi-line `data:` fields are joined with `\n`, per the SSE
+/// spec). Comment lines (starting with `:`) and any other field
+/// (`event:`/`id:`/`retry:`) are ignored — the Gemini streaming endpoint
+/// only ever emits plain `data:` events for this call.
+fn parse_sse_events(body: &str) -> Vec<String> {
+    let mut events = Vec::new();
+    let mut current = String::new();
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("data:") {
+            let rest = rest.strip_prefix(' ').unwrap_or(rest);
+            if !current.is_empty() {
+                current.push('\n');
+            }
+            current.push_str(rest);
+        } else if line.is_empty() && !current.is_empty() {
+            events.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        events.push(current);
+    }
+    events
 }
 
 impl BaseLlm for Gemini {
@@ -671,11 +833,10 @@ impl BaseLlm for Gemini {
         }
     }
 
-    /// C0125 (non-streaming only — see the module doc): delegates to
-    /// [`Gemini::generate_content`], flattening its structured
-    /// [`GeminiCallError`] into `BaseLlmError::CallFailed` for the
-    /// trait-object-friendly contract. `stream: true` isn't implemented yet
-    /// (the SSE-streaming half of C0125).
+    /// C0125: delegates to [`Gemini::generate_content`] (`stream: false`)
+    /// or [`Gemini::generate_content_stream`] (`stream: true`), flattening
+    /// either one's structured [`GeminiCallError`] into
+    /// `BaseLlmError::CallFailed` for the trait-object-friendly contract.
     fn generate_content_async<'a>(
         &'a self,
         llm_request: &'a LlmRequest,
@@ -684,11 +845,10 @@ impl BaseLlm for Gemini {
     {
         Box::pin(async move {
             if stream {
-                return Err(crate::base_llm::BaseLlmError::CallFailed(
-                    "Gemini streaming generate_content_async isn't implemented yet (deferred \
-                     to a later batch)"
-                        .to_string(),
-                ));
+                return self
+                    .generate_content_stream(llm_request)
+                    .await
+                    .map_err(|e| crate::base_llm::BaseLlmError::CallFailed(e.to_string()));
             }
             self.generate_content(llm_request)
                 .await
@@ -1571,15 +1731,112 @@ mod tests {
     }
 
     #[rusty_tokio::test]
-    async fn base_llm_generate_content_async_rejects_streaming_for_now() {
-        let gemini = Gemini::new("gemini-2.5-flash");
+    // Held across `.await` deliberately — same rationale as the other
+    // real-call tests in this file.
+    #[allow(clippy::await_holding_lock)]
+    async fn base_llm_generate_content_async_streams_through_to_generate_content_stream() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+
+        let sse_body = "data: {\"modelVersion\":\"gemini-2.5-flash\",\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"hi\"}]}}]}\n\n\
+             data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"\"}]},\"finishReason\":\"STOP\"}]}\n\n";
+        let (base_url, server) = spawn_one_shot_server("HTTP/1.1 200 OK", sse_body);
+        let gemini = Gemini::new("gemini-2.5-flash").with_base_url(base_url);
         let request = LlmRequest::new("gemini-2.5-flash");
+
         let result = BaseLlm::generate_content_async(&gemini, &request, true).await;
-        match result {
-            Err(crate::base_llm::BaseLlmError::CallFailed(message)) => {
-                assert!(message.contains("streaming"));
-            }
-            _ => panic!("expected CallFailed"),
+        clear_auth_env_vars();
+        server.join().unwrap();
+
+        let responses = result.unwrap();
+        assert!(responses.iter().any(|r| r.partial == Some(true)));
+        assert!(responses.last().unwrap().partial == Some(false));
+    }
+
+    #[test]
+    fn parse_sse_events_extracts_each_data_payload() {
+        let body = "data: {\"a\":1}\n\ndata: {\"b\":2}\n\n";
+        let events = parse_sse_events(body);
+        assert_eq!(
+            events,
+            vec!["{\"a\":1}".to_string(), "{\"b\":2}".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_sse_events_joins_multiline_data_fields_with_newlines() {
+        let body = "data: line one\ndata: line two\n\n";
+        let events = parse_sse_events(body);
+        assert_eq!(events, vec!["line one\nline two".to_string()]);
+    }
+
+    #[test]
+    fn parse_sse_events_handles_a_trailing_event_with_no_blank_line() {
+        let body = "data: {\"only\":true}";
+        let events = parse_sse_events(body);
+        assert_eq!(events, vec!["{\"only\":true}".to_string()]);
+    }
+
+    #[rusty_tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_content_stream_yields_partials_then_a_final_aggregate() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+
+        let sse_body = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hello, \"}]}}]}\n\n\
+             data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"world!\"}]}}]}\n\n\
+             data: {\"modelVersion\":\"gemini-2.5-flash\",\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[]},\"finishReason\":\"STOP\"}]}\n\n";
+        let (base_url, server) = spawn_one_shot_server("HTTP/1.1 200 OK", sse_body);
+        let gemini = Gemini::new("gemini-2.5-flash").with_base_url(base_url);
+        let request = LlmRequest::new("gemini-2.5-flash");
+
+        let responses = gemini.generate_content_stream(&request).await.unwrap();
+        clear_auth_env_vars();
+        server.join().unwrap();
+
+        // Two partials (one per text chunk) + one flushed merged-text event
+        // (triggered by the non-text STOP chunk) + the STOP chunk's own
+        // response + the final aggregated close() response.
+        assert_eq!(responses.len(), 5);
+        assert_eq!(responses[0].partial, Some(true));
+        assert_eq!(responses[1].partial, Some(true));
+        let flushed = &responses[2];
+        assert_eq!(
+            flushed.content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("Hello, world!")
+        );
+        let closed = responses.last().unwrap();
+        assert_eq!(closed.partial, Some(false));
+        assert_eq!(closed.model_version.as_deref(), Some("gemini-2.5-flash"));
+    }
+
+    #[rusty_tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_content_stream_populates_cache_metadata_only_on_the_final_response() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+
+        let sse_body = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"hi\"}]}}]}\n\n\
+             data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[]},\"finishReason\":\"STOP\"}]}\n\n";
+        let (base_url, server) = spawn_one_shot_server("HTTP/1.1 200 OK", sse_body);
+        let gemini = Gemini::new("gemini-2.5-flash").with_base_url(base_url);
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.cache_config =
+            Some(adk_agents::context_cache_config::ContextCacheConfig::default());
+
+        let responses = gemini.generate_content_stream(&request).await.unwrap();
+        clear_auth_env_vars();
+        server.join().unwrap();
+
+        for response in &responses[..responses.len() - 1] {
+            assert!(
+                response.cache_metadata.is_none(),
+                "only the final aggregated response should carry cache metadata"
+            );
         }
+        assert!(responses.last().unwrap().cache_metadata.is_some());
     }
 }
