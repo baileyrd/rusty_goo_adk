@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Wire GeminiContextCacheManager into generate_content (Phase 3 batch 10, non-streaming half of C0126)
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `Gemini::generate_content` now invokes
+  `GeminiContextCacheManager` in the same place the source's
+  `generate_content_async` does — right after the model-name check, before
+  `apply_tracking_headers` merges in tracking headers — gated on
+  `llm_request.cache_config.is_some() && !self.use_interactions_api`,
+  matching the source's own gate exactly. The resulting cache metadata
+  (fingerprint-only or an active cache) is populated into the returned
+  `LlmResponse` via `GeminiContextCacheManager::populate_cache_metadata_in_response`.
+- Added `GeminiCallError::ContextCache(String)`, flattening a
+  `GeminiContextCacheError` into `generate_content`'s own error type — the
+  same treatment every other real call in this module gets.
+- **Scope decision, disclosed:** this closes only the non-streaming half
+  of C0126. The source also populates cache metadata into every response
+  a streaming call yields (`StreamingResponseAggregator`'s partials plus
+  its final aggregate) — there's no streaming path in this port yet to
+  populate (the SSE-streaming half of C0125 is still deferred), so C0126
+  stays `REQUIRED` in the capability manifest rather than flipping to
+  `DONE`, the same "stays REQUIRED until every half lands" treatment
+  already applied to C0131.
+- No OTel span wraps the call, matching this workspace's not having
+  adopted a tracing framework yet (same class of omission as C0134's
+  logging-framework caveat).
+- 3 new tests: fingerprint-only cache metadata populated when
+  `cache_config` is set (against a local mock `generateContent` server),
+  cache handling skipped when `use_interactions_api` is `true`, and an
+  explicit assertion that `cache_metadata` stays `None` without a
+  `cache_config`. The cache-manager's own state-machine behavior (reuse/
+  invalidate/fingerprint-match/mismatch) is already exhaustively covered
+  by `gemini_context_cache_manager.rs`'s own 29 tests — this batch only
+  needed to verify the wiring itself. Full workspace gate green (194
+  passing in `adk-models`).
+
 ## PR #TBD — Redacted debug logging (Phase 3 batch 9, closing C0134)
 **2026-08-23** · (link added once this PR is opened)
 

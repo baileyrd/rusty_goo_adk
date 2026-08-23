@@ -207,6 +207,16 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   `GenerateContentResponse` and its nested types gained a `Serialize`
   impl (previously deserialize-only) so a parsed response can round-trip
   into the log's raw-JSON dump.
+- **Partial, disclosed:** wired `GeminiContextCacheManager` into
+  `Gemini::generate_content` (Phase 3 batch 10, the non-streaming half of
+  C0126) — invoked in the same place the source does, gated on
+  `llm_request.cache_config.is_some() && !self.use_interactions_api`,
+  populating the resulting cache metadata into the returned
+  `LlmResponse`. The streaming half (populating cache metadata into a
+  `StreamingResponseAggregator`'s responses) stays deferred alongside
+  C0125's own SSE-streaming gap — there's no streaming path to populate
+  yet, so C0126 stays `REQUIRED` in the manifest rather than `DONE` until
+  that lands too.
 ### Changed
 ### Fixed
 ### Security

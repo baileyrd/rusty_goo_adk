@@ -1,5 +1,6 @@
-//! Capabilities C0123-C0125 (partial), C0127, C0129-C0131 (C0131 partial),
-//! C0133: `Gemini`, ported from `google.adk.models.google_llm`.
+//! Capabilities C0123-C0125 (partial), C0126 (partial), C0127, C0129-C0131
+//! (C0131 partial), C0133, C0134: `Gemini`, ported from
+//! `google.adk.models.google_llm`.
 //!
 //! **Scope of batch 2 (config layer)**: the config shape, `supported_models()`,
 //! base-URL/API-version resolution, and API-client construction — pure
@@ -34,13 +35,23 @@
 //! config mutation — testable without a live network call, same as batch
 //! 2's `api_client` construction.
 //!
+//! **Scope of batch 10 (C0126, non-streaming half)**: [`Gemini::generate_content`]
+//! now invokes [`crate::gemini_context_cache_manager::GeminiContextCacheManager`]
+//! in the same place the source does — before tracking headers are merged
+//! in, gated on `llm_request.cache_config.is_some() && !self.use_interactions_api`
+//! — and populates the resulting cache metadata into the returned
+//! [`LlmResponse`]. The streaming half (populating cache metadata into a
+//! `StreamingResponseAggregator`'s responses) has nothing to wire into
+//! yet — it's deferred alongside C0125's own SSE-streaming gap below.
+//!
 //! Still deferred to later batches, each needing its own foundational
 //! decision or wire-format work this batch doesn't have yet:
-//!   - The SSE-streaming half of C0125 (`stream=true`, `StreamingResponseAggregator`),
-//!     C0126 (context-cache integration), and C0128 (interactions-API
+//!   - The SSE-streaming half of C0125 (`stream=true`,
+//!     `StreamingResponseAggregator`) and its own half of C0126 (populating
+//!     cache metadata into streamed responses), and C0128 (interactions-API
 //!     delegation) — streaming needs an SSE-parsing decision on top of the
-//!     transport this batch already has; caching/interactions need
-//!     capabilities from later batches.
+//!     transport this batch already has; interactions needs capabilities
+//!     from later batches.
 //!   - The actual Live WebSocket handshake (the rest of C0131 —
 //!     `_live_api_client`, opening the connection) and all of
 //!     `GeminiLlmConnection` (C0132, C0135-C0139) — `receive()` alone is a
@@ -58,10 +69,6 @@
 //!     the right fit for the REST transport (see the load-bearing
 //!     adaptation note below) — but that decision is made when the
 //!     connection itself is built, not before.
-//!   - C0134 (redacted debug request/response logging).
-//!   - C0126 (wiring `GeminiContextCacheManager` into
-//!     `generate_content_async`) — the manager itself (C0140-C0143) is
-//!     built, independently, in `gemini_context_cache_manager.rs`.
 //!   - `config.tools`/`FunctionDeclaration` in the request body — not
 //!     modeled yet (C0116, Phase 8's `BaseTool`); see
 //!     `generate_content_request.rs`'s module doc.
@@ -184,6 +191,12 @@ pub enum GeminiCallError {
          Vertex AI backend."
     )]
     TransparentSessionResumptionRequiresVertexAi,
+    /// C0126: a [`crate::gemini_context_cache_manager::GeminiContextCacheError`]
+    /// surfaced through `generate_content`'s own error type, the same
+    /// "flatten into this call's error enum" treatment every other real
+    /// call gets.
+    #[error("context caching failed: {0}")]
+    ContextCache(String),
 }
 
 /// C0127: maps a non-2xx HTTP response into a [`GeminiCallError`],
@@ -542,13 +555,37 @@ impl Gemini {
     ) -> Result<LlmResponse, GeminiCallError> {
         let mut llm_request = llm_request.clone();
         crate::base_llm::maybe_append_user_content(&mut llm_request);
-        self.apply_tracking_headers(&mut llm_request);
         let model = llm_request
             .model
             .clone()
             .ok_or(GeminiCallError::MissingModel)?;
 
         let auth_header = self.resolve_auth_header()?;
+
+        // C0126 (non-streaming half — see the module doc): invoked in the
+        // same place the source invokes it, before tracking headers are
+        // merged in. The streaming half (populating cache metadata into a
+        // `StreamingResponseAggregator`'s responses) stays deferred
+        // alongside C0125's own SSE-streaming gap — there's no streaming
+        // path to populate yet.
+        let cache_manager_and_metadata = if llm_request.cache_config.is_some()
+            && !self.use_interactions_api
+        {
+            let cache_manager = crate::gemini_context_cache_manager::GeminiContextCacheManager::new(
+                self.api_client(),
+                self.api_backend(),
+                auth_header.clone(),
+            );
+            let cache_metadata = cache_manager
+                .handle_context_caching(&mut llm_request)
+                .await
+                .map_err(|e| GeminiCallError::ContextCache(e.to_string()))?;
+            cache_metadata.map(|metadata| (cache_manager, metadata))
+        } else {
+            None
+        };
+
+        self.apply_tracking_headers(&mut llm_request);
         let client = self.api_client();
         let url = self.generate_content_url(&model);
         // C0133: sent explicitly per-request (not just relying on the
@@ -611,7 +648,11 @@ impl Gemini {
         if crate::debug_log::debug_logging_enabled() {
             eprintln!("{}", crate::debug_log::build_response_log(&parsed));
         }
-        Ok(LlmResponse::create(parsed))
+        let mut llm_response = LlmResponse::create(parsed);
+        if let Some((cache_manager, cache_metadata)) = &cache_manager_and_metadata {
+            cache_manager.populate_cache_metadata_in_response(&mut llm_response, cache_metadata);
+        }
+        Ok(llm_response)
     }
 }
 
@@ -1412,6 +1453,71 @@ mod tests {
         assert_eq!(
             response.content.unwrap().parts[0].text.as_deref(),
             Some("hello")
+        );
+        assert!(
+            response.cache_metadata.is_none(),
+            "no cache_config was set, so no cache handling should run"
+        );
+    }
+
+    #[rusty_tokio::test]
+    // Held across `.await` deliberately — same rationale as the test above.
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_content_populates_fingerprint_only_cache_metadata_when_cache_config_is_set() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+
+        let (base_url, server) = spawn_one_shot_server(
+            "HTTP/1.1 200 OK",
+            r#"{"modelVersion":"gemini-2.5-flash","candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}]}"#,
+        );
+        let gemini = Gemini::new("gemini-2.5-flash").with_base_url(base_url);
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.cache_config =
+            Some(adk_agents::context_cache_config::ContextCacheConfig::default());
+        request.contents.push(Content::user_text("hi"));
+
+        let response = gemini.generate_content(&request).await;
+        clear_auth_env_vars();
+        server.join().unwrap();
+
+        let response = response.unwrap();
+        let cache_metadata = response
+            .cache_metadata
+            .expect("C0126: cache_config was set, so cache_metadata should be populated");
+        assert!(
+            cache_metadata.cache_name.is_none(),
+            "no prior cache_metadata on the request means fingerprint-only, not an active cache"
+        );
+    }
+
+    #[rusty_tokio::test]
+    // Held across `.await` deliberately — same rationale as the test above.
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_content_skips_cache_handling_when_use_interactions_api_is_true() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+
+        let (base_url, server) = spawn_one_shot_server(
+            "HTTP/1.1 200 OK",
+            r#"{"modelVersion":"gemini-2.5-flash","candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}]}"#,
+        );
+        let mut gemini = Gemini::new("gemini-2.5-flash").with_base_url(base_url);
+        gemini.use_interactions_api = true;
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.cache_config =
+            Some(adk_agents::context_cache_config::ContextCacheConfig::default());
+
+        let response = gemini.generate_content(&request).await;
+        clear_auth_env_vars();
+        server.join().unwrap();
+
+        let response = response.unwrap();
+        assert!(
+            response.cache_metadata.is_none(),
+            "the source's own gate (`not self.use_interactions_api`) skips cache handling here"
         );
     }
 
