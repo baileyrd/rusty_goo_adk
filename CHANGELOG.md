@@ -347,6 +347,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     Adaptation: the source's defensive `is None` checks on
     `EventCompaction`'s fields are omitted since Rust's type system
     already guarantees they're present.
+  - `contents::get_contents`/`get_current_turn_contents` (C0181-C0183,
+    C0188, C0189's top-level wiring; C0190 fully DONE): the top-level
+    `_get_contents`/`_get_current_turn_contents` orchestration, calling
+    into `apply_rewinds`, the visibility predicates, `crate::compaction`,
+    `crate::fencing`, both function-response rearrangement passes, and
+    `copy_content_for_request` in the same sequence as the source.
+    `coalesce_transcription_event` (C0188) merges adjacent content-less
+    transcription fragments into one text event; `build_task_input_user_content`
+    rebuilds a task agent's originating delegation FC (or the invocation's
+    `user_content` fallback) as its synthetic first turn. Adaptation:
+    `copy_content_for_request` does a full Rust clone rather than the
+    source's shallow-copy-for-mutation-safety optimization — a strictly
+    safer superset this port doesn't need the performance trade for yet.
+    **Scope, disclosed:** the `_ContentLlmRequestProcessor` itself — which
+    chooses between the two entry points via `agent.include_contents`,
+    computes `preserve_function_call_ids` from the agent's canonical
+    model type, and wires in `_add_model_input_context_to_user_content`/
+    `_add_instructions_to_user_content` — remains deferred pending
+    `LlmAgent` wired into `BaseAgent`'s tree, the same blocker every other
+    Phase 4 processor has disclosed.
 ### Changed
 ### Fixed
 ### Security

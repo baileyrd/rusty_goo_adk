@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 8: `_get_contents`/`_get_current_turn_contents` orchestration
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::contents::get_contents`/`get_current_turn_contents`
+  — the top-level orchestration `_get_contents`/`_get_current_turn_contents`
+  from `contents.py`, completing C0181-C0183/C0188/C0189's own top-level
+  wiring and fully finishing C0190:
+  - `get_contents`: applies (in order) rewind filtering via
+    `adk_events::rewind::apply_rewinds`, branch/isolation-scope/event-kind
+    visibility filtering, compaction resolution via `crate::compaction`,
+    transcription-fragment coalescing (C0188, new
+    `coalesce_transcription_event`), cross-agent message fencing via
+    `crate::fencing`, orphaned-response dropping, both function-call/
+    response rearrangement passes, function-call-id stripping
+    (`copy_content_for_request`), and — for scoped (task/single-turn)
+    agents — prepending the originating delegation input as a synthetic
+    leading user turn (new `build_task_input_user_content`).
+  - `get_current_turn_contents`: the `include_contents='none'` mode —
+    finds the latest event that starts the current turn (a real user
+    turn or another agent's reply, never a direct `transfer_to_agent`
+    hop) and delegates to `get_contents` from there.
+- **Adaptation, disclosed:** `copy_content_for_request` does a full Rust
+  clone rather than the source's shallow-copy-for-mutation-safety
+  optimization — a strictly safer superset (no nested-field-sharing
+  hazard for downstream mutators to worry about) that this port doesn't
+  need the performance trade for yet.
+- **Scope, disclosed:** the `_ContentLlmRequestProcessor` itself remains
+  deferred — it decides *when* to call `get_contents` vs
+  `get_current_turn_contents` (`agent.include_contents`), computes
+  `preserve_function_call_ids` from the agent's canonical model type
+  (Anthropic/LiteLLM/OpenAIResponsesLlm/Interactions-API Gemini — none of
+  which exist in this port yet), and wires in
+  `_add_model_input_context_to_user_content`/
+  `_add_instructions_to_user_content`. All of this needs `LlmAgent` wired
+  into `BaseAgent`'s tree and a real `InvocationContext.agent` — the same
+  blocker every other Phase 4 processor (`basic`, `identity`,
+  `instructions`) has already disclosed.
+- Minor cleanup: `rearrange_events_for_latest_function_response`'s
+  slightly awkward `let _ = matching;` binding (flagged during the prior
+  batch's review) is now a plain `.any(...)` check.
+- 14 new tests. Full workspace gate green (103 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 7: `_content_compaction.py`, compaction-aware history reconstruction
 **2026-08-23** · (link added once this PR is opened)
 

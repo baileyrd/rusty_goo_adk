@@ -1,23 +1,27 @@
-//! Part of capability C0181-C0189: the standalone event/content-list
-//! transforms `_get_contents`'s pipeline is built from, ported from
+//! Capabilities C0181-C0189: `_get_contents`'s full pipeline, ported from
 //! `google.adk.flows.llm_flows.contents`.
 //!
-//! **Scope, disclosed**: this batch ports every helper in `contents.py`
-//! that operates purely on `Event`/`Content` values already in hand —
-//! function-call/response pairing and rearrangement (C0186, C0187),
-//! empty/invisible-part filtering (C0189), branch/event-kind filtering
-//! (part of C0183), and the function-call-id preservation mechanism (part
-//! of C0181, `copy_content_for_request`). **Not** included in this batch,
-//! each deserving its own dedicated treatment:
-//!   - `_get_contents`/`_get_current_turn_contents` themselves — the
-//!     ~185-line orchestrating functions that call everything in this
-//!     file in sequence, plus the `_ContentLlmRequestProcessor` that
-//!     wraps them (C0181-C0183, C0189's own top-level wiring).
-//!   - Cross-agent transcript fencing (C0184, `_fencing.py`) — prompt-
-//!     injection-relevant, deserves focused attention on its own.
-//!   - Compaction-aware history reconstruction (C0185,
-//!     `_content_compaction.py`) — needs `EventCompaction` semantics this
-//!     batch doesn't build.
+//! This module now covers everything in `contents.py` except the
+//! `_ContentLlmRequestProcessor` wiring itself: the standalone event/
+//! content-list transforms (function-call/response pairing and
+//! rearrangement — C0186/C0187; empty/invisible-part filtering — C0189;
+//! branch/event-kind filtering — part of C0183; the function-call-id
+//! preservation mechanism — part of C0181, `copy_content_for_request`),
+//! and now the top-level orchestration itself: [`get_contents`]/
+//! [`get_current_turn_contents`] (C0181-C0183, C0188, C0189's own
+//! top-level wiring) and [`build_task_input_user_content`], each calling
+//! into `crate::fencing` (C0184) and `crate::compaction` (C0185) in
+//! sequence exactly as the source does.
+//!
+//! **Not** included, each its own dedicated future batch:
+//!   - The `_ContentLlmRequestProcessor` itself, which decides *when* to
+//!     call [`get_contents`] vs [`get_current_turn_contents`]
+//!     (`agent.include_contents`), computes `preserve_function_call_ids`
+//!     from the agent's canonical model type, and wires in
+//!     `_add_model_input_context_to_user_content`/
+//!     `_add_instructions_to_user_content`. This needs `LlmAgent` wired
+//!     into `BaseAgent`'s tree and a real `InvocationContext.agent` —
+//!     the same blocker every other Phase 4 processor has disclosed.
 //!   - C0181's actual *policy* of which model backends need FC-id
 //!     preservation (Anthropic/LiteLLM/OpenAIResponsesLlm/Interactions-API
 //!     Gemini) — those backends don't exist in this port yet (Phase 10,
@@ -26,12 +30,14 @@
 //!
 //! **Adaptation, disclosed**: `Event.input_transcription`/
 //! `output_transcription` stay opaque `Value` placeholders (see
-//! `adk-events`'s own module doc) — this batch only checks their
-//! presence (`contains_empty_content`); reading their `text` field is
-//! deferred to whichever future batch needs it.
+//! `adk-events`'s own module doc); [`get_contents`]'s transcription-
+//! coalescing step (C0188) reads their `text` key out of the opaque
+//! value via [`transcription_text`] rather than a typed field access.
 
 use adk_events::Event;
 use adk_genai::content::{Content, FunctionCall, Part};
+use rusty_serde::value::Value;
+use std::collections::HashMap;
 
 pub const AF_FUNCTION_CALL_ID_PREFIX: &str = "adk-";
 pub const REQUEST_EUC_FUNCTION_CALL_NAME: &str = "adk_request_credential";
@@ -353,11 +359,10 @@ pub fn rearrange_events_for_latest_function_response(
         if function_calls.is_empty() {
             continue;
         }
-        if let Some(matching) = function_calls
+        if function_calls
             .iter()
-            .find(|fc| function_response_ids.contains(&fc.id))
+            .any(|fc| function_response_ids.contains(&fc.id))
         {
-            let _ = matching;
             let call_ids: std::collections::HashSet<Option<String>> =
                 function_calls.iter().map(|fc| fc.id.clone()).collect();
             if !function_response_ids.is_subset(&call_ids) {
@@ -471,6 +476,311 @@ pub fn rearrange_events_for_async_function_responses_in_history(
     }
 
     Ok(result_events)
+}
+
+fn transcription_text(value: &Value) -> Option<&str> {
+    value.get("text").and_then(Value::as_str)
+}
+
+const SINGLE_TURN_NUDGE: &str = "Important: You will not receive any user replies or \
+     clarifications. Complete the task using only the information provided above.";
+
+/// C0181-C0183 (part): `_build_task_input_user_content`.
+///
+/// A task agent runs under `isolation_scope=<fc_id>`, where `fc_id` matches
+/// the `function_call.id` that delegated to it. The FC itself lives on a
+/// parent event (typically the chat coordinator's), so it is filtered out
+/// of the task agent's own content by the isolation_scope filter. This
+/// rebuilds it as a user-role text content so the task agent's LLM sees
+/// its task as the first turn.
+///
+/// When no matching FC is found (a task dispatched directly by a workflow
+/// node, not via FC delegation), falls back to `user_content`. Returns
+/// `None` if neither source yields content.
+pub fn build_task_input_user_content(
+    all_events: &[Event],
+    isolation_scope: &str,
+    is_single_turn: bool,
+    user_content: Option<&Content>,
+) -> Option<Content> {
+    for event in all_events {
+        let Some(content) = &event.content else {
+            continue;
+        };
+        for part in &content.parts {
+            let Some(fc) = &part.function_call else {
+                continue;
+            };
+            if fc.id.as_deref() != Some(isolation_scope) {
+                continue;
+            }
+            if fc.args.as_ref().is_none_or(|args| args.is_empty()) {
+                continue;
+            }
+            let text = fc
+                .args
+                .as_ref()
+                .map(|args| rusty_serde::json::to_string(args).unwrap_or_default())
+                .unwrap_or_default();
+            let mut parts = vec![Part::text(text)];
+            if is_single_turn {
+                parts.push(Part::text(SINGLE_TURN_NUDGE));
+            }
+            return Some(Content::new("user", parts));
+        }
+    }
+
+    let user_content = user_content?;
+    if user_content.parts.is_empty() {
+        return None;
+    }
+    let mut parts = user_content.parts.clone();
+    if is_single_turn {
+        parts.push(Part::text(SINGLE_TURN_NUDGE));
+    }
+    Some(Content::new("user", parts))
+}
+
+/// Coalesces adjacent content-less transcription-fragment events into one
+/// ordinary text event (C0188), for use inside [`get_contents`]'s main
+/// loop. Returns `None` when this iteration's fragment isn't the last of
+/// its run yet (the caller should skip it and keep accumulating).
+fn coalesce_transcription_event(
+    events_to_process: &[Event],
+    i: usize,
+    accumulated_input: &mut String,
+    accumulated_output: &mut String,
+) -> Option<Event> {
+    let event = &events_to_process[i];
+    if event.content.is_some() {
+        return Some(event.clone());
+    }
+    let n = events_to_process.len();
+
+    if let Some(text) = event
+        .input_transcription
+        .as_ref()
+        .and_then(transcription_text)
+    {
+        if !text.is_empty() {
+            accumulated_input.push_str(text);
+            let next_has_text = i + 1 < n
+                && events_to_process[i + 1]
+                    .input_transcription
+                    .as_ref()
+                    .and_then(transcription_text)
+                    .is_some_and(|t| !t.is_empty());
+            if next_has_text {
+                return None;
+            }
+            let mut new_event = event.clone();
+            new_event.input_transcription = None;
+            new_event.content = Some(Content::new(
+                "user",
+                vec![Part::text(std::mem::take(accumulated_input))],
+            ));
+            return Some(new_event);
+        }
+    }
+
+    if let Some(text) = event
+        .output_transcription
+        .as_ref()
+        .and_then(transcription_text)
+    {
+        if !text.is_empty() {
+            accumulated_output.push_str(text);
+            let next_has_text = i + 1 < n
+                && events_to_process[i + 1]
+                    .output_transcription
+                    .as_ref()
+                    .and_then(transcription_text)
+                    .is_some_and(|t| !t.is_empty());
+            if next_has_text {
+                return None;
+            }
+            let mut new_event = event.clone();
+            new_event.output_transcription = None;
+            new_event.content = Some(Content::new(
+                "model",
+                vec![Part::text(std::mem::take(accumulated_output))],
+            ));
+            return Some(new_event);
+        }
+    }
+
+    Some(event.clone())
+}
+
+/// C0181-C0183, C0188, C0189: `_get_contents` — the full pipeline that
+/// turns raw session events into the `LlmRequest.contents` list.
+///
+/// Applies (in order): rewind filtering (via `adk_events::rewind::apply_rewinds`),
+/// branch/isolation-scope/event-kind filtering, compaction resolution (via
+/// `crate::compaction`), transcription-fragment coalescing, cross-agent
+/// message fencing (via `crate::fencing`), orphaned-response dropping,
+/// both function-call/response rearrangement passes, function-call-id
+/// stripping, and (for scoped agents) prepending the task's originating
+/// input as a synthetic leading user turn.
+#[allow(clippy::too_many_arguments)]
+pub fn get_contents(
+    current_branch: Option<&str>,
+    events: &[Event],
+    agent_name: &str,
+    preserve_function_call_ids: bool,
+    isolation_scope: Option<&str>,
+    is_single_turn: bool,
+    user_content: Option<&Content>,
+    include_thoughts_from_other_agents: bool,
+) -> Result<Vec<Content>, ContentsError> {
+    let rewind_filtered_events = adk_events::rewind::apply_rewinds(events);
+
+    let raw_filtered_events: Vec<Event> = rewind_filtered_events
+        .into_iter()
+        .filter(|e| {
+            let include_thoughts = include_thoughts_from_other_agents
+                && crate::fencing::is_other_agent_reply(agent_name, e);
+            should_include_event_in_context(current_branch, e, isolation_scope, include_thoughts)
+        })
+        .collect();
+
+    let has_compaction_events = raw_filtered_events
+        .iter()
+        .any(|e| e.actions.compaction.is_some());
+
+    let events_to_process = if has_compaction_events {
+        let processed =
+            crate::compaction::process_compaction_events(&raw_filtered_events, agent_name);
+        crate::compaction::recover_compacted_function_calls(processed, &raw_filtered_events)
+    } else {
+        raw_filtered_events
+    };
+
+    let mut fc_author_by_id: HashMap<String, String> = HashMap::new();
+    for e in &events_to_process {
+        if let Some(content) = &e.content {
+            for part in &content.parts {
+                if let Some(fc) = &part.function_call {
+                    if let Some(id) = &fc.id {
+                        fc_author_by_id.insert(id.clone(), e.author.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut filtered_events: Vec<Event> = Vec::new();
+    let mut accumulated_input = String::new();
+    let mut accumulated_output = String::new();
+    for i in 0..events_to_process.len() {
+        let Some(event) = coalesce_transcription_event(
+            &events_to_process,
+            i,
+            &mut accumulated_input,
+            &mut accumulated_output,
+        ) else {
+            continue;
+        };
+
+        let mut is_other_reply = crate::fencing::is_other_agent_reply(agent_name, &event);
+
+        if !is_other_reply {
+            if let Some(content) = &event.content {
+                for part in &content.parts {
+                    let Some(fr) = &part.function_response else {
+                        continue;
+                    };
+                    let Some(resp_id) = &fr.id else { continue };
+                    let Some(call_author) = fc_author_by_id.get(resp_id) else {
+                        continue;
+                    };
+                    if call_author != agent_name && call_author != "user" {
+                        is_other_reply = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if is_other_reply {
+            if let Some(converted) = crate::fencing::present_other_agent_message(
+                &event,
+                include_thoughts_from_other_agents,
+            ) {
+                filtered_events.push(converted);
+            }
+        } else {
+            filtered_events.push(event);
+        }
+    }
+
+    let (filtered_events, _dropped_ids) = drop_orphaned_function_responses(&filtered_events);
+    let result_events = rearrange_events_for_latest_function_response(filtered_events)?;
+    let result_events = rearrange_events_for_async_function_responses_in_history(result_events)?;
+
+    let mut contents: Vec<Content> = Vec::new();
+    for event in &result_events {
+        if let Some(content) = &event.content {
+            contents.push(copy_content_for_request(
+                content,
+                !preserve_function_call_ids,
+            ));
+        }
+    }
+
+    if let Some(isolation_scope) = isolation_scope {
+        if let Some(leading) =
+            build_task_input_user_content(events, isolation_scope, is_single_turn, user_content)
+        {
+            contents.insert(0, leading);
+        }
+    }
+
+    Ok(contents)
+}
+
+/// C0181-C0183: `_get_current_turn_contents` — the `include_contents='none'`
+/// mode: finds the latest event that starts the current turn (a real user
+/// turn, or another agent's reply — but never a direct `transfer_to_agent`
+/// hop) and delegates to [`get_contents`] from there, dropping everything
+/// before it.
+#[allow(clippy::too_many_arguments)]
+pub fn get_current_turn_contents(
+    current_branch: Option<&str>,
+    events: &[Event],
+    agent_name: &str,
+    preserve_function_call_ids: bool,
+    isolation_scope: Option<&str>,
+    is_single_turn: bool,
+    user_content: Option<&Content>,
+    include_thoughts_from_other_agents: bool,
+) -> Result<Vec<Content>, ContentsError> {
+    for i in (0..events.len()).rev() {
+        let event = &events[i];
+        let include_thoughts = include_thoughts_from_other_agents
+            && crate::fencing::is_other_agent_reply(agent_name, event);
+        let included = should_include_event_in_context(
+            current_branch,
+            event,
+            isolation_scope,
+            include_thoughts,
+        );
+        let is_turn_start =
+            event.author == "user" || crate::fencing::is_other_agent_reply(agent_name, event);
+        if included && is_turn_start && !is_direct_transfer(event) {
+            return get_contents(
+                current_branch,
+                &events[i..],
+                agent_name,
+                preserve_function_call_ids,
+                isolation_scope,
+                is_single_turn,
+                user_content,
+                include_thoughts_from_other_agents,
+            );
+        }
+    }
+    Ok(Vec::new())
 }
 
 #[cfg(test)]
@@ -771,5 +1081,212 @@ mod tests {
             result[2].get_function_calls().is_empty()
                 && result[2].get_function_responses().is_empty()
         );
+    }
+
+    // --- build_task_input_user_content ---
+
+    fn fc_with_args(id: &str, args: Vec<(&str, Value)>) -> Part {
+        Part::function_call(FunctionCall {
+            id: Some(id.to_string()),
+            name: Some("delegate".to_string()),
+            args: Some(args.into_iter().map(|(k, v)| (k.to_string(), v)).collect()),
+            will_continue: None,
+        })
+    }
+
+    #[test]
+    fn build_task_input_finds_the_delegating_call_by_isolation_scope() {
+        let events = vec![event_with_content(
+            "coordinator",
+            Content::new(
+                "model",
+                vec![fc_with_args(
+                    "fc-1",
+                    vec![("city", Value::String("Boston".to_string()))],
+                )],
+            ),
+        )];
+        let content = build_task_input_user_content(&events, "fc-1", false, None).unwrap();
+        assert_eq!(content.role.as_deref(), Some("user"));
+        assert!(content.parts[0].text.as_ref().unwrap().contains("Boston"));
+    }
+
+    #[test]
+    fn build_task_input_falls_back_to_user_content_when_no_matching_call_exists() {
+        let events = vec![event("coordinator")];
+        let fallback = Content::user_text("do the task");
+        let content =
+            build_task_input_user_content(&events, "fc-missing", false, Some(&fallback)).unwrap();
+        assert_eq!(content.parts[0].text.as_deref(), Some("do the task"));
+    }
+
+    #[test]
+    fn build_task_input_returns_none_with_no_call_and_no_fallback() {
+        let events = vec![event("coordinator")];
+        assert!(build_task_input_user_content(&events, "fc-missing", false, None).is_none());
+    }
+
+    #[test]
+    fn build_task_input_appends_the_single_turn_nudge() {
+        let fallback = Content::user_text("do the task");
+        let content =
+            build_task_input_user_content(&[], "fc-missing", true, Some(&fallback)).unwrap();
+        assert_eq!(content.parts.len(), 2);
+        assert_eq!(content.parts[1].text.as_deref(), Some(SINGLE_TURN_NUDGE));
+    }
+
+    // --- get_contents ---
+
+    #[test]
+    fn get_contents_converts_content_events_and_strips_synthetic_ids() {
+        let events = vec![
+            event_with_content("user", Content::user_text("hi")),
+            event_with_content(
+                "model",
+                Content::new("model", vec![fc_part("adk-1", "tool")]),
+            ),
+        ];
+        let contents = get_contents(None, &events, "", false, None, false, None, false).unwrap();
+        assert_eq!(contents.len(), 2);
+        assert_eq!(contents[0].parts[0].text.as_deref(), Some("hi"));
+        assert!(contents[1].parts[0]
+            .function_call
+            .as_ref()
+            .unwrap()
+            .id
+            .is_none());
+    }
+
+    #[test]
+    fn get_contents_preserves_synthetic_ids_when_requested() {
+        let events = vec![event_with_content(
+            "model",
+            Content::new("model", vec![fc_part("adk-1", "tool")]),
+        )];
+        let contents = get_contents(None, &events, "", true, None, false, None, false).unwrap();
+        assert_eq!(
+            contents[0].parts[0]
+                .function_call
+                .as_ref()
+                .unwrap()
+                .id
+                .as_deref(),
+            Some("adk-1")
+        );
+    }
+
+    #[test]
+    fn get_contents_drops_events_annulled_by_a_rewind() {
+        let mut rewind_event = event("user");
+        rewind_event.actions.rewind_before_invocation_id = Some("inv-1".to_string());
+        rewind_event.content = Some(Content::user_text("this should be dropped"));
+        let events = vec![
+            event_with_content("user", Content::user_text("kept before rewind target")),
+            rewind_event,
+        ];
+        // Both events share invocation_id "inv-1" (the `event()` helper's
+        // default), so the rewind should annul everything including itself.
+        let contents = get_contents(None, &events, "", false, None, false, None, false).unwrap();
+        assert!(contents.is_empty());
+    }
+
+    #[test]
+    fn get_contents_fences_another_agents_reply_as_user_context() {
+        let events = vec![event_with_content(
+            "agent_b",
+            Content::new("model", vec![Part::text("some other agent's turn")]),
+        )];
+        let contents =
+            get_contents(None, &events, "agent_a", false, None, false, None, false).unwrap();
+        assert_eq!(contents.len(), 1);
+        let text = contents[0].parts[1].text.as_deref().unwrap();
+        assert!(text.starts_with("[agent_b] said:"));
+    }
+
+    #[test]
+    fn get_contents_coalesces_split_input_transcription_fragments() {
+        let transcription =
+            |text: &str| Value::Map(vec![("text".to_string(), Value::String(text.to_string()))]);
+        let mut first = event("user");
+        first.input_transcription = Some(transcription("hello "));
+        let mut second = event("user");
+        second.input_transcription = Some(transcription("world"));
+
+        let contents =
+            get_contents(None, &[first, second], "", false, None, false, None, false).unwrap();
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0].role.as_deref(), Some("user"));
+        assert_eq!(contents[0].parts[0].text.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn get_contents_prepends_the_task_input_for_a_scoped_agent() {
+        let events = vec![event_with_content(
+            "coordinator",
+            Content::new(
+                "model",
+                vec![fc_with_args(
+                    "fc-1",
+                    vec![("task", Value::String("summarize".to_string()))],
+                )],
+            ),
+        )];
+        let contents =
+            get_contents(None, &events, "", false, Some("fc-1"), false, None, false).unwrap();
+        // The delegating FC's own event is unscoped, so it's filtered out by
+        // isolation_scope, leaving only the synthetic leading task input.
+        assert_eq!(contents.len(), 1);
+        assert!(contents[0].parts[0]
+            .text
+            .as_ref()
+            .unwrap()
+            .contains("summarize"));
+    }
+
+    // --- get_current_turn_contents ---
+
+    #[test]
+    fn get_current_turn_contents_starts_from_the_latest_user_turn() {
+        let events = vec![
+            event_with_content("user", Content::user_text("first turn")),
+            event_with_content("model", Content::new("model", vec![Part::text("reply 1")])),
+            event_with_content("user", Content::user_text("second turn")),
+            event_with_content("model", Content::new("model", vec![Part::text("reply 2")])),
+        ];
+        let contents =
+            get_current_turn_contents(None, &events, "", false, None, false, None, false).unwrap();
+        assert_eq!(contents.len(), 2);
+        assert_eq!(contents[0].parts[0].text.as_deref(), Some("second turn"));
+        assert_eq!(contents[1].parts[0].text.as_deref(), Some("reply 2"));
+    }
+
+    #[test]
+    fn get_current_turn_contents_is_empty_when_no_turn_start_qualifies() {
+        let events = vec![event_with_content(
+            "model",
+            Content::new("model", vec![Part::text("no user turn yet")]),
+        )];
+        let contents =
+            get_current_turn_contents(None, &events, "", false, None, false, None, false).unwrap();
+        assert!(contents.is_empty());
+    }
+
+    #[test]
+    fn get_current_turn_contents_skips_a_direct_transfer_event_as_a_turn_start() {
+        let earlier_user_turn = event_with_content("user", Content::user_text("real user turn"));
+        let mut transfer_call = event_with_content(
+            "user",
+            Content::new("user", vec![fc_part("fc-1", "transfer_to_agent")]),
+        );
+        transfer_call.actions.transfer_to_agent = Some("sub_agent".to_string());
+        let events = vec![earlier_user_turn, transfer_call];
+
+        let contents =
+            get_current_turn_contents(None, &events, "", false, None, false, None, false).unwrap();
+        // The trailing transfer event (authored "user" but a direct
+        // transfer) is skipped as a turn start; the real user turn before it
+        // anchors the current turn instead, so both events are included.
+        assert_eq!(contents.len(), 2);
+        assert_eq!(contents[0].parts[0].text.as_deref(), Some("real user turn"));
     }
 }
