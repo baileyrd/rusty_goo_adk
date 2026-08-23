@@ -23,6 +23,7 @@ pub mod compaction;
 pub mod contents;
 pub mod context_cache;
 pub mod fencing;
+pub mod functions_utils;
 pub mod identity;
 pub mod instructions;
 pub mod instructions_utils;
