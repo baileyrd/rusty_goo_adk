@@ -273,6 +273,13 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     a free function, not yet a real `BaseLlmRequestProcessor` reading
     through `InvocationContext` — that needs `LlmAgent` wired into
     `BaseAgent`'s tree first (a separate, larger Phase 4 piece).
+  - `identity::apply_identity` (C0169, partial): the `identity` request
+    processor — appends "You are an agent. Your internal name is..."
+    (plus a description sentence when set) unless the agent is in
+    single-turn mode. Takes `agent_name`/`agent_description` as explicit
+    parameters rather than reading them off `LlmAgent` (which has neither
+    field yet, since it isn't wired into `BaseAgent`'s tree), same scope
+    note as `basic`.
 ### Changed
 ### Fixed
 ### Security
