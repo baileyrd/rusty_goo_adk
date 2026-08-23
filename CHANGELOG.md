@@ -234,6 +234,29 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   front rather than incrementally — `generate_content_async`'s own
   contract already collects everything into one `Vec` before returning,
   so neither loses anything a caller could observe.
+- **Phase 4 started**: `adk-flows` crate (`google.adk.flows`), depending on
+  `adk-agents`, `adk-events`, and `adk-models` together — the crate-graph
+  reason is disclosed in its own module doc (`adk-models` already depends
+  on `adk-agents` for `ContextCacheConfig`, so `adk-agents` depending back
+  on `adk-models` for `LlmAgent`'s model-resolution methods would make the
+  two crates depend on each other).
+  - `BaseLlmRequestProcessor`/`BaseLlmResponseProcessor` (C0147): the
+    processor interfaces `BaseLlmFlow`'s whole request/response pipeline
+    is built from. `run_async` returns a boxed future resolving to
+    `Result<Vec<Event>, ProcessorError>` rather than an `AsyncGenerator`,
+    the same adaptation `BaseLlm::generate_content_async` already made.
+  - `canonical_model`/`canonical_live_model` (C0080/C0090, partial): free
+    functions (not `LlmAgent` methods, for the crate-graph reason above)
+    resolving `LlmAgent.model` to a real `BaseLlm` via a new process-wide
+    default `LlmRegistry` (`adk_models::registry::default_registry`,
+    C0111 partial — pre-populated with `Gemini` and `OllamaLlm`, the two
+    concrete backends this migration has actually built). Still
+    `REQUIRED`, disclosed: ancestor-agent-chain fallback (`LlmAgent` isn't
+    wired into `BaseAgent`'s tree yet), the source's memoization cache,
+    and resolving `ModelRef::Instance` (a live `BaseLlm` instance passed
+    directly rather than a name) — the last one is blocked on a deliberate
+    crate-dependency restructuring (extracting `ContextCacheConfig` into a
+    shared lower crate), not just more code.
 ### Changed
 ### Fixed
 ### Security

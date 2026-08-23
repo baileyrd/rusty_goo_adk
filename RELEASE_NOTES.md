@@ -22,6 +22,55 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Start Phase 4: adk-flows, processor interfaces, canonical_model
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** new `adk-flows` crate (Phase 4, `google.adk.flows`) —
+  everything downstream of Phase 3's Gemini backend that needs `LlmAgent`
+  (`adk-agents`) and `BaseLlm`/`LLMRegistry` (`adk-models`) together.
+- **Added, C0147:** `BaseLlmRequestProcessor`/`BaseLlmResponseProcessor` —
+  the processor interfaces `BaseLlmFlow`'s whole request/response pipeline
+  is built from (`basic`, `identity`, `instructions`, `nl_planning`, etc.
+  will each implement one of these in follow-up batches). `run_async`
+  returns a boxed future resolving to `Result<Vec<Event>, ProcessorError>`
+  rather than an `AsyncGenerator` — the same adaptation
+  `BaseLlm::generate_content_async` already made in Phase 3.
+- **Added, C0080/C0090 (partial):** `canonical_model`/`canonical_live_model`
+  — resolves `LlmAgent.model` to a real `BaseLlm` via a new process-wide
+  default registry, retroactively completing what `llm_agent.rs`'s own
+  module doc flagged as blocked on `LLMRegistry` back when Phase 3 hadn't
+  built any real backend yet.
+- **Added, C0111 (partial):** `adk_models::registry::default_registry` — a
+  real process-wide `LlmRegistry`, pre-populated with `Gemini` and
+  `OllamaLlm` (the two concrete backends this migration has actually
+  built). Resolving a Claude/OpenAI/Apigee/OCIGenAI/LiteLLM-provider model
+  name still falls through to the existing named "install this pip extra"
+  error — no backend exists for any of those yet.
+- **Architectural decision, disclosed:** `canonical_model`/`canonical_live_model`
+  are free functions in `adk-flows`, not methods on `LlmAgent` itself
+  (unlike the source, where they're properties). `adk-models` already
+  depends on `adk-agents` (for `ContextCacheConfig`, used by
+  `LlmRequest.cache_config`); having `adk-agents` depend back on
+  `adk-models` for these two methods would make the two crates depend on
+  each other, which Cargo doesn't allow. `adk-flows` sits above both
+  instead. Fixing this for real (so these can become genuine `LlmAgent`
+  methods) means extracting `ContextCacheConfig` into a shared lower
+  crate both `adk-agents` and `adk-models` can depend on — a deliberate
+  restructuring, left for when/if it's actually needed, not done as a
+  side effect of this batch.
+- **Scope decision, disclosed:** three real gaps stay `REQUIRED` in the
+  manifest rather than flipping C0080/C0090 to `DONE`: ancestor-agent-chain
+  fallback (needs `LlmAgent` wired into `BaseAgent`'s tree — not done yet,
+  itself blocked on Phase 3/4/8 per `llm_agent.rs`'s own module doc), the
+  source's `_resolved_model` memoization/invalidation-on-reassignment
+  cache (this port re-resolves via the registry on every call), and
+  `ModelRef::Instance` (a live `BaseLlm` instance passed directly rather
+  than a model name) — blocked on the same crate-dependency restructuring
+  named above.
+- 12 new tests (9 in `adk-flows`, 3 in `adk-models::registry`). Full
+  workspace gate green (212 passing in `adk-models`, 9 in the new
+  `adk-flows`).
+
 ## PR #TBD — SSE streaming for Gemini (Phase 3 batch 11, closing C0125 and C0126)
 **2026-08-23** · (link added once this PR is opened)
 
