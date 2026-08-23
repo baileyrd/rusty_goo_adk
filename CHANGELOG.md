@@ -257,6 +257,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     directly rather than a name) — the last one is blocked on a deliberate
     crate-dependency restructuring (extracting `ContextCacheConfig` into a
     shared lower crate), not just more code.
+  - `basic::build_basic_request` (C0168, partial): the `basic` request
+    processor's full behavior — assembles `LlmRequest.model`/`config`/
+    `output_schema`/`live_connect_config` from `LlmAgent`'s canonical
+    settings and `RunConfig` (labels merging, http_options headers
+    merging with mutation-leakage protection, the full live-connect
+    surface including the Gemini-3.x-live affective-dialog/proactivity
+    suppression). `LlmRequest.config`/`live_connect_config` gained several
+    new opaque-placeholder fields sourced straight from `RunConfig`'s own
+    same-named fields (`labels`, `response_modalities`,
+    `output_audio_transcription`, `input_audio_transcription`,
+    `realtime_input_config`, `explicit_vad_signal`, `translation_config`,
+    `enable_affective_dialog`, `proactivity`, `history_config`,
+    `context_window_compression`, `avatar_config`). **Scope, disclosed:**
+    a free function, not yet a real `BaseLlmRequestProcessor` reading
+    through `InvocationContext` — that needs `LlmAgent` wired into
+    `BaseAgent`'s tree first (a separate, larger Phase 4 piece).
 ### Changed
 ### Fixed
 ### Security

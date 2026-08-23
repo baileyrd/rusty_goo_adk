@@ -28,6 +28,16 @@
 //! `Value` placeholder ("nothing here reads it") until `Gemini.connect()`'s
 //! config-preparation logic (C0131) needed real fields to mutate — now
 //! [`LiveConnectConfigStub`], narrowed the same way `config` is.
+//!
+//! **Adaptation, Phase 4 batch 2**: `GenerateContentConfigStub` gained
+//! `labels`, and `LiveConnectConfigStub` gained `response_modalities`/
+//! `output_audio_transcription`/`input_audio_transcription`/
+//! `realtime_input_config`/`explicit_vad_signal`/`translation_config`/
+//! `enable_affective_dialog`/`proactivity`/`history_config`/
+//! `context_window_compression`/`avatar_config` — needed once
+//! `adk-flows`'s `basic` request processor (C0168) started copying these
+//! straight from `RunConfig`'s own same-named (already opaque-placeholder)
+//! fields.
 
 use adk_genai::content::{Content, Part};
 use rusty_serde::value::Value;
@@ -73,6 +83,11 @@ pub struct GenerateContentConfigStub {
     /// `http_options` field.
     #[rusty_serde(default)]
     pub http_options: Option<HttpOptionsStub>,
+    /// Per-invocation labels (billing/telemetry/revenue attribution) —
+    /// added in Phase 4 batch 2 (`basic` request processor, C0168) so
+    /// `RunConfig.labels` can be merged in.
+    #[rusty_serde(default)]
+    pub labels: Option<BTreeMap<String, String>>,
 }
 
 /// Narrowed placeholder for `google.genai.types.HttpOptions`, as embedded
@@ -114,6 +129,33 @@ pub struct LiveConnectConfigStub {
     /// Opaque placeholder — see the module doc.
     #[rusty_serde(default)]
     pub safety_settings: Option<Value>,
+    /// The following fields were added in Phase 4 batch 2 (`basic` request
+    /// processor, C0168), sourced from `RunConfig`'s own same-named
+    /// fields — each is an opaque `google.genai.types.*` placeholder there
+    /// too (see `run_config.rs`'s module doc), so no narrower typing is
+    /// possible here either; this only needed somewhere to write them.
+    #[rusty_serde(default)]
+    pub response_modalities: Option<Vec<Value>>,
+    #[rusty_serde(default)]
+    pub output_audio_transcription: Option<Value>,
+    #[rusty_serde(default)]
+    pub input_audio_transcription: Option<Value>,
+    #[rusty_serde(default)]
+    pub realtime_input_config: Option<Value>,
+    #[rusty_serde(default)]
+    pub explicit_vad_signal: Option<bool>,
+    #[rusty_serde(default)]
+    pub translation_config: Option<Value>,
+    #[rusty_serde(default)]
+    pub enable_affective_dialog: Option<bool>,
+    #[rusty_serde(default)]
+    pub proactivity: Option<Value>,
+    #[rusty_serde(default)]
+    pub history_config: Option<Value>,
+    #[rusty_serde(default)]
+    pub context_window_compression: Option<Value>,
+    #[rusty_serde(default)]
+    pub avatar_config: Option<Value>,
 }
 
 /// Either shape `append_instructions` accepts — the source's

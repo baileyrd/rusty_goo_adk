@@ -22,6 +22,49 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 2: the `basic` request processor
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::basic::build_basic_request` — the full behavior
+  of the source's `basic` request processor (`_build_basic_request`):
+  resolves the agent's canonical model onto `LlmRequest.model`, rebuilds
+  `LlmRequest.config` from the agent's validated `generate_content_config`
+  (deserialized fresh rather than copied field-by-field — see the module
+  doc for why that's equivalent here), merges any pre-existing
+  `http_options` headers back in (RunConfig's headers win on conflict),
+  merges `RunConfig.labels` into `config.labels`, gates `output_schema`
+  on the model's `output_schema_and_tools` capability and task mode, and
+  populates the full `live_connect_config` surface from `RunConfig`
+  (including the Gemini-3.x-live-specific suppression of
+  `enable_affective_dialog`/`proactivity`).
+- `LlmRequest.config` gained a `labels` field; `LlmRequest.live_connect_config`
+  gained `response_modalities`/`output_audio_transcription`/
+  `input_audio_transcription`/`realtime_input_config`/`explicit_vad_signal`/
+  `translation_config`/`enable_affective_dialog`/`proactivity`/
+  `history_config`/`context_window_compression`/`avatar_config` — each
+  sourced straight from `RunConfig`'s own already-opaque same-named field.
+- **Scope decision, disclosed:** `build_basic_request` is a free function
+  taking `&LlmAgent`/`&RunConfig` directly, not yet a real
+  `BaseLlmRequestProcessor` reading through `InvocationContext`. The
+  source's `as_llm_agent` narrows `invocation_context.agent: BaseAgent`
+  down to a concrete `LlmAgent` via a Python `cast()` (a runtime no-op);
+  this port's `InvocationContext.agent: Option<BaseAgent>` has no
+  equivalent — `LlmAgent` doesn't implement `AgentBehavior` yet (flagged
+  in `llm_agent.rs`'s own module doc as blocked on exactly the Phase 4
+  work this crate is starting). Wiring `build_basic_request` into a real
+  trait impl is deferred to whichever future batch gives `LlmAgent` real
+  tree placement — the behavior itself is fully ported and tested now, so
+  that future wiring is only plumbing, not new logic.
+- **Adaptation, disclosed:** `_merge_run_config_http_options`'s
+  `timeout`/`retry_options`/`extra_body` fields aren't modeled in
+  `HttpOptionsStub` yet — only the `headers` merge is ported.
+  `RunConfig.session_resumption` is deserialized best-effort into
+  `SessionResumptionStub`; a shape mismatch just doesn't get copied
+  forward (RunConfig's opaque per-field values were never validated
+  against this port's narrower stub types the way `generate_content_config`
+  was, so failing loudly here would be the wrong default).
+- 10 new tests. Full workspace gate green (19 passing in `adk-flows`).
+
 ## PR #TBD — Start Phase 4: adk-flows, processor interfaces, canonical_model
 **2026-08-23** · (link added once this PR is opened)
 
