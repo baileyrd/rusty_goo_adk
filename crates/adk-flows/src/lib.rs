@@ -29,3 +29,4 @@ pub mod instructions_utils;
 pub mod interactions;
 pub mod output_schema;
 pub mod processor;
+pub mod request_confirmation;

@@ -413,6 +413,18 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     ported: `_get_incompatible_builtin_tool_error` and building/attaching
     a real `TransferToAgentTool` — both need `BaseTool` (Phase 8), the
     same blocker `output_schema.rs` already discloses.
+  - `request_confirmation` module (C0172, partial): the
+    `request_confirmation` request processor's pure, tool-infrastructure-
+    free dedup pre-pass — `get_original_function_call_args` (extracts the
+    `originalFunctionCall` payload out of an `adk_request_confirmation`
+    call's args) and `map_confirmation_to_original_fc_ids` (maps a
+    confirmation call's id back to the original function-call id it
+    confirms, so already-consumed confirmations can be dropped cheaply
+    before expensive re-validation). **Not** ported: parsing a
+    `ToolConfirmation`, resolving/validating the confirmed tool against
+    session history, and re-executing it — all need `BaseTool`/
+    `ToolConfirmation`/`ToolContext` (Phase 8/9), which don't exist in
+    this port yet.
 ### Changed
 ### Fixed
 ### Security
