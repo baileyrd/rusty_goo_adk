@@ -566,6 +566,12 @@ impl Gemini {
         let body_json = rusty_serde::json::to_string(&body)
             .map_err(|e| GeminiCallError::Parse(e.to_string()))?;
 
+        // C0134: debug-level request logging, redacted — see
+        // `debug_log.rs`'s module doc for the env-var-gate adaptation.
+        if crate::debug_log::debug_logging_enabled() {
+            eprintln!("{}", crate::debug_log::build_request_log(&llm_request));
+        }
+
         // `reqwest::blocking` spins up its own private tokio runtime, so
         // this genuinely blocking call is safe to make — it just must not
         // run directly on a `rusty_tokio` async worker thread, hence the
@@ -602,6 +608,9 @@ impl Gemini {
 
         let parsed: GenerateContentResponse = rusty_serde::json::from_str(&text)
             .map_err(|e| GeminiCallError::Parse(e.to_string()))?;
+        if crate::debug_log::debug_logging_enabled() {
+            eprintln!("{}", crate::debug_log::build_response_log(&parsed));
+        }
         Ok(LlmResponse::create(parsed))
     }
 }

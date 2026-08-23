@@ -18,6 +18,7 @@ pub mod base_llm;
 pub mod base_llm_connection;
 pub mod cache_metadata;
 pub mod capabilities;
+pub mod debug_log;
 pub mod gemini;
 pub mod gemini_context_cache_manager;
 pub mod gemini_llm_connection;

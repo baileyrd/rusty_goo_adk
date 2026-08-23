@@ -22,6 +22,44 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Redacted debug logging (Phase 3 batch 9, closing C0134)
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `crates/adk-models/src/debug_log.rs` — `build_request_log`/
+  `build_response_log`, ported from `google_llm.py`'s
+  `_build_request_log`/`_build_response_log`. Builds a structured
+  debug-level string for a request (system instruction, config,
+  contents, function declarations) or response (extracted text, function
+  calls, raw JSON dump), with credential-bearing fields redacted before
+  they can reach a log: `inline_data`/`file_data`'s binary payload
+  (`mime_type` and everything else is kept), and `http_options.headers`.
+  Wired into `Gemini::generate_content`, gated by a new
+  `ADK_DEBUG_LOGGING` env var (this port's lightweight stand-in for the
+  source's `logger.isEnabledFor(logging.DEBUG)` — no logging framework
+  decision has been made for this workspace yet, same caveat already
+  disclosed in `gemini_llm_connection.rs`'s module doc).
+- **Adaptation, disclosed:** `config.tools` isn't modeled as typed
+  `FunctionDeclaration`s yet (C0116, Phase 8's `BaseTool`), so this port
+  can't walk into a tool's function declarations the way the source
+  does. The "Functions" log section is always empty, and the config
+  log's `tools` key is always fully redacted (never partially shown) —
+  the same effect the source's own fallback-exclusion branch produces
+  whenever it can't locate a function-declaration-bearing tool, just
+  taken unconditionally here instead of only as a fallback. Of the
+  source's full `http_options` credential-bearing exclusion set
+  (`httpx_client`/`httpx_async_client`/`aiohttp_client`/`headers`/
+  `extra_body`/`client_args`/`async_client_args`), only `headers` exists
+  to redact in this port's narrower `HttpOptionsStub` — it's still
+  dropped from the log entirely, never partially shown.
+- `GenerateContentResponse` and its nested `Candidate`/`PromptFeedback`
+  types gained a `Serialize` impl (`skip_serializing_if` on every
+  `Option`, matching `exclude_none=True`) — previously deserialize-only,
+  since nothing needed to re-serialize a parsed response before the
+  response log needed to dump one back into raw JSON.
+- 10 new tests covering both redaction paths, the empty-response case,
+  function-call extraction, and the env-var gate. Full workspace gate
+  green (192 passing in `adk-models`).
+
 ## PR #TBD — Gemini REST-path tracking headers (Phase 3 batch 8, closing C0133)
 **2026-08-23** · (link added once this PR is opened)
 

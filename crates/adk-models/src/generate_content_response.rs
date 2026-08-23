@@ -18,52 +18,59 @@
 //! response — that these values are always plain strings on the wire.
 
 use rusty_serde::value::Value;
-use rusty_serde::Deserialize;
+use rusty_serde::{Deserialize, Serialize};
 
 use adk_genai::content::Content;
 
 /// `google.genai.types.Candidate` — see the module doc for the field
 /// subset.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+///
+/// **Adaptation, Phase 3 batch 9**: gained a `Serialize` impl (with
+/// `skip_serializing_if` on every `Option`, matching the source's
+/// `exclude_none=True`) so `debug_log.rs`'s `build_response_log` (C0134)
+/// can round-trip a real parsed response back into the raw-JSON dump its
+/// log format includes — this type was previously deserialize-only since
+/// nothing needed to re-serialize a response.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[rusty_serde(rename_all = "camelCase")]
 pub struct Candidate {
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<Content>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<Value>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_message: Option<String>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub grounding_metadata: Option<Value>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub citation_metadata: Option<Value>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub avg_logprobs: Option<f64>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub logprobs_result: Option<Value>,
 }
 
 /// `google.genai.types.GenerateContentResponsePromptFeedback`.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[rusty_serde(rename_all = "camelCase")]
 pub struct PromptFeedback {
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub block_reason: Option<Value>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub block_reason_message: Option<String>,
 }
 
 /// `google.genai.types.GenerateContentResponse`.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[rusty_serde(rename_all = "camelCase")]
 pub struct GenerateContentResponse {
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub model_version: Option<String>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<Candidate>>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_feedback: Option<PromptFeedback>,
-    #[rusty_serde(default)]
+    #[rusty_serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_metadata: Option<Value>,
 }
 
