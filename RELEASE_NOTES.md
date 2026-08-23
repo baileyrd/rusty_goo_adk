@@ -22,6 +22,25 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 3: the `identity` request processor
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::identity::apply_identity`/`identity_instruction`
+  — the `identity` request processor: appends "You are an agent. Your
+  internal name is \"...\"." (plus a description sentence when the agent
+  has one) unless the agent is in single-turn mode, matching the source's
+  `mode != 'single_turn'` gate exactly.
+- **Scope/adaptation, disclosed** (same shape as the `basic` processor,
+  PR before this one): a free function, not yet a real
+  `BaseLlmRequestProcessor`. Takes `agent_name`/`agent_description` as
+  explicit parameters rather than reading them off `LlmAgent` — the
+  source inherits these from `BaseAgent`, but this port's standalone
+  `LlmAgent` struct has neither field yet (it isn't wired into
+  `BaseAgent`'s tree). Once real tree placement lands, a caller passes
+  `agent.name()`/`agent.description()` straight through — this function's
+  own logic doesn't change.
+- 7 new tests. Full workspace gate green (26 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 2: the `basic` request processor
 **2026-08-23** · (link added once this PR is opened)
 
