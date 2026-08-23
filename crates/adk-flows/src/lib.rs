@@ -26,4 +26,5 @@ pub mod identity;
 pub mod instructions;
 pub mod instructions_utils;
 pub mod interactions;
+pub mod output_schema;
 pub mod processor;
