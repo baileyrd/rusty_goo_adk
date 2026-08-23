@@ -24,4 +24,5 @@ pub mod live_connection;
 pub mod live_server_message;
 pub mod llm_request;
 pub mod llm_response;
+pub mod ollama;
 pub mod registry;
