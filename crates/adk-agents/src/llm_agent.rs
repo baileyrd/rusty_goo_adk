@@ -17,9 +17,22 @@
 //! *decision*). Once Phase 3/4/8 land, `LlmAgent` gets reworked to actually
 //! implement `AgentBehavior` and become constructible via `BaseAgent`.
 //!
+//! **Partial, Phase 4 batch 1**: C0080/C0090 (`canonical_model`/
+//! `canonical_live_model`) are now implemented — but as free functions in
+//! the new `adk-flows` crate (`canonical_model.rs`), not as methods on
+//! `LlmAgent` itself. `adk-models` (which has `BaseLlm`/`LLMRegistry`)
+//! already depends on `adk-agents` (for `ContextCacheConfig`), so
+//! `adk-agents` depending back on `adk-models` to give `LlmAgent` these
+//! methods directly would make the two crates depend on each other —
+//! `adk-flows` sits above both instead. Still left `REQUIRED` in the
+//! manifest: ancestor-agent-chain fallback (needs `LlmAgent` wired into
+//! `BaseAgent`'s tree), the source's memoization cache, and resolving
+//! `ModelRef::Instance` (a live `BaseLlm` passed directly) — see
+//! `canonical_model.rs`'s own module doc for why that last one specifically
+//! needs a crate-dependency restructuring, not just more code.
+//!
 //! **Deferred, blocked on forward phases** (left `REQUIRED` in the
-//! manifest): C0080/C0090 (`canonical_model`/`canonical_live_model` — need
-//! `LLMRegistry`), C0092 (`canonical_tools` — needs `BaseTool` resolution),
+//! manifest): C0092 (`canonical_tools` — needs `BaseTool` resolution),
 //! C0094 (`_get_subagent_to_resume` — needs `Event::get_function_responses`,
 //! blocked on Phase 3's real `Content`/`Part`), C0095
 //! (`__maybe_save_output_to_state`/`__maybe_accumulate_streaming_output` —

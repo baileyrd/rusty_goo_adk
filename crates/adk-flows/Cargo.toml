@@ -1,0 +1,15 @@
+[package]
+name = "adk-flows"
+description = "LLM flow orchestration, ported from google/adk-python's flows/ module (Phase 4)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+adk-agents = { path = "../adk-agents" }
+adk-events = { path = "../adk-events" }
+adk-genai = { path = "../adk-genai" }
+adk-models = { path = "../adk-models" }
+rusty_serde = { workspace = true }
+rusty_err = { workspace = true }
+rusty_tokio = { workspace = true }

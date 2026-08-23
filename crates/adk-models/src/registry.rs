@@ -5,12 +5,18 @@
 //! unmatched `provider/model` string against `litellm.provider_list`) needs
 //! a LiteLLM-equivalent Rust crate that doesn't exist; `resolve` accepts an
 //! optional known-provider list so that integration has a seam to plug
-//! into later, but nothing populates it yet. C0111 (the real lazy provider
-//! table — Gemini/Claude/LiteLlm/etc.) and C0112/C0113 (their
-//! `models/__init__.py` lazy-`__getattr__`/registration-order details) are
-//! about *registering real backends*, which are Phase 3 batch 2 (needs an
-//! HTTP client decision) — this file is the dispatch *mechanism*, exercised
-//! here with test-double factories, not real registrations.
+//! into later, but nothing populates it yet.
+//!
+//! **Partial, Phase 4 batch 1**: C0111 (the real lazy provider table —
+//! Gemini/Claude/LiteLlm/etc.) has [`default_registry`], a real
+//! process-wide registry populated with the two concrete backends this
+//! migration has actually built (`Gemini`, `OllamaLlm`) — everything else
+//! in the source's table (Apigee/Claude/OpenAILlm/OCIGenAILlm/LiteLlm's 14
+//! providers) still has no backend to register. C0112/C0113 (their
+//! `models/__init__.py` lazy-`__getattr__`/registration-order details)
+//! stay deferred — this file is the dispatch *mechanism* and now a real
+//! default instance of it, not the `models/__init__.py` import-time
+//! surface itself.
 //!
 //! **Adaptation**: the source's `_register_lazy` defers a class's *module
 //! import* until first resolved (so an optional dependency like
@@ -193,6 +199,47 @@ impl LlmRegistry {
     }
 }
 
+/// C0111 (partial — see the module doc): the process-wide default
+/// registry, pre-populated with every concrete `BaseLlm` backend this
+/// migration has actually built (`Gemini`, `OllamaLlm`). Claude/OpenAILlm/
+/// ApigeeLlm/OCIGenAILlm/LiteLlm's 14 providers still have no backend to
+/// register — resolving one of those model names falls through to
+/// [`RegistryError::ClaudeModelNotFound`]/[`RegistryError::LiteLlmModelNotFound`],
+/// the same named "here's the pip extra to install" guidance the source's
+/// lazy `__getattr__` gives for a missing optional dependency.
+///
+/// **Adaptation**: the source's `LLMRegistry` is a set of classmethods
+/// over one process-wide static dict; `LlmRegistry` here is an
+/// instantiable struct (see its own doc, for test isolation), so a real
+/// process-wide default needs its own explicit global cell — this is
+/// that cell, not a reinterpretation of the per-instance type.
+pub fn default_registry() -> &'static std::sync::RwLock<LlmRegistry> {
+    static REGISTRY: std::sync::OnceLock<std::sync::RwLock<LlmRegistry>> =
+        std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let mut registry = LlmRegistry::new();
+        registry
+            .register(
+                &crate::gemini::Gemini::supported_models(),
+                "Gemini",
+                Arc::new(|model: &str| {
+                    Box::new(crate::gemini::Gemini::new(model)) as Box<dyn BaseLlm>
+                }),
+            )
+            .expect("Gemini's own supported_models regexes are all valid");
+        registry
+            .register(
+                &crate::ollama::OllamaLlm::supported_models(),
+                "OllamaLlm",
+                Arc::new(|model: &str| {
+                    Box::new(crate::ollama::OllamaLlm::new(model)) as Box<dyn BaseLlm>
+                }),
+            )
+            .expect("OllamaLlm's own supported_models regexes are all valid");
+        std::sync::RwLock::new(registry)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +350,28 @@ mod tests {
             .unwrap();
         assert_eq!(registry.entries.len(), 1);
         assert_eq!(registry.entries[0].class_name, "Second");
+    }
+
+    #[test]
+    fn default_registry_resolves_gemini_models() {
+        let registry = default_registry().read().unwrap();
+        let llm = registry.new_llm("gemini-2.5-flash").unwrap();
+        assert_eq!(llm.type_name(), "Gemini");
+    }
+
+    #[test]
+    fn default_registry_resolves_ollama_models() {
+        let registry = default_registry().read().unwrap();
+        let llm = registry.new_llm("ollama/llama3.2").unwrap();
+        assert_eq!(llm.type_name(), "OllamaLlm");
+    }
+
+    #[test]
+    fn default_registry_still_lacks_a_claude_backend() {
+        let registry = default_registry().read().unwrap();
+        match registry.resolve("claude-3-opus") {
+            Err(RegistryError::ClaudeModelNotFound(_)) => {}
+            _ => panic!("expected ClaudeModelNotFound — no Claude backend is registered yet"),
+        }
     }
 }
