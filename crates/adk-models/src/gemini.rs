@@ -1,5 +1,5 @@
 //! Capabilities C0123-C0125 (partial), C0127, C0129-C0131 (C0131 partial),
-//! C0130 (partial C0133): `Gemini`, ported from `google.adk.models.google_llm`.
+//! C0133: `Gemini`, ported from `google.adk.models.google_llm`.
 //!
 //! **Scope of batch 2 (config layer)**: the config shape, `supported_models()`,
 //! base-URL/API-version resolution, and API-client construction — pure
@@ -483,6 +483,40 @@ impl Gemini {
         }
     }
 
+    /// C0133 (REST-path half): the `generate_content_async` gating that
+    /// unconditionally creates `config.http_options` (if absent) and merges
+    /// ADK's tracking headers into it, overriding any pre-existing value —
+    /// so tracking survives even an injected [`Gemini::client`] with no
+    /// tracking headers of its own baked in. Unlike
+    /// [`Gemini::prepare_live_connect_config`]'s equivalent block (which
+    /// only touches an *already-present* `http_options`, matching the
+    /// source's own live-path gating), this one always creates it — a real
+    /// divergence between the source's two `http_options` gates, not a
+    /// simplification on this port's part.
+    pub fn apply_tracking_headers(&self, llm_request: &mut LlmRequest) {
+        let http_options = llm_request
+            .config
+            .http_options
+            .get_or_insert_with(crate::llm_request::HttpOptionsStub::default);
+
+        let existing: Vec<(String, String)> = http_options
+            .headers
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let merged = crate::google_client_headers::merge_tracking_headers(&existing, None);
+        http_options.headers = Some(merged.into_iter().collect());
+
+        let (_, api_version) = self.base_url_and_api_version();
+        let api_version = api_version.or_else(|| self.configured_api_version());
+        if let Some(api_version) = api_version {
+            if http_options.api_version.is_none() {
+                http_options.api_version = Some(api_version);
+            }
+        }
+    }
+
     fn generate_content_url(&self, model: &str) -> String {
         let client = self.api_client();
         let base_url = client
@@ -508,6 +542,7 @@ impl Gemini {
     ) -> Result<LlmResponse, GeminiCallError> {
         let mut llm_request = llm_request.clone();
         crate::base_llm::maybe_append_user_content(&mut llm_request);
+        self.apply_tracking_headers(&mut llm_request);
         let model = llm_request
             .model
             .clone()
@@ -516,6 +551,17 @@ impl Gemini {
         let auth_header = self.resolve_auth_header()?;
         let client = self.api_client();
         let url = self.generate_content_url(&model);
+        // C0133: sent explicitly per-request (not just relying on the
+        // client's own default headers) so tracking survives even when
+        // `self.client` is an injected client this port can't introspect —
+        // see `apply_tracking_headers`'s doc comment.
+        let tracking_headers: Vec<(String, String)> = llm_request
+            .config
+            .http_options
+            .as_ref()
+            .and_then(|h| h.headers.clone())
+            .map(|h| h.into_iter().collect())
+            .unwrap_or_default();
         let body = build_request_body(&llm_request);
         let body_json = rusty_serde::json::to_string(&body)
             .map_err(|e| GeminiCallError::Parse(e.to_string()))?;
@@ -532,6 +578,9 @@ impl Gemini {
                 .header("content-type", "application/json")
                 .body(body_json);
             if let Some((name, value)) = auth_header {
+                request = request.header(name, value);
+            }
+            for (name, value) in tracking_headers {
                 request = request.header(name, value);
             }
             let response = request.send().map_err(|e| e.to_string())?;
@@ -1174,6 +1223,159 @@ mod tests {
             let _ = stream.flush();
         });
         (format!("http://{addr}"), handle)
+    }
+
+    /// Like [`spawn_one_shot_server`], but hands back the raw request
+    /// headers it received instead of discarding them — needed to assert
+    /// on tracking headers actually reaching the wire (C0133).
+    fn spawn_one_shot_server_capturing_headers(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (String, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut received = Vec::new();
+            let mut buf = [0u8; 4096];
+            let headers = loop {
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    break String::new();
+                }
+                received.extend_from_slice(&buf[..n]);
+                if let Some(header_end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&received[..header_end]).to_string();
+                    let content_length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            let lower = line.to_ascii_lowercase();
+                            lower
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if received.len() >= header_end + 4 + content_length {
+                        break headers;
+                    }
+                }
+            };
+            let response =
+                format!("{status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            headers
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[test]
+    fn apply_tracking_headers_creates_http_options_unconditionally() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        // No `http_options` set beforehand — unlike the live-path gate,
+        // this must create one anyway.
+        gemini.apply_tracking_headers(&mut request);
+        clear_auth_env_vars();
+
+        let http_options = request.config.http_options.unwrap();
+        assert!(http_options
+            .headers
+            .unwrap()
+            .contains_key("x-goog-api-client"));
+        // No explicit `api_version`/base-URL-embedded version/env var
+        // configured — matches the source's own `if api_version and ...`
+        // gate, which leaves it unset rather than inventing a default here
+        // (the REST-call default only applies later, in
+        // `generate_content_url`).
+        assert_eq!(http_options.api_version, None);
+    }
+
+    #[test]
+    fn apply_tracking_headers_carries_an_explicitly_configured_api_version() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash").with_api_version("v1beta3");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        gemini.apply_tracking_headers(&mut request);
+        clear_auth_env_vars();
+
+        let http_options = request.config.http_options.unwrap();
+        assert_eq!(http_options.api_version.as_deref(), Some("v1beta3"));
+    }
+
+    #[test]
+    fn apply_tracking_headers_overrides_a_pre_existing_header_value() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        let mut headers = std::collections::BTreeMap::new();
+        headers.insert(
+            "x-goog-api-client".to_string(),
+            "custom-client/1.0".to_string(),
+        );
+        request.config.http_options = Some(crate::llm_request::HttpOptionsStub {
+            headers: Some(headers),
+            api_version: None,
+        });
+        gemini.apply_tracking_headers(&mut request);
+        clear_auth_env_vars();
+
+        let http_options = request.config.http_options.unwrap();
+        let header_value = http_options.headers.unwrap()["x-goog-api-client"].clone();
+        assert!(
+            header_value.contains("google-adk/"),
+            "expected the ADK tracking token to be merged in, got {header_value:?}"
+        );
+        assert!(
+            header_value.contains("custom-client/1.0"),
+            "expected the caller's own token to survive the merge, got {header_value:?}"
+        );
+    }
+
+    #[rusty_tokio::test]
+    // Held across `.await` deliberately: this guard only serializes test
+    // env-var mutation against other tests in this file, and the awaited
+    // future never touches `ENV_VAR_GUARD` itself, so there's no deadlock
+    // risk — only the intended cross-test isolation.
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_content_sends_tracking_headers_even_with_an_injected_client() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+
+        let (base_url, server) = spawn_one_shot_server_capturing_headers(
+            "HTTP/1.1 200 OK",
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP"}]}"#,
+        );
+        // An injected client this port can't introspect for pre-existing
+        // default headers — tracking still needs to reach the wire.
+        let client = Arc::new(GeminiApiClient {
+            http: reqwest::blocking::Client::new(),
+            base_url: Some(base_url),
+            api_version: Some("v1beta".to_string()),
+            headers: Vec::new(),
+            retry_options: None,
+            enterprise: false,
+        });
+        let gemini = Gemini::new("gemini-2.5-flash").with_client(client);
+        let request = LlmRequest::new("gemini-2.5-flash");
+
+        let response = gemini.generate_content(&request).await.unwrap();
+        assert_eq!(
+            response.content.unwrap().parts[0].text.as_deref(),
+            Some("hi")
+        );
+
+        let headers = server.join().unwrap();
+        assert!(headers.to_ascii_lowercase().contains("x-goog-api-client"));
+        clear_auth_env_vars();
     }
 
     #[rusty_tokio::test]

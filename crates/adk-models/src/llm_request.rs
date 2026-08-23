@@ -66,6 +66,13 @@ pub struct GenerateContentConfigStub {
     /// request is routed through an explicit cache.
     #[rusty_serde(default)]
     pub cached_content: Option<String>,
+    /// Narrowed placeholder for `google.genai.types.HttpOptions`, reusing
+    /// [`HttpOptionsStub`] — added in Phase 3 batch 8 (C0133) so
+    /// `Gemini::apply_tracking_headers` has somewhere to write the merged
+    /// tracking headers/api_version, matching `live_connect_config`'s own
+    /// `http_options` field.
+    #[rusty_serde(default)]
+    pub http_options: Option<HttpOptionsStub>,
 }
 
 /// Narrowed placeholder for `google.genai.types.HttpOptions`, as embedded
