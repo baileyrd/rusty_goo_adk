@@ -398,6 +398,21 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     a `SetModelResponseTool` into the request — both the tool itself and
     `LlmRequest::append_tools` (C0116) need `BaseTool` (Phase 8), which
     doesn't exist in this port yet.
+  - `agent_transfer` module (C0171, partial): the `agent_transfer`
+    request processor's transfer-target computation and instruction-text
+    generation — `get_transfer_targets` (sub-agents, then the parent and
+    peers if the parent is itself LLM-orchestrated, each gated by the
+    corresponding `disallow_transfer_*` flag and excluding single-turn/
+    task-mode agents) and `build_transfer_instruction_body`/
+    `build_transfer_instructions` (byte-for-byte parity with the source's
+    own literal expected instruction text, verified against 2 tests
+    copied from the source's test file). Adaptation: takes an `llm_mode`
+    callback rather than reading `mode`/`disallow_transfer_to_*` straight
+    off any `BaseAgent`, since this port's `BaseAgent` and `LlmAgent` are
+    separate unfused types (disclosed in the module doc). **Not**
+    ported: `_get_incompatible_builtin_tool_error` and building/attaching
+    a real `TransferToAgentTool` — both need `BaseTool` (Phase 8), the
+    same blocker `output_schema.rs` already discloses.
 ### Changed
 ### Fixed
 ### Security

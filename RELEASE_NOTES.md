@@ -22,6 +22,37 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 11: `agent_transfer` — transfer targets + instruction text
+**2026-08-23** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::agent_transfer` (C0171, partial) — the
+  `agent_transfer` request processor's transfer-target computation and
+  instruction-text generation:
+  - `get_transfer_targets`: sub-agents (excluding single-turn/task-mode
+    ones), then — if the parent is itself LLM-orchestrated — the parent
+    and its other sub-agents (peers, excluding the current agent),
+    gated by the corresponding `disallow_transfer_to_parent`/
+    `disallow_transfer_to_peers` flags.
+  - `build_transfer_instruction_body`/`build_transfer_instructions`: the
+    exact instruction text telling the model about its transfer targets,
+    plus an appended parent-transfer suggestion when applicable. 2 tests
+    assert byte-for-byte containment of the source's own literal
+    `expected_content` strings, copied straight from
+    `test_agent_transfer_system_instructions.py`.
+- **Adaptation, disclosed:** takes an `llm_mode: &dyn Fn(&BaseAgent) ->
+  Option<AgentMode>` callback rather than reading `mode`/
+  `disallow_transfer_to_*` straight off any `BaseAgent` (as the source
+  does via `getattr`/`hasattr`, since `LlmAgent` extends `BaseAgent`
+  there) — this port's `BaseAgent` (Phase 2) and `LlmAgent` (Phase 2/4)
+  are two separate, unfused types; `None` signals a `BaseAgent` with no
+  corresponding `LlmAgent` config (e.g. a workflow node).
+- **Scope, disclosed:** `_get_incompatible_builtin_tool_error` (needs
+  `GoogleSearchTool`/`VertexAiSearchTool`/`EnterpriseWebSearchTool`) and
+  actually building/attaching a `TransferToAgentTool` are not ported —
+  both need `BaseTool` (Phase 8), the same blocker `output_schema.rs`
+  already discloses for `SetModelResponseTool`.
+- 11 new tests. Full workspace gate green (140 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 10: `_output_schema_processor` gating + read-back helpers
 **2026-08-23** · (link added once this PR is opened)
 

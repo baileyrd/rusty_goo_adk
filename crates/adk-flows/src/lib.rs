@@ -16,6 +16,7 @@
 //! gap this split creates (an agent constructed with a live `BaseLlm`
 //! instance, rather than a model name, can't be resolved through it).
 
+pub mod agent_transfer;
 pub mod basic;
 pub mod canonical_model;
 pub mod compaction;
