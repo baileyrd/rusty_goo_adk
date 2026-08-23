@@ -318,6 +318,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     transcript fencing (C0184), and compaction-aware history
     reconstruction (C0185) are each deferred to their own dedicated
     batches.
+  - `fencing` module (C0184): prompt-injection fencing for cross-agent
+    transcript relaying, ported from `_fencing.py` in full —
+    `quote_untrusted`/`elide_quote_markers` (marker wrapping with
+    literal-marker elision so a payload can't forge its own end marker),
+    `is_other_agent_reply` (live/bidi-aware other-agent detection), and
+    `present_other_agent_message` (reformats another agent's event as
+    fenced `[agent_name] said:`/`thought:`/tool-call/tool-result user
+    context, relaying blob parts unfenced). Adaptation: `function_call.args`/
+    `function_response.response` are rendered as compact JSON rather than
+    Python's `str(dict)` repr, the same disclosed stand-in
+    `instructions_utils::value_to_display_string` already uses.
+    **Scope, disclosed:** the caller that decides *when* to apply this to
+    an event — `contents.py`'s `_get_contents` orchestration — remains
+    deferred with the rest of that orchestration.
 ### Changed
 ### Fixed
 ### Security
