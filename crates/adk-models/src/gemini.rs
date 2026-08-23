@@ -59,8 +59,9 @@
 //!     adaptation note below) — but that decision is made when the
 //!     connection itself is built, not before.
 //!   - C0134 (redacted debug request/response logging).
-//!   - C0140-C0143 (`GeminiContextCacheManager`) — needs a SHA-256 crate
-//!     decision plus the cache-creation HTTP call.
+//!   - C0126 (wiring `GeminiContextCacheManager` into
+//!     `generate_content_async`) — the manager itself (C0140-C0143) is
+//!     built, independently, in `gemini_context_cache_manager.rs`.
 //!   - `config.tools`/`FunctionDeclaration` in the request body — not
 //!     modeled yet (C0116, Phase 8's `BaseTool`); see
 //!     `generate_content_request.rs`'s module doc.
@@ -120,8 +121,11 @@ use crate::llm_response::LlmResponse;
 
 const DEFAULT_MODEL: &str = "gemini-2.5-flash";
 const API_VERSION_ENV_VAR: &str = "GOOGLE_GENAI_API_VERSION";
-const DEFAULT_GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com";
-const DEFAULT_GEMINI_API_VERSION: &str = "v1beta";
+/// `pub(crate)`: reused by `gemini_context_cache_manager.rs` to build the
+/// `cachedContents` REST endpoint URL the same way this module builds the
+/// `generateContent` one.
+pub(crate) const DEFAULT_GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com";
+pub(crate) const DEFAULT_GEMINI_API_VERSION: &str = "v1beta";
 const RESOURCE_EXHAUSTED_MITIGATION_LINK: &str = "On how to mitigate this issue, please refer to:\n\nhttps://google.github.io/adk-docs/agents/models/google-gemini/#error-code-429-resource_exhausted";
 
 fn version_suffix_pattern() -> &'static Regex {
