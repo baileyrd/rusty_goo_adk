@@ -332,6 +332,21 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     **Scope, disclosed:** the caller that decides *when* to apply this to
     an event — `contents.py`'s `_get_contents` orchestration — remains
     deferred with the rest of that orchestration.
+  - `compaction` module (C0185), ported from `_content_compaction.py` in
+    full: `process_compaction_events` (resolves overlapping compaction
+    summaries, keeping only non-subsumed ones; materializes each
+    surviving summary as a synthetic event attributed to the given agent
+    name, filtering out raw events inside any kept compaction range) and
+    `recover_compacted_function_calls` (re-injects a compacted
+    function-call event — verbatim, to preserve parallel-call thought
+    signatures — ahead of a surviving function-response that would
+    otherwise be orphaned, along with any compacted sibling responses).
+    Required narrowing `EventCompaction.compacted_content` (C0027) from a
+    placeholder JSON `Value` to a real `adk_genai::content::Content`,
+    now that Phase 3 landed the type it was always meant to become.
+    Adaptation: the source's defensive `is None` checks on
+    `EventCompaction`'s fields are omitted since Rust's type system
+    already guarantees they're present.
 ### Changed
 ### Fixed
 ### Security

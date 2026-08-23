@@ -557,7 +557,7 @@ mod tests {
         e.actions.compaction = Some(adk_events::event_compaction::EventCompaction {
             start_timestamp: 1.0,
             end_timestamp: 2.0,
-            compacted_content: Value::String("summary".to_string()),
+            compacted_content: Content::user_text("summary"),
         });
         assert!(!contains_empty_content(&e, false));
     }
