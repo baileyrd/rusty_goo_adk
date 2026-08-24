@@ -22,6 +22,51 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `utils/` sweep: `variant_utils`/`_json_utils`/`_client_labels_utils`/`_debug_output`/`vertex_ai_utils`
+**2026-08-24** · (link added once this PR is opened)
+
+A sweep of `google/adk/utils/` files never fully inventoried, found while
+looking for the next small self-contained batch after C0796. Five new/
+completed manifest rows (C0930-C0934).
+
+- **Added:** `adk-genai::json_utils::safe_json_loads` (C0931) — generic
+  over the target `Deserialize` type, since Rust has no equivalent to the
+  source's dynamically-typed `Any` return; returns `Result<T, String>`
+  with an optional context label folded into the message.
+- **Added:** `adk-models::google_client_headers::{ClientLabelScope,
+  EVAL_CLIENT_LABEL}` (C0932) — the `_client_labels_utils.py` piece this
+  file's module doc previously deferred (only the two unconditional
+  tracking labels were ported). The source's `@contextmanager` becomes an
+  RAII guard (`Drop`-based restore, same pattern as
+  `adk-features::TemporaryFeatureOverride`).
+- **Disclosed adaptation:** the source's `contextvars.ContextVar` is
+  async-task-scoped (follows a value across an `.await` resuming on a
+  different worker thread); this port uses a `thread_local!` instead,
+  which is only thread-scoped. Nothing in this workspace exercises that
+  boundary yet, so this is a disclosed gap, not a proven bug.
+- **Added:** `adk-events::debug_output::print_event` (C0933) — prints an
+  `Event` to stdout; text parts always shown, tool calls/results/code
+  execution/inline-or-file-data parts only when `verbose`. Tool-call
+  args/response rendering uses compact JSON instead of Python's
+  `str()`/`repr()` (same disclosed divergence as `to_user_content`,
+  C0928); `_truncate` truncates by byte length, walking back to the
+  nearest `char` boundary rather than the source's by-code-point slicing.
+- **Added:** `adk-models::vertex_ai_utils::get_express_mode_api_key`
+  (C0934), ported exactly.
+- **Added:** a dedicated parity test for
+  `adk-models::capabilities::get_google_llm_variant`, and its own
+  manifest row (C0930, `variant_utils.py`) — already ported in an
+  earlier forward-pull batch but never linked or directly tested.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-genai +3, adk-events +6, adk-models +6 new tests, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — Close out C0796 (`env_utils.py`)
 **2026-08-24** · (link added once this PR is opened)
 
