@@ -28,10 +28,16 @@
 //!   yet" distinct from a real `Value` result, which its current
 //!   `Result<Value, ToolError>` contract doesn't carry — flagged as a
 //!   design gap to revisit, not silently narrowed.
-//! - Multimodal-part extraction, computer-use image decoding, and the
-//!   `AgentTool` skip-summarization display-text special case — none of
-//!   `ComputerUseTool`/`AgentTool` exist in this port yet (Phase 8, not
-//!   built), so there's nothing to special-case against.
+//! - Computer-use image decoding (`_try_decode_computer_use_image`) —
+//!   `ComputerUseTool` doesn't exist in this port yet, so there's nothing
+//!   to special-case against. Multimodal-part extraction itself (C0195)
+//!   is now built — see [`crate::functions_media`], wired into
+//!   [`build_function_response_content`] below. The `AgentTool`
+//!   skip-summarization display-text special case (source lines
+//!   1449-1482, appending a displayable-text `Part` when
+//!   `skip_summarization` is set and the tool is an `AgentTool`) is a
+//!   separate capability, not yet picked up — `AgentTool` (C0406) does
+//!   exist now, so this is no longer blocked, just unbuilt.
 //! - `response_scheduling` forwarding onto the built `FunctionResponse` —
 //!   `adk_genai::content::FunctionResponse` doesn't model a `scheduling`
 //!   field yet (an already-established "opaque unless something reads
@@ -56,6 +62,7 @@ use adk_tools::tool_confirmation::ToolConfirmation;
 use adk_tools::tool_context::ToolContext;
 use rusty_serde::value::Value;
 
+use crate::functions_media::extract_multimodal_parts;
 use crate::functions_utils::merge_parallel_function_response_events;
 
 /// `tools_dict: dict[str, BaseTool]` — resolves a function call's name to
@@ -114,15 +121,19 @@ pub fn create_tool_context(
 
 /// `_build_function_response_content` (narrowed — see the module doc):
 /// wraps a tool's raw result as the `Content` carrying its
-/// `FunctionResponse`.
+/// `FunctionResponse`. Media the result carried (C0195, see
+/// `crate::functions_media`) is pulled out first and attached to
+/// `FunctionResponse::parts` — only the remainder is coerced to a dict.
 fn build_function_response_content(
     tool: &dyn BaseTool,
     function_result: Value,
     function_call_id: Option<&str>,
 ) -> Content {
+    let (remaining_result, function_response_parts) = extract_multimodal_parts(function_result);
+
     // "Specs requires the result to be a dict" — a non-map result is
     // wrapped as `{"result": ...}`, matching the source exactly.
-    let response = match function_result {
+    let response = match remaining_result {
         Value::Map(fields) => fields.into_iter().collect::<BTreeMap<_, _>>(),
         other => BTreeMap::from([("result".to_string(), other)]),
     };
@@ -130,6 +141,7 @@ fn build_function_response_content(
         id: function_call_id.map(str::to_string),
         name: Some(tool.name().to_string()),
         response: Some(response),
+        parts: (!function_response_parts.is_empty()).then_some(function_response_parts),
     };
     Content {
         role: Some("user".to_string()),
@@ -267,6 +279,38 @@ mod tests {
         }
     }
 
+    struct MediaTool;
+    impl BaseTool for MediaTool {
+        fn name(&self) -> &str {
+            "media"
+        }
+        fn description(&self) -> &str {
+            "returns a result carrying an inline image"
+        }
+        fn run_async<'a>(
+            &'a self,
+            _args: &'a StdBTreeMap<String, Value>,
+            _tool_context: &'a mut ToolContext,
+        ) -> BoxFuture<'a, Result<Value, ToolError>> {
+            let image = rusty_serde::json::to_value(&Part {
+                inline_data: Some(adk_genai::content::MediaBlobStub {
+                    mime_type: Some("image/png".to_string()),
+                    rest: Some(Value::Map(vec![(
+                        "data".to_string(),
+                        Value::String("base64data".to_string()),
+                    )])),
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+            let result = Value::Map(vec![
+                ("caption".to_string(), Value::String("a chart".to_string())),
+                ("image".to_string(), image),
+            ]);
+            Box::pin(async move { Ok(result) })
+        }
+    }
+
     struct FailingTool;
     impl BaseTool for FailingTool {
         fn name(&self) -> &str {
@@ -281,6 +325,7 @@ mod tests {
         let mut map: ToolsDict = HashMap::new();
         map.insert("echo".to_string(), Arc::new(EchoTool));
         map.insert("failing".to_string(), Arc::new(FailingTool));
+        map.insert("media".to_string(), Arc::new(MediaTool));
         map
     }
 
@@ -331,6 +376,36 @@ mod tests {
             response.response.unwrap().get("result"),
             Some(&Value::String("hi".to_string()))
         );
+    }
+
+    #[rusty_tokio::test]
+    async fn execute_single_function_call_extracts_media_into_the_response_parts() {
+        // C0195: a tool result carrying media (nested inside a plain
+        // dict, here) ends up on `FunctionResponse::parts`, and the media
+        // entry itself is removed from `response` — only `caption` (the
+        // non-media sibling key) remains.
+        let fc = call("fc-1", "media", None);
+
+        let event = execute_single_function_call(&ctx(), &fc, &tools_dict(), "agent", None)
+            .await
+            .unwrap();
+
+        let response = event.content.unwrap().parts[0]
+            .function_response
+            .clone()
+            .unwrap();
+        let parts = response.parts.unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(
+            parts[0].inline_data.as_ref().unwrap().mime_type.as_deref(),
+            Some("image/png")
+        );
+        let remaining = response.response.unwrap();
+        assert_eq!(
+            remaining.get("caption"),
+            Some(&Value::String("a chart".to_string()))
+        );
+        assert!(!remaining.contains_key("image"));
     }
 
     #[rusty_tokio::test]

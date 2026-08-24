@@ -258,6 +258,7 @@ mod tests {
                 id: Some(id.to_string()),
                 name: Some("tool".to_string()),
                 response: None,
+                ..Default::default()
             })],
         ));
         e

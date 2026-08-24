@@ -2618,6 +2618,7 @@ mod tests {
                     id: None,
                     name: Some("load_skill_resource".to_string()),
                     response: Some(response_map),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }],

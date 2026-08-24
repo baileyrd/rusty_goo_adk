@@ -61,6 +61,11 @@ pub struct FunctionCall {
 
 /// A function response part of a `Content`, e.g. a tool's result sent back
 /// to the model.
+///
+/// **C0195**: `parts` carries media a tool result held (an image, audio
+/// clip, or document) that `_extract_multimodal_parts` pulled out before
+/// the rest of the result was coerced to a plain JSON dict — see
+/// `adk-flows::functions_media`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[rusty_serde(rename_all = "camelCase")]
 pub struct FunctionResponse {
@@ -70,6 +75,22 @@ pub struct FunctionResponse {
     pub name: Option<String>,
     #[rusty_serde(default)]
     pub response: Option<std::collections::BTreeMap<String, Value>>,
+    #[rusty_serde(default)]
+    pub parts: Option<Vec<FunctionResponsePart>>,
+}
+
+/// `types.FunctionResponsePart` — a media-carrying entry of
+/// [`FunctionResponse::parts`] (C0195). Narrowed to the two variants ADK's
+/// own code ever constructs (`from_bytes`/`from_uri`), reusing
+/// [`MediaBlobStub`] for the same `mime_type`-real/rest-opaque shape
+/// [`Part::inline_data`]/[`Part::file_data`] already use.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct FunctionResponsePart {
+    #[rusty_serde(default)]
+    pub inline_data: Option<MediaBlobStub>,
+    #[rusty_serde(default)]
+    pub file_data: Option<MediaBlobStub>,
 }
 
 /// A tool's declared calling contract, advertised to the model —

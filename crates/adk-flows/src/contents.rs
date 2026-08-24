@@ -813,6 +813,7 @@ mod tests {
             id: Some(id.to_string()),
             name: Some(name.to_string()),
             response: None,
+            ..Default::default()
         })
     }
 

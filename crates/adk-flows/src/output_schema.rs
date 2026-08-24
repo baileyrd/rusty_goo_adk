@@ -150,6 +150,7 @@ mod tests {
                 id: Some("id1".to_string()),
                 name: Some(response_name.to_string()),
                 response: None,
+                ..Default::default()
             })],
         ));
         e.actions.set_model_response = set_model_response;
