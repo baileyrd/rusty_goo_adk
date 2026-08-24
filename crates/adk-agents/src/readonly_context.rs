@@ -110,13 +110,11 @@ mod tests {
     fn get_credential_looks_up_by_key() {
         let mut ic =
             InvocationContextBuilder::new("inv-1", Session::new("app", "user", "s1")).build();
+        let credential = AuthCredential::api_key("secret");
         ic.credential_by_key
-            .insert("k".to_string(), Value::String("secret".to_string()));
+            .insert("k".to_string(), credential.clone());
         let ctx = ReadonlyContext::new(ic);
-        assert_eq!(
-            ctx.get_credential("k"),
-            Some(&Value::String("secret".to_string()))
-        );
+        assert_eq!(ctx.get_credential("k"), Some(&credential));
         assert_eq!(ctx.get_credential("missing"), None);
     }
 }
