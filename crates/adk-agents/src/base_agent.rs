@@ -74,10 +74,38 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// error callback, per C0041/C0046).
 pub type AgentRunError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Blanket-implemented supertrait giving every `'static` type a
+/// trait-object-safe `as_any` — the standard workaround for `dyn Trait:
+/// Any` not being directly castable (`self` isn't `Sized` inside a
+/// default trait method). See [`AgentBehavior`]'s own doc for why this
+/// exists.
+pub trait AsAny: std::any::Any {
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T: std::any::Any> AsAny for T {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// The abstract behavior every concrete agent type supplies — the source's
 /// `_run_async_impl`/`_run_live_impl`. See the module doc for the
 /// `Vec<Event>` (vs. streaming) adaptation.
-pub trait AgentBehavior: Send + Sync {
+///
+/// **`AsAny` supertrait**: every real implementor is already an owned,
+/// `'static` struct (`BaseAgent::new` already requires `impl AgentBehavior
+/// + 'static`), so this costs nothing. It gives every behavior an
+/// `as_any` — a downcast escape hatch for code that holds a `BaseAgent`
+/// (fully type-erased: `Box<dyn AgentBehavior>`) and needs to recover a
+/// *concrete* behavior type for a *different* agent than the one
+/// currently running (a cross-tree lookup, e.g. an ancestor's
+/// `LlmAgent`-specific fields) — see `BaseAgent::as_any`'s own doc for
+/// the concrete callers. Purely additive: every existing implementor
+/// (`NoopBehavior`, `adk-flows::llm_flow::LlmFlow`, and every test
+/// double) needs zero changes, since `AsAny` is blanket-implemented for
+/// every `'static` type.
+pub trait AgentBehavior: AsAny + Send + Sync + 'static {
     fn run_async_impl<'a>(
         &'a self,
         ctx: &'a mut InvocationContext,
@@ -239,6 +267,25 @@ impl BaseAgent {
 
     pub fn description(&self) -> &str {
         &self.0.description
+    }
+
+    /// Downcast escape hatch onto this agent's concrete [`AgentBehavior`]
+    /// — e.g. `agent.as_any().downcast_ref::<adk_flows::llm_flow::LlmFlow>()`
+    /// from `adk-flows` (which already depends on this crate, so no new
+    /// crate-graph edge and no cycle is introduced by this method).
+    /// Needed for a cross-tree lookup: reading a *different* agent's
+    /// (e.g. an ancestor's) `LlmAgent`-specific fields, which
+    /// `BaseAgent`'s own type-erased `Box<dyn AgentBehavior>` can't
+    /// otherwise expose. See [`AgentBehavior::as_any`]'s own doc.
+    pub fn as_any(&self) -> &dyn std::any::Any {
+        // `.as_ref()` forces method resolution onto `&dyn AgentBehavior`
+        // (the supertrait vtable) rather than `Box<dyn AgentBehavior>`
+        // itself — `Box<dyn AgentBehavior>` is `Sized + 'static`, so it
+        // would otherwise also match `AsAny`'s blanket impl and be
+        // picked first (autoref/autoderef tries the receiver's exact
+        // type before derefing), giving the `Box`'s own `TypeId` instead
+        // of the concrete behavior's.
+        self.0.behavior.as_ref().as_any()
     }
 
     pub fn sub_agents(&self) -> &[BaseAgent] {
@@ -544,6 +591,37 @@ mod tests {
 
     fn ctx() -> InvocationContext {
         InvocationContextBuilder::new("inv-1", Session::new("app", "user", "s1")).build()
+    }
+
+    #[test]
+    fn as_any_downcasts_through_the_boxed_trait_object_to_the_concrete_behavior() {
+        // Regression test: `Box<dyn AgentBehavior>` is itself `Sized +
+        // 'static`, so it also (over-broadly) satisfies `AsAny`'s
+        // blanket impl — without the explicit `.as_ref()` deref in
+        // `BaseAgent::as_any`, method resolution picks that outer
+        // `Box`-level impl first (autoref/autoderef tries the exact
+        // receiver type before derefing further), returning the `Box`'s
+        // own `TypeId` instead of the concrete behavior's, so every
+        // downcast would silently always fail.
+        struct Marker;
+        impl AgentBehavior for Marker {
+            fn run_async_impl<'a>(
+                &'a self,
+                _ctx: &'a mut InvocationContext,
+            ) -> BoxFuture<'a, Result<Vec<Event>, AgentRunError>> {
+                Box::pin(async { Ok(Vec::new()) })
+            }
+            fn run_live_impl<'a>(
+                &'a self,
+                _ctx: &'a mut InvocationContext,
+            ) -> BoxFuture<'a, Result<Vec<Event>, AgentRunError>> {
+                Box::pin(async { Ok(Vec::new()) })
+            }
+        }
+
+        let agent = BaseAgent::new("marker_agent", Marker).unwrap();
+        assert!(agent.as_any().downcast_ref::<Marker>().is_some());
+        assert!(agent.as_any().downcast_ref::<NoopBehavior>().is_none());
     }
 
     #[test]

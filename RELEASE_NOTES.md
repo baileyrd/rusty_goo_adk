@@ -22,6 +22,50 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `AgentBehavior::as_any` downcast + real `global_instruction` root-walk (C0170)
+**2026-08-24** · (link added once this PR is opened)
+
+A small, foundational design-decision batch: adds a downcast escape hatch
+for `BaseAgent`'s type-erased behavior, then uses it to close a
+long-disclosed narrowing in the deprecated `global_instruction` field's
+resolution.
+
+- **Added:** `adk_agents::base_agent::{AgentBehavior::as_any, AsAny,
+  BaseAgent::as_any}` — lets code holding a `BaseAgent` recover a concrete
+  behavior type for a cross-tree lookup (e.g. an ancestor's
+  `LlmAgent`-specific fields), without `adk-agents` needing to know about
+  `adk-flows::llm_flow::LlmFlow` or any other concrete behavior type.
+  Purely additive: every existing `AgentBehavior` implementor needs zero
+  changes, via a blanket-implemented `AsAny` supertrait.
+- **Added:** `adk_agents::readonly_context::ReadonlyContext::agent`,
+  exposing the running agent for tree-walking.
+- **Fixed a real bug** caught before it ever shipped: `Box<dyn
+  AgentBehavior>` is itself `Sized + 'static`, so `AsAny`'s blanket impl
+  also (over-broadly) matches the `Box` itself — Rust's method resolution
+  picks that outer match before reaching the supertrait vtable, so every
+  downcast would have silently always failed. Fixed by forcing an
+  explicit `.as_ref()` deref before calling `.as_any()`; a same-crate
+  regression test now guards it.
+- **Closed:** `adk_flows::instructions::build_instructions`'s
+  `global_instruction` resolution (C0170) now genuinely walks to the tree
+  root (`ctx.agent().root_agent()` + the new downcast), matching the
+  source's `hasattr(root_agent, 'global_instruction')` gate — verified by
+  a real 2-level-tree test proving a sub-agent's `LlmAgent` picks up the
+  *root's* field, not its own. Falls back to the passed-in agent's own
+  field only when no tree context is set at all.
+- **Corrected 3 stale module docs** (`llm_agent.rs`, `canonical_model.rs`,
+  `instructions.rs`) that still claimed `LlmAgent` wasn't wired into
+  `BaseAgent`'s tree — it has been since `LlmFlow` landed (Phase 4 batch
+  14); `canonical_model.rs`'s ancestor-chain fallback (C0080/C0090) stays
+  deferred for a different, still-real reason: it's called once at
+  `LlmFlow::new` construction time, before any tree placement exists to
+  walk — a separate, larger change (deferring resolution to first-use)
+  than this batch's scope.
+- **Scope:** no new dependency, no breaking change. 3 new tests (1 in
+  `adk-agents`, 2 in `adk-flows`).
+
+---
+
 ## PR #TBD — `plugins/logging_plugin.py`: `LoggingPlugin` (C0362, partial)
 **2026-08-24** · (link added once this PR is opened)
 

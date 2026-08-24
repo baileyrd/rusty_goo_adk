@@ -2,20 +2,19 @@
 //! self-contained resolution helpers, ported from
 //! `google.adk.agents.llm_agent`.
 //!
-//! **Scope note**: `LlmAgent` in the source extends `BaseAgent` and its real
-//! behavior (`canonical_model`/`canonical_tools`/`_run_async_impl`) is
-//! driven by types this migration hasn't built yet: `BaseLlm`/`LlmRequest`/
-//! `LlmResponse`/`LLMRegistry` (Phase 3), `BaseTool`/`BaseToolset`/
-//! `ToolContext` (Phase 8), `BaseLlmFlow`/`SingleFlow`/`AutoFlow`/planners
-//! (Phase 4). Wiring `LlmAgent` into `BaseAgent`'s tree/`AgentBehavior` now
-//! would mean giving it a `_run_async_impl` that can't actually run anything
-//! — deferred rather than built as throwaway integration. This batch
-//! implements `LlmAgent` as a standalone struct covering the config fields
-//! and the handful of methods that don't need those forward phases
-//! (`canonical_instruction`/`canonical_global_instruction`, the
+//! **Scope note**: `LlmAgent` in the source extends `BaseAgent` directly;
+//! this port keeps `LlmAgent` a standalone config struct and gives it real
+//! tree placement through a separate `AgentBehavior` implementor instead —
+//! `adk-flows::llm_flow::LlmFlow` (Phase 4 batch 14) wraps an `LlmAgent`
+//! and is what actually goes into `BaseAgent::new`/`BaseAgent::build`. This
+//! batch implements `LlmAgent` itself as a standalone struct covering the
+//! config fields and the handful of methods that don't need forward-phase
+//! types (`canonical_instruction`/`canonical_global_instruction`, the
 //! `generate_content_config` validator, the `_llm_flow` single-vs-auto
-//! *decision*). Once Phase 3/4/8 land, `LlmAgent` gets reworked to actually
-//! implement `AgentBehavior` and become constructible via `BaseAgent`.
+//! *decision*) — `canonical_model`/`canonical_tools`/`_run_async_impl`
+//! itself live in `adk-flows` instead (see below and `llm_flow.rs`'s own
+//! module doc), not on `LlmAgent`, for the crate-dependency reasons
+//! explained there.
 //!
 //! **Partial, Phase 4 batch 1**: C0080/C0090 (`canonical_model`/
 //! `canonical_live_model`) are now implemented — but as free functions in
@@ -25,8 +24,12 @@
 //! `adk-agents` depending back on `adk-models` to give `LlmAgent` these
 //! methods directly would make the two crates depend on each other —
 //! `adk-flows` sits above both instead. Still left `REQUIRED` in the
-//! manifest: ancestor-agent-chain fallback (needs `LlmAgent` wired into
-//! `BaseAgent`'s tree), the source's memoization cache, and resolving
+//! manifest: ancestor-agent-chain fallback (now mechanically possible via
+//! `AgentBehavior::as_any`'s downcast, since `LlmAgent` *is* wired into
+//! `BaseAgent`'s tree via `LlmFlow` — but `canonical_model` is called once
+//! at `LlmFlow::new` construction time, before any tree placement exists to
+//! walk, so wiring this in means reconsidering that memoization design
+//! decision, not just adding the downcast call) and resolving
 //! `ModelRef::Instance` (a live `BaseLlm` passed directly) — see
 //! `canonical_model.rs`'s own module doc for why that last one specifically
 //! needs a crate-dependency restructuring, not just more code.
