@@ -22,6 +22,46 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/environment_simulation/`: config models + injection-only engine (C0486, C0487 partial, C0488 partial)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports deterministic tool-call fault injection for agent testing —
+`EnvironmentSimulationConfig` and the injection path of
+`EnvironmentSimulationEngine.simulate()` — deferring the LLM-synthesized
+mock-strategy fallback the source falls back to when no injection hits.
+
+- **Added:** `adk_tools::environment_simulation_config::{InjectedError,
+  InjectionConfig, MockStrategy, ToolSimulationConfig,
+  EnvironmentSimulationConfig}` (C0486 DONE). Every validator ported:
+  injected-error-xor-injected-response, the `injected_latency_seconds <=
+  120.0` constraint, the empty-injection-configs-requires-a-mock-strategy
+  check, and the non-empty/no-duplicate-tool_name check.
+- **Added:** `adk_tools::environment_simulation_engine
+  ::EnvironmentSimulationEngine` (C0487 partial). The injection-only path:
+  per-tool-config lookup, `match_args` filtering, a reseed-then-roll
+  probability check, injected latency, and the injected-error/injected-
+  response dict shape.
+- **Added:** `adk_tools::tool_connection_map::{StatefulParameter,
+  ToolConnectionMap}` + `adk_tools::environment_simulation_factory
+  ::EnvironmentSimulationFactory::create_callback` (C0488 partial).
+- **Wired:** `adk_features::feature_decorator::check_feature_enabled`
+  (C0647's guard function, landed but unwired previously) — its first
+  real call site, gating `EnvironmentSimulationConfig::validate` behind
+  `FeatureName::EnvironmentSimulation`.
+- **Disclosed narrowing:** the LLM-synthesized mock-response fallback
+  (`ToolConnectionAnalyzer`/`ToolSpecMockStrategy`) is blocked — this
+  port has no LLM-invocation path to drive it; `EnvironmentSimulationPlugin`/
+  `create_plugin` is blocked on the same `BasePlugin` tool-hook gap as
+  the existing C0356 deferral; `create_callback`'s output has no real
+  dispatch target yet, since this port's `before_tool_callback` type
+  takes no `tool`/`args` parameters; `adk_platform::random::Rng` matches
+  Python's `random.random()` range but not its Mersenne-Twister
+  algorithm, so a `random_seed` reproduces the same roll deterministically
+  within this port only.
+- **Scope:** no new dependency. 26 new tests.
+
+---
+
 ## PR #TBD — `tools/skill_toolset.py`: `RunSkillScriptTool`'s `code_executor` path, closing C0410
 **2026-08-24** · (link added once this PR is opened)
 

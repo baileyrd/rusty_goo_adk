@@ -5,6 +5,41 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::environment_simulation_config::{InjectedError, InjectionConfig,
+  MockStrategy, ToolSimulationConfig, EnvironmentSimulationConfig}` (C0486
+  DONE). 13 new tests. Ports every validator: injected-error-xor-injected-
+  response plus the `injected_latency_seconds <= 120.0` constraint, the
+  empty-injection-configs-requires-a-mock-strategy check, and the
+  non-empty/no-duplicate-tool_name check — all cascading correctly. Also
+  the first real call site for `adk_features::feature_decorator
+  ::check_feature_enabled` (C0647's guard function, landed but unwired
+  until now): the `@experimental(FeatureName.ENVIRONMENT_SIMULATION)` gate
+  every source type carries is checked once at `EnvironmentSimulationConfig
+  ::validate` rather than duplicated per leaf struct.
+  `simulation_model_configuration` reuses `adk_models::llm_request
+  ::GenerateContentConfigStub` instead of a new stub type. No new
+  dependency.
+- `adk-tools::environment_simulation_engine::EnvironmentSimulationEngine`
+  (C0487 partial — the injection-only `before_tool_callback` path). 9 new
+  tests. Ports per-tool-config lookup, `match_args` filtering, an
+  optional-reseed-then-roll probability check against
+  `adk_platform::random::Rng`, injected latency via `rusty_tokio::time
+  ::sleep`, and the injected-error/injected-response dict shape. Deferred,
+  disclosed in the module doc: the LLM-synthesized mock-response fallback
+  — this port has no LLM-invocation path to drive it. No new dependency.
+- `adk-tools::tool_connection_map::{StatefulParameter, ToolConnectionMap}`
+  + `adk-tools::environment_simulation_factory
+  ::{EnvironmentSimulationFactory::create_callback, SimulationCallback}`
+  (C0488 partial). 4 new tests. Ports the pure tool-connection data types
+  and a real `create_callback` closure with the source's exact
+  `Fn(tool, args) -> Future<Output = Option<dict>>` shape. Deferred,
+  disclosed in each module's own doc: `ToolConnectionAnalyzer`/
+  `ToolSpecMockStrategy` (LLM-blocked) and `EnvironmentSimulationPlugin`/
+  `create_plugin` (needs a `BasePlugin` tool-hook this port doesn't expose
+  yet, same gap as the existing C0356 deferral); `create_callback`'s
+  output also has no real dispatch target yet, since this port's
+  `before_tool_callback` type takes no `tool`/`args` parameters. No new
+  dependency.
 - `adk-tools::skill_toolset::SkillScriptCodeExecutor` +
   `{python_str_literal, python_bytes_literal, python_list_literal,
   python_dict_literal}` (C0410 DONE — the `code_executor`-configured
