@@ -50,6 +50,23 @@
 //! far) never read any of these, matching the source's own `del
 //! conversation_scenario, "not supported for per-invocation evaluation"`.
 //!
+//! **Eighth batch**: [`evaluation_generator`] (the pure event→`Invocation`
+//! grouping algorithm, C0623 — DONE) and [`agent_evaluator`] (`AgentEvaluator`'s
+//! file/dataset-loading and legacy-format helpers, C0619 — partial;
+//! `migrate_eval_data_to_new_schema`, C0620 — DONE). Neither needs a real
+//! `Runner`/LLM-invocation path. `evaluation_generator`'s
+//! `_collect_events_by_invocation_id` swaps its source `dict`'s grouping
+//! for a `HashMap` + parallel order-preserving `Vec<String>`, disclosed in
+//! that module's own doc as a case where (unlike this crate's other
+//! `HashMap`-for-grouping choices) iteration order is semantically
+//! load-bearing, since invocations are matched positionally against
+//! `expected_invocations` elsewhere. `agent_evaluator`'s `DatasetInput`
+//! enum models `_load_dataset`'s actual reachable `isinstance` dispatch
+//! (`str` path / `list[str]` of paths) rather than its broader, partly
+//! unreachable type hint; `AgentEvaluator.evaluate`/`evaluate_eval_set`
+//! themselves stay `REQUIRED`, needing C0621/C0622/C0624's still-unbuilt
+//! inference generation. No new dependency.
+//!
 //! **Seventh batch**: [`llm_as_judge_utils`] (`Label`, text-extraction/
 //! score/JSON-serialization helpers, C0947 — a genuine inventory gap
 //! discovered and added to the manifest mid-window, not folded into any
@@ -161,6 +178,7 @@
 //! field, so the same guarantee holds automatically rather than needing
 //! `PrivateAttr`'s runtime enforcement.
 
+pub mod agent_evaluator;
 pub mod app_details;
 pub mod audio_utils;
 pub mod base_eval_service;
@@ -177,6 +195,7 @@ pub mod eval_set_results_manager;
 pub mod eval_set_results_manager_utils;
 pub mod eval_sets_manager;
 pub mod eval_sets_manager_utils;
+pub mod evaluation_generator;
 pub mod evaluator;
 pub mod final_response_match_v1;
 pub mod in_memory_eval_sets_manager;

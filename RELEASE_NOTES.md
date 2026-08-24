@@ -22,6 +22,35 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: event→`Invocation` grouping + `AgentEvaluator`'s dataset/legacy-format helpers (C0623, C0619 partial, C0620)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the pure-computation parts of `evaluation_generator.py` and
+`agent_evaluator.py` that don't need a real `Runner`/LLM-invocation path.
+
+- **Added:** `adk_eval::evaluation_generator::{collect_events_by_invocation_id,
+  convert_events_to_eval_invocations}` (C0623 DONE) — the event→`Invocation`
+  grouping algorithm: text-over-audio-only final-response preference,
+  should-add-event inclusion rules, and final-event content-dedup. Order
+  preservation (unlike this crate's other `HashMap`-for-grouping choices)
+  is semantically load-bearing here, so it's kept via a parallel
+  `Vec<String>` alongside the grouping `HashMap`.
+- **Added:** `adk_eval::agent_evaluator::{load_json,
+  find_config_for_test_file, get_initial_session, DatasetInput,
+  load_dataset, validate_input, get_eval_set_from_old_format,
+  load_eval_set_from_file}` (C0619 partial) — everything except
+  `AgentEvaluator.evaluate`/`evaluate_eval_set` themselves, which need
+  C0621/C0622/C0624's still-unbuilt inference generation. Cross-verified
+  the assert-vs-`ValidationError` control flow in
+  `_load_eval_set_from_file` against the real source logic run
+  standalone. `DatasetInput` models `_load_dataset`'s actual reachable
+  `isinstance` dispatch, not its broader, partly-unreachable type hint.
+- **Added:** `adk_eval::agent_evaluator::migrate_eval_data_to_new_schema`
+  (C0620 DONE) — the schema-migration utility, exactly ported.
+- **Scope:** no new dependency. 25 new tests.
+
+---
+
 ## PR #TBD — `evaluation/`: `llm_as_judge_utils` + the rubric-evaluator's harness-independent parts (C0947, C0601)
 **2026-08-24** · (link added once this PR is opened)
 
