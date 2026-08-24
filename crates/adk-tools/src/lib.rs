@@ -93,6 +93,28 @@
 //! `environment_toolset`'s for why an uncaught initialize-failure
 //! translates to a panic rather than widening the already-shipped
 //! `BaseToolset` trait's infallible signature.
+//!
+//! **Environment simulation batch**: [`environment_simulation_config`]
+//! (`InjectedError`/`InjectionConfig`/`MockStrategy`/
+//! `ToolSimulationConfig`/`EnvironmentSimulationConfig`, C0486 — also the
+//! first real call site for `adk_features::feature_decorator
+//! ::check_feature_enabled`, C0647's guard function, landed but unwired
+//! last batch), [`environment_simulation_engine`]
+//! (`EnvironmentSimulationEngine::simulate`'s injection-only path — the
+//! probability roll, `match_args` filtering, latency, and injected
+//! error/response, C0487 partial), and [`tool_connection_map`]/
+//! [`environment_simulation_factory`] (`StatefulParameter`/
+//! `ToolConnectionMap` as pure data, `EnvironmentSimulationFactory
+//! ::create_callback` producing a real closure with the source's shape,
+//! C0488 partial). Deferred, disclosed in each module's own doc: the
+//! LLM-synthesized mock-strategy fallback (`ToolConnectionAnalyzer`,
+//! `ToolSpecMockStrategy`, `agent.canonical_tools`) and
+//! `EnvironmentSimulationPlugin`/`create_plugin` (needs a `BasePlugin`
+//! tool-hook this port doesn't expose yet, same gap as the existing C0356
+//! deferral) — this port has no LLM-invocation path to drive either, and
+//! no tool-scoped `before_tool_callback` type (`adk_agents::llm_agent
+//! ::LlmCallback` takes `&mut Context` only, no `tool`/`args`) to wire
+//! `create_callback`'s output into regardless. No new dependency.
 
 pub mod agent_tool;
 pub mod append_tools;
@@ -106,6 +128,9 @@ pub mod code_execution_utils;
 pub mod code_executor_context;
 pub mod edit_file_tool;
 pub mod enterprise_search_tool;
+pub mod environment_simulation_config;
+pub mod environment_simulation_engine;
+pub mod environment_simulation_factory;
 pub mod environment_toolset;
 pub mod example_tool;
 pub mod execute_tool;
@@ -135,6 +160,7 @@ pub mod skill_toolset;
 pub mod skills_models;
 pub mod skills_prompt;
 pub mod tool_confirmation;
+pub mod tool_connection_map;
 pub mod tool_context;
 pub mod transfer_to_agent_tool;
 pub mod unsafe_local_code_executor;
