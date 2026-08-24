@@ -22,6 +22,32 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `RemoteMcpServer`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::remote_mcp_server::{RemoteMcpServer,
+  HeaderProvider}` (C0491, partial) — the declarative model describing
+  a server-side MCP server for the Managed Agents API: `ManagedAgent`
+  forwards the server's URL and headers to `interactions.create`, and
+  the Interactions backend opens the MCP session and runs the tools —
+  ADK itself never connects to this server, contrast with the
+  client-side `McpToolset`. Adds a new `resolved_headers` method
+  implementing the documented `header_provider`-wins-on-conflict merge
+  order.
+- **Disclosed:** `extra='forbid'`/`arbitrary_types_allowed` (Pydantic
+  schema/validation concerns) have no Rust equivalent to port — a
+  struct literal can't carry unknown fields in the first place.
+- **Disclosed, not built yet:** nothing in this port constructs a
+  `RemoteMcpServer` in a live turn — the Managed Agents API
+  `interactions.create` request path (`ManagedAgent`) is a separate,
+  larger, unbuilt capability. Unlike sibling row C0490 (`NodeTool`,
+  blocked outright on the unbuilt `workflow::BaseNode` graph engine),
+  this one has no missing dependency — it's simply ahead of its own
+  only caller.
+- 5 new tests.
+
+---
+
 ## PR #TBD — `request_input_tool`
 **2026-08-24** · (link added once this PR is opened)
 

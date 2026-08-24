@@ -5,6 +5,16 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::remote_mcp_server::{RemoteMcpServer, HeaderProvider}`
+  (Phase 8, C0491, partial) — the declarative model for a server-side
+  MCP server used by the Managed Agents API (`url`/`name`/`headers`/
+  `allowed_tools`/`header_provider`), plus a new `resolved_headers`
+  method implementing the documented `header_provider`-wins-on-
+  conflict merge behavior. Nothing in this port constructs one in a
+  live turn yet — the Managed Agents API `interactions.create` request
+  path (`ManagedAgent`) is a separate, unbuilt capability; this row is
+  ahead of its own only caller, not blocked on a missing dependency.
+  5 new tests.
 - `adk-tools::request_input_tool::{request_input, request_input_tool,
   REQUEST_INPUT_FUNCTION_CALL_NAME}` (Phase 8, C0492, partial) — a
   `LongRunningFunctionTool` asking the user a free-text/structured
