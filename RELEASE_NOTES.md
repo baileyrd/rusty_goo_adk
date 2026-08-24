@@ -22,6 +22,55 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `runners.py`: `Runner::run` sync wrapper (C0877, C0878, C0879, C0880)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the local-testing/convenience-only synchronous entrypoint, so a
+caller that isn't already inside `async` code (or is inside one and
+can't `await`) can still drive the runner.
+
+- **Added:** `adk_runners::Runner::run(user_id, session_id, new_message,
+  state_delta, run_config)` — spins a dedicated OS thread via
+  `adk_platform::thread::create_thread` (C0005) running its own
+  `rusty_tokio::Runtime`, mirroring the source's `asyncio.run(...)` on a
+  background thread. `Runner` now derives `Clone` so an owned copy can
+  move onto that thread — every field is already a cheap `Arc`/value
+  clone. New dependency: `adk-runners` now depends on `adk-platform`.
+- **Verified:** callable from inside an already-running `rusty_tokio`
+  runtime without deadlocking — the actual reason the source needs a
+  separate thread rather than just calling `asyncio.run()` on the
+  caller's own thread.
+- **Disclosed narrowing:** the source bridges events one at a time
+  through a blocking `queue.Queue`, preserving "events yielded before a
+  failure ARE yielded before the exception" (C0879) across the thread
+  boundary. This port's `run_async_with_config` already collapses to a
+  single batched `Result<Vec<Event>, RunnerError>` rather than a stream
+  — an already-established narrowing from the source's own async
+  generator — so `run` collapses to one background computation whose
+  whole result becomes available at once; there's no partial-events
+  case left to preserve.
+- **C0878:** Rust has no `Exception`/`BaseException`/`SystemExit`/
+  `CancelledError` hierarchy to distinguish. The structural analog is
+  `JoinHandle::join`'s own `Result`: a normal `Err(RunnerError::AgentRun(..))`
+  from the background computation surfaces unchanged; a *panic* on the
+  background thread — this port's only abnormal-termination case — is
+  caught by `join()` and re-wrapped into `RunnerError::AgentRun` naming
+  the panic payload, rather than re-panicking the calling thread.
+- **C0880:** closes a small pre-existing gap found while wiring this up
+  — `run_async_with_config` didn't accept `state_delta` at all before
+  this PR (the source's own `run_async` does). Added as a new
+  `Option<HashMap<String, Value>>` parameter, applied onto the appended
+  user event's `actions.state_delta` when non-empty (mirroring
+  `_append_new_message_to_session`'s own `if state_delta:` truthiness
+  check), then forwarded straight through from `run`.
+- **Housekeeping:** corrected a stale C0886 evidence note (compaction
+  was closed by an earlier PR this session, but its "not ported"
+  wording was never updated) and a stale module-doc line still listing
+  `run` under "not ported this batch".
+- **Scope:** 5 new tests.
+
+---
+
 ## PR #TBD — `runners.py`: invocation-context config wiring (C0918 N/A, C0919 partial)
 **2026-08-24** · (link added once this PR is opened)
 

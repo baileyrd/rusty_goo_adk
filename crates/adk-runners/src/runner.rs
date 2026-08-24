@@ -135,13 +135,14 @@
 //! `LlmAgent.code_executor` is still an opaque `Value` placeholder
 //! (C0088), the same architecture-investment blocker as C0092/C0429.
 //!
+//! **`Runner::run`** (C0877-C0880): a synchronous wrapper around
+//! [`Runner::run_async_with_config`] — see its own doc for the
+//! thread+runtime bridging shape and its disclosed narrowings.
+//!
 //! **Not ported this batch**: `_find_agent_to_run` (C0907-C0910, picks up
 //! a resumed multi-turn conversation's last-active agent — needs
 //! resumability, always false here); `_resolve_invocation_id` (C0855,
-//! same reason); `Runner.run()`'s sync thread-bridging wrapper
-//! (C0877-C0880, a local-testing convenience — this port's whole call
-//! surface is already async-native, so there's less need for it, and it
-//! can be added later without disturbing anything here); the legacy
+//! same reason); the legacy
 //! resumable-path context-setup helpers (`_setup_context_for_new_invocation`/
 //! `_setup_context_for_resumed_invocation`/`_find_user_message_for_invocation`,
 //! C0915-C0917, entangled with resumability wiring `Runner` doesn't have
@@ -335,7 +336,10 @@ pub trait CompactionTrigger: Send + Sync {
 
 /// C0840-C0845 (narrowed, see the module doc): the core execution engine.
 /// Wraps exactly one [`BaseAgent`] — no `App`/bare-node union, since
-/// neither exists in this port.
+/// neither exists in this port. `Clone` (every field is a cheap
+/// `Arc`/value clone) exists so [`Runner::run`] (C0877-C0880) can move an
+/// owned copy onto its background thread.
+#[derive(Clone)]
 pub struct Runner {
     app_name: String,
     agent: BaseAgent,
@@ -578,20 +582,25 @@ impl Runner {
         session_id: &str,
         new_message: Content,
     ) -> Result<Vec<Event>, RunnerError> {
-        self.run_async_with_config(user_id, session_id, new_message, RunConfig::default())
+        self.run_async_with_config(user_id, session_id, new_message, None, RunConfig::default())
             .await
     }
 
     /// C0884-C0886/C0895-C0899: [`Runner::run_async`], but also accepting
-    /// a per-call [`RunConfig`] — mirrors the source's optional
-    /// `run_config` parameter (`RunConfig()` default). See the module doc
-    /// for the full `_exec_with_plugin`/`_handle_new_message` mapping and
-    /// its disclosed narrowings.
+    /// an optional `state_delta` (C0880: applied onto the appended user
+    /// event's `actions.state_delta`, mirroring `_append_new_message_to_session`
+    /// — only set when non-empty, matching the source's own `if
+    /// state_delta:` truthiness check) and a per-call [`RunConfig`] —
+    /// mirrors the source's optional `run_config` parameter (`RunConfig()`
+    /// default). See the module doc for the full
+    /// `_exec_with_plugin`/`_handle_new_message` mapping and its disclosed
+    /// narrowings.
     pub async fn run_async_with_config(
         &self,
         user_id: &str,
         session_id: &str,
         mut new_message: Content,
+        state_delta: Option<std::collections::HashMap<String, Value>>,
         run_config: RunConfig,
     ) -> Result<Vec<Event>, RunnerError> {
         if new_message.parts.is_empty() {
@@ -651,6 +660,9 @@ impl Runner {
 
         let mut user_event = Event::new(invocation_id.clone(), "user", NodeInfo::new("root"));
         user_event.content = Some(new_message);
+        if let Some(state_delta) = state_delta.filter(|delta| !delta.is_empty()) {
+            user_event.actions.state_delta = state_delta;
+        }
         self.session_service
             .append_event(&mut session, user_event)
             .await;
@@ -926,6 +938,7 @@ impl Runner {
                     user_id,
                     &session.id,
                     Content::user_text(message),
+                    None,
                     run_config.clone(),
                 )
                 .await?;
@@ -937,6 +950,94 @@ impl Runner {
             }
         }
         Ok(collected_events)
+    }
+
+    /// C0877-C0880: a synchronous wrapper around
+    /// [`Runner::run_async_with_config`], documented in the source as a
+    /// local-testing/convenience-only entrypoint ("Consider using
+    /// `run_async` for production usage"). Spins a dedicated OS thread via
+    /// [`adk_platform::thread::create_thread`] (C0005) running its own
+    /// [`rusty_tokio::Runtime`], so this can be called safely from inside
+    /// an already-running async context without nesting runtimes —
+    /// mirroring the source's own reason for running `asyncio.run(...)` on
+    /// a background thread rather than the calling one.
+    ///
+    /// **Disclosed narrowing (C0877/C0879)**: the source is a sync
+    /// `Generator[Event, None, None]`, bridging events one at a time
+    /// through a blocking `queue.Queue` so a caller can begin consuming
+    /// events before the run finishes, and can stop iterating early to
+    /// abandon the rest (nothing is raised in that case; the background
+    /// thread is left to finish on its own). This port's own
+    /// `run_async_with_config` already collapses to a single batched
+    /// `Result<Vec<Event>, RunnerError>` rather than a stream — an
+    /// already-established narrowing from the source's own async
+    /// generator, see the module doc — so there is no incremental
+    /// event-at-a-time bridging to reproduce here either; `run` collapses
+    /// to a single background computation whose whole result becomes
+    /// available at once. "Events produced before a failure are yielded
+    /// before the exception is raised" (C0879) has no partial case to
+    /// preserve for the same reason: a failure here means zero output
+    /// events were produced, matching this crate's own established scope
+    /// cut.
+    ///
+    /// **C0878**: the source distinguishes a plain `Exception` (re-raised
+    /// directly on the calling thread) from any other `BaseException`
+    /// (wrapped in a `RuntimeError` chained from the original — so a
+    /// background-thread cancellation doesn't read as the *calling*
+    /// thread's own task being cancelled, and a `SystemExit` doesn't kill
+    /// the caller's process). Rust has no such exception hierarchy to
+    /// preserve; the structural analog is `JoinHandle::join`'s own
+    /// `Result` — an `Err(RunnerError::AgentRun(..))` returned normally by
+    /// the background computation surfaces as-is, while a *panic* on the
+    /// background thread (the only way this port's own call stack can
+    /// terminate abnormally, with no cancellation/`SystemExit` concept to
+    /// preserve) is caught by `join()` and re-wrapped into
+    /// `RunnerError::AgentRun` naming the panic payload, rather than
+    /// re-panicking the calling thread.
+    ///
+    /// **C0880**: `state_delta` forwards straight through to
+    /// [`Runner::run_async_with_config`].
+    pub fn run(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        new_message: Content,
+        state_delta: Option<std::collections::HashMap<String, Value>>,
+        run_config: RunConfig,
+    ) -> Result<Vec<Event>, RunnerError> {
+        let runner = self.clone();
+        let user_id = user_id.to_string();
+        let session_id = session_id.to_string();
+        let handle = adk_platform::thread::create_thread(move || {
+            let runtime = rusty_tokio::Runtime::new()
+                .expect("failed to start a background async runtime for Runner::run");
+            runtime.block_on(runner.run_async_with_config(
+                &user_id,
+                &session_id,
+                new_message,
+                state_delta,
+                run_config,
+            ))
+        });
+        handle.join().unwrap_or_else(|panic| {
+            Err(RunnerError::AgentRun(format!(
+                "Agent run terminated by a panic on the background thread: {}",
+                panic_message(&panic)
+            )))
+        })
+    }
+}
+
+/// [`Runner::run`]'s panic-message extraction — mirrors the common
+/// `Box<dyn Any + Send>` downcast dance for the two payload shapes
+/// `panic!`/`.unwrap()`/`.expect()` actually produce.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        message.to_string()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "<non-string panic payload>".to_string()
     }
 }
 
@@ -1253,6 +1354,92 @@ mod tests {
     async fn close_flushes_the_session_service() {
         let runner = runner(true);
         runner.close().await;
+    }
+
+    #[test]
+    fn run_is_a_sync_wrapper_matching_run_async() {
+        let runner = runner(true);
+        let events = runner
+            .run(
+                "user",
+                "s1",
+                Content::user_text("hi"),
+                None,
+                RunConfig::default(),
+            )
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].author, "echo_agent");
+    }
+
+    #[test]
+    fn run_forwards_state_delta_onto_the_appended_user_event() {
+        // C0880: `state_delta` forwards straight through to
+        // `run_async_with_config`, ending up on the appended user event's
+        // `actions.state_delta`.
+        let runner = runner(true);
+        let mut state_delta = std::collections::HashMap::new();
+        state_delta.insert("count".to_string(), Value::Int(1));
+
+        runner
+            .run(
+                "user",
+                "s1",
+                Content::user_text("hi"),
+                Some(state_delta),
+                RunConfig::default(),
+            )
+            .unwrap();
+
+        let rt = rusty_tokio::Runtime::new().unwrap();
+        let session = rt
+            .block_on(runner.session_service.get_session("app", "user", "s1"))
+            .unwrap();
+        assert_eq!(
+            session.events[0].actions.state_delta.get("count"),
+            Some(&Value::Int(1))
+        );
+    }
+
+    #[test]
+    fn run_propagates_an_agent_run_error() {
+        let runner = Runner::new(
+            "app",
+            BaseAgent::new("failing_agent", FailingBehavior).unwrap(),
+            Arc::new(InMemorySessionService::new()),
+        )
+        .with_auto_create_session(true);
+
+        let err = runner
+            .run(
+                "user",
+                "s1",
+                Content::user_text("hi"),
+                None,
+                RunConfig::default(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, RunnerError::AgentRun(_)));
+    }
+
+    #[rusty_tokio::test]
+    async fn run_is_callable_from_within_an_already_running_async_runtime() {
+        // C0877's whole reason for existing: a caller already inside an
+        // async context (like this test itself) must be able to call the
+        // sync `run` without deadlocking or panicking from a nested
+        // runtime — `run` spawns its own OS thread with its own runtime
+        // rather than trying to `block_on` from here.
+        let runner = runner(true);
+        let events = runner
+            .run(
+                "user",
+                "s1",
+                Content::user_text("hi"),
+                None,
+                RunConfig::default(),
+            )
+            .unwrap();
+        assert_eq!(events.len(), 1);
     }
 
     #[test]
@@ -1747,7 +1934,7 @@ mod tests {
         };
 
         runner
-            .run_async_with_config("user", "s1", message, run_config)
+            .run_async_with_config("user", "s1", message, None, run_config)
             .await
             .unwrap();
 
@@ -1848,7 +2035,7 @@ mod tests {
         );
 
         runner
-            .run_async_with_config("user", "s1", message, RunConfig::default())
+            .run_async_with_config("user", "s1", message, None, RunConfig::default())
             .await
             .unwrap();
 
