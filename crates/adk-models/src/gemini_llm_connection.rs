@@ -136,45 +136,12 @@ struct ToolResponseEnvelope {
     tool_response: ToolResponseBody,
 }
 
-/// `utils/content_utils.py::is_audio_part` — pulled forward for
-/// [`filter_audio_parts`]. See `MediaBlobStub`'s doc for why `mime_type` is
-/// the only inspectable field.
-fn is_audio_part(part: &Part) -> bool {
-    let mime_starts_with_audio = |blob: &adk_genai::content::MediaBlobStub| {
-        blob.mime_type
-            .as_deref()
-            .map(|m| m.starts_with("audio/"))
-            .unwrap_or(false)
-    };
-    part.inline_data
-        .as_ref()
-        .map(mime_starts_with_audio)
-        .unwrap_or(false)
-        || part
-            .file_data
-            .as_ref()
-            .map(mime_starts_with_audio)
-            .unwrap_or(false)
-}
-
-/// `utils/content_utils.py::filter_audio_parts`.
+/// `utils/content_utils.py::filter_audio_parts` — now a shared,
+/// single-source-of-truth port at `adk_genai::content_utils`
+/// (consolidated there in the C0927-C0929 batch); this local wrapper
+/// name is kept so this file's call sites don't need touching.
 fn filter_audio_parts(content: &Content) -> Option<Content> {
-    if content.parts.is_empty() {
-        return None;
-    }
-    let filtered: Vec<Part> = content
-        .parts
-        .iter()
-        .filter(|part| !is_audio_part(part))
-        .cloned()
-        .collect();
-    if filtered.is_empty() {
-        return None;
-    }
-    Some(Content {
-        role: content.role.clone(),
-        parts: filtered,
-    })
+    adk_genai::content_utils::filter_audio_parts(content)
 }
 
 /// The Gemini Live model connection. See the module doc for what's
