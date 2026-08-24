@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::auth_credential` camelCase wire format (Phase 9,
+  C0501, partial) — `#[rusty_serde(rename_all = "camelCase")]` on
+  `HttpCredentials`/`HttpAuth`/`OAuth2Auth`/`ServiceAccount`/
+  `AuthCredential`, matching `BaseModelWithConfig`'s camelCase alias
+  generator. Deliberately excludes `ServiceAccountCredential`: its
+  fields mirror a real downloaded GCP service-account JSON key file,
+  which is itself snake_case — applying camelCase there would have
+  broken parsing an actual key file, the one real input format that
+  struct exists for. Disclosed: `populate_by_name=True`'s dual-name
+  accept (snake_case *or* camelCase on input) has no port — this
+  port's `Deserialize` only accepts the one configured wire name. Also
+  marks C0502 (`AuthCredential.resource_ref`) DONE — already ported in
+  the prior batch, just not yet reflected in the manifest. 3 new
+  tests.
 - `adk-agents::auth_credential::{AuthCredentialTypes, HttpCredentials,
   HttpAuth, TokenEndpointAuthMethod, OAuth2Auth,
   ServiceAccountCredential, ServiceAccount, AuthCredential}` (Phase 9,
