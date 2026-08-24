@@ -17,13 +17,14 @@
 //! the plain `Evaluator` trait/`PerInvocationResult`/`EvaluationResult`
 //! half of C0600 is ported here.
 //!
-//! **C0612, partial**: only `BaseCriterion`/`ToolTrajectoryCriterion`
-//! (plus its nested `MatchType`) are ported. `LlmAsAJudgeCriterion`/
-//! `RubricsBasedCriterion`/`HallucinationsCriterion`/
-//! `LlmBackedUserSimulatorCriterion`/`JudgeModelOptions` all exist only
-//! to configure an LLM-judge metric, which isn't built this batch;
-//! `Interval`/`MetricValueInfo`/`MetricInfo`/`MetricInfoProvider` are
-//! metric-catalog metadata types with no consumer yet either.
+//! **C0612**: `BaseCriterion`/`ToolTrajectoryCriterion` (plus its nested
+//! `MatchType`) landed in this first batch; `Interval`/`MetricValueInfo`/
+//! `MetricInfo`/`MetricInfoProvider` landed alongside the metric-catalog
+//! providers (C0604); `LlmAsAJudgeCriterion`/`RubricsBasedCriterion`/
+//! `HallucinationsCriterion`/`LlmBackedUserSimulatorCriterion`/
+//! `JudgeModelOptions` — the remaining criterion subtypes, which exist
+//! only to *configure* an LLM-judge metric but don't call one
+//! themselves — landed in the fourth batch below, completing C0612.
 //!
 //! **Second batch**: [`eval_rubrics`] (`Rubric`/`RubricContent`/
 //! `RubricScore`, C0607), [`app_details`] (`AgentDetails`/`AppDetails`,
@@ -48,6 +49,15 @@
 //! `TrajectoryEvaluator`/`RougeEvaluator` (the only `Evaluator`s built so
 //! far) never read any of these, matching the source's own `del
 //! conversation_scenario, "not supported for per-invocation evaluation"`.
+//!
+//! **Fourth batch**: [`eval_config`] (`EvalConfig`/`CustomMetricConfig`/
+//! `LiveModelConfig`, C0611) and the rest of [`eval_metrics`]'s criterion
+//! types (`JudgeModelOptions`/`LlmAsAJudgeCriterion`/
+//! `RubricsBasedCriterion`/`HallucinationsCriterion`/
+//! `LlmBackedUserSimulatorCriterion`, closing out C0612 — see that
+//! module's own doc for why these are pure data models despite existing
+//! only to configure an LLM-judge metric, same reasoning as `Rubric`/
+//! `RubricScore` before them).
 //!
 //! **Third batch — local persistence**: [`path_validation`] (C0614),
 //! [`eval_sets_manager`] (the `EvalSetsManager` trait + shared
@@ -98,6 +108,7 @@ pub mod audio_utils;
 pub mod constants;
 pub mod conversation_scenarios;
 pub mod eval_case;
+pub mod eval_config;
 pub mod eval_metrics;
 pub mod eval_result;
 pub mod eval_rubrics;
