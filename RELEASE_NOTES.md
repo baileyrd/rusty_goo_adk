@@ -22,6 +22,31 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `optimization/`: `AgentOptimizer`/`Sampler`/data types (C0636, C0637)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports `optimization/`'s pure interfaces — no LLM call lives in either
+row; concrete LLM-touching optimizers/samplers (`SimplePromptOptimizer`,
+GEPA, `LocalEvalSampler`) stay their own, still-blocked rows.
+
+- **Added:** `adk_agents::agent_optimizer::AgentOptimizer` (C0636 DONE).
+- **Added:** `adk_agents::sampler::{Sampler, ExampleSet}` and
+  `adk_agents::optimization_data_types::{SamplingResult,
+  BaseSamplingResult, UnstructuredSamplingResult, AgentWithScores,
+  BaseAgentWithScores, OptimizerResult}` (C0637 DONE).
+- **Disclosed narrowing:** the source's pydantic-generic bounds
+  (`SamplingResultT`/`AgentWithScoresT`) become traits rather than base
+  structs callers subclass; `sample_and_score`'s Python-style default
+  parameter values have no Rust equivalent, so every caller passes
+  every argument explicitly; `BaseAgentWithScores::optimized_agent`
+  holds an `Arc<LlmAgent>` handle since `LlmAgent` has neither `Clone`
+  nor `Debug`.
+- **Scope:** no new dependency (folded into `adk-agents`, which already
+  owns `LlmAgent` — the same placement reasoning `app_configs.rs`
+  established for `apps/_configs.py`). 8 new tests.
+
+---
+
 ## PR #TBD — `auth/`: auth-scheme cluster — `AuthScheme`/`AuthConfig`/`build_auth_headers`/`AuthProviderRegistry` (C0503, C0504, C0522, C0516, C0498)
 **2026-08-24** · (link added once this PR is opened)
 
