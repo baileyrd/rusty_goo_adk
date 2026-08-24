@@ -36,8 +36,12 @@
 //! is a standalone struct here, not a graph node, until that phase lands.
 //! OTel span/context propagation (`_instrumentation.record_agent_invocation`,
 //! `opentelemetry::context::attach`/`detach`) is Phase 12 and is a no-op
-//! here. `PluginManager`'s hooks (Phase 7) are real but structurally
-//! always-`None` for the zero-plugins case — see `services.rs`.
+//! here. `PluginManager`'s agent-level hooks (C0354) are real (see
+//! `services.rs`) and wired here: `run_async`/`run_live` now read the
+//! actual `PluginManager` off the built `InvocationContext` (`ctx.plugin_manager`)
+//! instead of constructing a fresh, always-empty one — a latent bug this
+//! batch fixes, since a `Runner`-configured `PluginManager` would
+//! otherwise silently never run.
 //! `BaseAgent::from_config`/`_parse_config`/`BaseAgentConfig` (C0047, the
 //! deprecated YAML-loading pipeline) is a data-shape-only capability for now
 //! (see `base_agent_config.rs`); its dynamic agent/callback *resolution*
@@ -324,13 +328,15 @@ impl BaseAgent {
     /// short-circuited), stopping at the first non-`None` result. Emits a
     /// state-delta-only event if a callback mutated state without returning
     /// content.
-    fn handle_before_agent_callback(
+    async fn handle_before_agent_callback(
         &self,
         ctx: &InvocationContext,
         plugin_manager: &PluginManager,
     ) -> Option<Event> {
         let mut callback_ctx = Context::new(ctx.clone());
-        let mut content = plugin_manager.run_before_agent_callback();
+        let mut content = plugin_manager
+            .run_before_agent_callback(self, &mut callback_ctx)
+            .await;
 
         if content.is_none() {
             for callback in self.canonical_before_agent_callbacks() {
@@ -370,13 +376,15 @@ impl BaseAgent {
     /// C0038/C0045: after-agent callback chain — same shape as
     /// [`Self::handle_before_agent_callback`], but never sets
     /// `end_invocation` (that's a before-callback-only effect).
-    fn handle_after_agent_callback(
+    async fn handle_after_agent_callback(
         &self,
         ctx: &InvocationContext,
         plugin_manager: &PluginManager,
     ) -> Option<Event> {
         let mut callback_ctx = Context::new(ctx.clone());
-        let mut content = plugin_manager.run_after_agent_callback();
+        let mut content = plugin_manager
+            .run_after_agent_callback(self, &mut callback_ctx)
+            .await;
 
         if content.is_none() {
             for callback in self.canonical_after_agent_callbacks() {
@@ -402,13 +410,20 @@ impl BaseAgent {
         None
     }
 
-    /// C0046: notification-only error callback. Any exception the plugin
-    /// hook itself raises would be logged+suppressed here (no plugin hook
-    /// can panic yet, since `PluginManager` has none registered — see
-    /// `services.rs`); the triggering error is always the caller's to
-    /// re-raise/propagate, never this method's.
-    fn handle_agent_error_callback(&self, _plugin_manager: &PluginManager, _error: &AgentRunError) {
-        // No plugins registered yet (Phase 7); nothing to notify.
+    /// C0046: notification-only error callback. This always runs every
+    /// registered plugin regardless of what any of them do (C0357/C0360);
+    /// the triggering error is always the caller's to re-raise/propagate,
+    /// never this method's.
+    async fn handle_agent_error_callback(
+        &self,
+        ctx: &InvocationContext,
+        plugin_manager: &PluginManager,
+        error: &AgentRunError,
+    ) {
+        let mut callback_ctx = Context::new(ctx.clone());
+        plugin_manager
+            .run_on_agent_error_callback(self, &mut callback_ctx, error)
+            .await;
     }
 
     /// C0041: primary text-conversation entrypoint. Wraps
@@ -421,10 +436,13 @@ impl BaseAgent {
         parent_context: &InvocationContext,
     ) -> Result<Vec<Event>, AgentRunError> {
         let mut ctx = parent_context.with_agent(self.clone());
-        let plugin_manager = PluginManager;
+        let plugin_manager = ctx.plugin_manager.clone();
         let mut events = Vec::new();
 
-        if let Some(event) = self.handle_before_agent_callback(&ctx, &plugin_manager) {
+        if let Some(event) = self
+            .handle_before_agent_callback(&ctx, &plugin_manager)
+            .await
+        {
             events.push(event);
         }
         if ctx.end_invocation {
@@ -434,7 +452,8 @@ impl BaseAgent {
         match self.0.behavior.run_async_impl(&mut ctx).await {
             Ok(produced) => events.extend(produced),
             Err(error) => {
-                self.handle_agent_error_callback(&plugin_manager, &error);
+                self.handle_agent_error_callback(&ctx, &plugin_manager, &error)
+                    .await;
                 return Err(error);
             }
         }
@@ -443,7 +462,10 @@ impl BaseAgent {
             return Ok(events);
         }
 
-        if let Some(event) = self.handle_after_agent_callback(&ctx, &plugin_manager) {
+        if let Some(event) = self
+            .handle_after_agent_callback(&ctx, &plugin_manager)
+            .await
+        {
             events.push(event);
         }
 
@@ -460,10 +482,13 @@ impl BaseAgent {
         parent_context: &InvocationContext,
     ) -> Result<Vec<Event>, AgentRunError> {
         let mut ctx = parent_context.with_agent(self.clone());
-        let plugin_manager = PluginManager;
+        let plugin_manager = ctx.plugin_manager.clone();
         let mut events = Vec::new();
 
-        if let Some(event) = self.handle_before_agent_callback(&ctx, &plugin_manager) {
+        if let Some(event) = self
+            .handle_before_agent_callback(&ctx, &plugin_manager)
+            .await
+        {
             events.push(event);
         }
         if ctx.end_invocation {
@@ -473,12 +498,16 @@ impl BaseAgent {
         match self.0.behavior.run_live_impl(&mut ctx).await {
             Ok(produced) => events.extend(produced),
             Err(error) => {
-                self.handle_agent_error_callback(&plugin_manager, &error);
+                self.handle_agent_error_callback(&ctx, &plugin_manager, &error)
+                    .await;
                 return Err(error);
             }
         }
 
-        if let Some(event) = self.handle_after_agent_callback(&ctx, &plugin_manager) {
+        if let Some(event) = self
+            .handle_after_agent_callback(&ctx, &plugin_manager)
+            .await
+        {
             events.push(event);
         }
 
@@ -728,5 +757,47 @@ mod tests {
         let agent = BaseAgent::new("agent", FailingBehavior).unwrap();
         let err = agent.run_live(&ctx()).await.unwrap_err();
         assert_eq!(err.to_string(), "boom");
+    }
+
+    struct ShortCircuitingPlugin;
+
+    impl crate::services::BasePlugin for ShortCircuitingPlugin {
+        fn name(&self) -> &str {
+            "short_circuiting_plugin"
+        }
+
+        fn before_agent_callback<'a>(
+            &'a self,
+            _agent: &'a BaseAgent,
+            _callback_context: &'a mut Context,
+        ) -> crate::services::BoxFuture<'a, Option<Content>> {
+            Box::pin(async { Some(Content::user_text("short-circuited by a plugin")) })
+        }
+    }
+
+    /// Proves the fix disclosed in this module's doc: `run_async` reads
+    /// the real, configured `PluginManager` off the built
+    /// `InvocationContext` rather than constructing a fresh, always-empty
+    /// one — a registered plugin's `before_agent_callback` must actually
+    /// run and be able to short-circuit the agent.
+    #[rusty_tokio::test]
+    async fn run_async_honors_a_plugin_registered_on_the_invocation_context() {
+        let mut plugin_manager = crate::services::PluginManager::new();
+        plugin_manager
+            .register_plugin(std::sync::Arc::new(ShortCircuitingPlugin))
+            .unwrap();
+        let parent_context =
+            InvocationContextBuilder::new("inv-1", Session::new("app", "user", "s1"))
+                .plugin_manager(plugin_manager)
+                .build();
+
+        let agent = BaseAgent::new("agent", NoopBehavior).unwrap();
+        let events = agent.run_async(&parent_context).await.unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].content,
+            Some(Content::user_text("short-circuited by a plugin"))
+        );
     }
 }
