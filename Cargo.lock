@@ -32,6 +32,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-examples"
+version = "0.1.0"
+dependencies = [
+ "adk-agents",
+ "adk-events",
+ "adk-genai",
+ "rusty_serde",
+]
+
+[[package]]
 name = "adk-flows"
 version = "0.1.0"
 dependencies = [
@@ -95,6 +105,7 @@ name = "adk-tools"
 version = "0.1.0"
 dependencies = [
  "adk-agents",
+ "adk-examples",
  "adk-genai",
  "adk-models",
  "rusty_err",

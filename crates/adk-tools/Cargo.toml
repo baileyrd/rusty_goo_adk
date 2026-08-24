@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 adk-agents = { path = "../adk-agents" }
+adk-examples = { path = "../adk-examples" }
 adk-genai = { path = "../adk-genai" }
 adk-models = { path = "../adk-models" }
 rusty_serde = { workspace = true }

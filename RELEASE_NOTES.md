@@ -22,6 +22,52 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — New `adk-examples` crate + `ExampleTool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** a new `adk-examples` crate (C0829/C0831/C0832, DONE),
+  porting `google.adk.examples` in full apart from
+  `VertexAiExampleStore`: `Example`/`BaseExampleProvider` (the
+  few-shot-example extension point) and
+  `example_util::{convert_examples_to_text, build_example_si,
+  get_latest_message_from_user}`. Sits alongside `adk-tools` in the
+  crate graph (depends on `adk-agents`/`adk-events`/`adk-genai`; not
+  depended on by anything above `adk-tools`), so `adk-tools` can
+  depend on it without a cycle.
+- **Test parity:** all 10 of the source's own `test_example_util.py`
+  cases ported, parametrized across `gemini-2.5-flash`/
+  `llama3_vertex_agent`/`None` exactly like the source's own pytest
+  parametrization — including the model-family-dependent
+  function-call-fence-style switch. Plus 4 new tests for
+  `get_latest_message_from_user`. 14 new tests total.
+- **Adaptation (disclosed in the module doc):** the source's
+  function-call-arg rendering for a non-string value, and its
+  function-response rendering (`part.function_response.__dict__`),
+  both rely on Python's dict/object `str()`/`repr()`. This port has no
+  equivalent, so a compact-JSON stand-in is used instead — the same
+  disclosed pattern as `adk-flows::instructions_utils::
+  value_to_display_string`, duplicated locally here (not reused
+  directly, to avoid an `adk-examples`→`adk-flows` crate-graph cycle).
+  `FunctionCall.args` being a `BTreeMap` also means a multi-argument
+  function call renders its arguments in sorted-key order, not the
+  source's call-site order.
+- **Added:** `adk_tools::example_tool::ExampleTool` (C0419, DONE) —
+  wires the new crate into a `BaseTool`: reads the tool context's
+  opaque `user_content` back into a typed `Content` (the same
+  "opaque `Value` parsed back via its own `Deserialize` impl" pattern
+  `context_cache.rs` already established), builds the examples
+  instruction, and appends it via the already-real
+  `LlmRequest::append_instructions`. `name`/`description` are set but
+  unused (matches the source's own comment); `get_declaration`/
+  `run_async` use the `BaseTool` trait defaults, matching the source
+  not overriding either. 5 new tests.
+- **Known limitation:** `VertexAiExampleStore` (C0830) stays
+  `REQUIRED` — it needs a real Vertex AI Example Store client/
+  credentials this workspace doesn't have, the same deferral class as
+  `gemini_context_cache_manager.rs`'s own disclosed Vertex-AI-auth
+  gap. `ExampleTool::from_config` (YAML tool-reference config, C0417)
+  also stays undone, same as every other tool's `from_config`.
+
 ## PR #TBD — Phase 8: `exit_loop`, `LongRunningFunctionTool`, `get_user_choice`
 **2026-08-24** · (link added once this PR is opened)
 

@@ -23,6 +23,7 @@
 pub mod append_tools;
 pub mod base_tool;
 pub mod base_toolset;
+pub mod example_tool;
 pub mod exit_loop_tool;
 pub mod function_tool;
 pub mod get_user_choice_tool;
