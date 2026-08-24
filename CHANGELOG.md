@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::save_files_as_artifacts_plugin::SaveFilesAsArtifactsPlugin`
+  (C0367 DONE) — saves `inline_data` parts from a user message as artifacts
+  (20MB size cap), replacing each with a placeholder text part and,
+  optionally, a `file_data` reference part when the saved artifact's
+  `canonical_uri` uses a model-accessible scheme (`gs`/`https`/`http`).
+  10 new tests total. Reads `MediaBlobStub`'s flattened `rest` map for
+  `displayName`/`data`, reusing `file_artifact_service`'s `base64_decode`
+  (promoted `pub(crate)`).
+### Fixed
+- `adk-runners::runner::merge_context_state_into_session` (new): a real
+  bug fix surfaced while porting `SaveFilesAsArtifactsPlugin` — a
+  run-level plugin hook's state mutations (`on_user_message_callback`,
+  `before_run_callback`, `on_event_callback`, `after_run_callback`) were
+  previously invisible to any other hook, since this port's `Context`
+  clones `InvocationContext` rather than sharing it by reference the way
+  the source's raw shared `session.state` dict does. Now applied after
+  every run-level hook call in `Runner::run_async_with_config`; verified
+  end-to-end by a new test proving `SaveFilesAsArtifactsPlugin`'s
+  stash-in-`on_user_message_callback`-then-flush-in-`before_agent_callback`
+  pattern actually works through `Runner`. No new dependency.
+### Added
 - `adk-runners::Runner` now stores a real `PluginManager` (`Runner::with_plugin`)
   and wires its run-level hooks into a new `Runner::run_async_with_config`
   (`run_async` delegates to it with a default `RunConfig`) — the Rust analog

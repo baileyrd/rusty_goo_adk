@@ -329,8 +329,11 @@ fn base64_decode_value(c: u8) -> Option<u8> {
 
 /// Standard-alphabet base64 decode. See the module doc for why this
 /// duplicates (rather than reuses) `adk-tools::load_artifacts_tool`'s
-/// own hand-rolled decoder.
-fn base64_decode(data: &str) -> Option<Vec<u8>> {
+/// own hand-rolled decoder — `adk-tools` depends on `adk-agents`, not
+/// the other way around, so that copy is unreachable from here.
+/// `pub(crate)` so `save_files_as_artifacts_plugin` (same crate) can
+/// reuse this one instead of hand-rolling a third copy.
+pub(crate) fn base64_decode(data: &str) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut buffer = 0u32;
     let mut bits = 0u32;

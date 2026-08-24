@@ -160,6 +160,39 @@ fn should_append_event(_event: &Event, is_live_call: bool) -> bool {
     !is_live_call
 }
 
+/// Bridges a run-level plugin hook's state mutations back onto the
+/// session. In the source, run-level hooks (`on_user_message_callback`,
+/// `before_run_callback`, `on_event_callback`, `after_run_callback`) take
+/// the raw, shared `InvocationContext` and mutate `invocation_context
+/// .session.state` as a plain dict in place — any later read (including
+/// from a different hook) sees the mutation immediately, since it's the
+/// same dict object. This port's `Context` wraps a *clone* of
+/// `InvocationContext` (no reference semantics), so a hook's state
+/// mutations are otherwise invisible outside the throwaway `Context` it
+/// ran in. This applies the resulting state delta directly onto
+/// `session.state` (bypassing the event/`state_delta` append path
+/// entirely — matching the source's own no-event, immediate-mutation
+/// semantics rather than the `CallbackContext`-based agent-level hooks'
+/// synthesized-event pattern) and refreshes `invocation_context.session`
+/// so every subsequent step (including a later hook, or the driven
+/// agent itself) observes it — the same "widen once a real consumer
+/// needs the structure" pattern this port applies elsewhere, here
+/// applied to close a visibility gap `SaveFilesAsArtifactsPlugin`
+/// (C0367) surfaced: its `on_user_message_callback` stashes a pending
+/// delta that `before_agent_callback` must see.
+fn merge_context_state_into_session(
+    ctx: Context,
+    invocation_context: &mut adk_agents::invocation_context::InvocationContext,
+    session: &mut Session,
+) {
+    let state_delta = ctx.into_actions().state_delta;
+    if state_delta.is_empty() {
+        return;
+    }
+    session.state.extend(state_delta);
+    invocation_context.session = session.clone();
+}
+
 /// Mirrors `_apply_run_config_custom_metadata`: merges
 /// `run_config.custom_metadata` into `event.custom_metadata`, giving
 /// priority to keys the event already carries.
@@ -370,6 +403,7 @@ impl Runner {
         {
             new_message = modified;
         }
+        merge_context_state_into_session(user_message_ctx, &mut invocation_context, &mut session);
         invocation_context.user_content = rusty_serde::json::to_value(&new_message).ok();
 
         // C0898/C0899: deprecated blob-saving path.
@@ -395,6 +429,7 @@ impl Runner {
             .plugin_manager
             .run_before_run_callback(&mut before_run_ctx)
             .await;
+        merge_context_state_into_session(before_run_ctx, &mut invocation_context, &mut session);
 
         let output_events = if let Some(content) = early_exit {
             let mut event = Event::new(invocation_id.clone(), "model", NodeInfo::new("root"));
@@ -419,6 +454,11 @@ impl Runner {
                             .plugin_manager
                             .run_on_event_callback(&mut event_ctx, &event)
                             .await;
+                        merge_context_state_into_session(
+                            event_ctx,
+                            &mut invocation_context,
+                            &mut session,
+                        );
                         let output_event = merge_output_event(event, modified);
                         if should_append_event(&output_event, false) {
                             self.session_service
@@ -445,6 +485,7 @@ impl Runner {
         self.plugin_manager
             .run_after_run_callback(&mut after_run_ctx)
             .await;
+        merge_context_state_into_session(after_run_ctx, &mut invocation_context, &mut session);
 
         Ok(output_events)
     }
@@ -1000,6 +1041,61 @@ mod tests {
             .as_deref()
             .unwrap()
             .starts_with("Uploaded file:"));
+    }
+
+    #[rusty_tokio::test]
+    async fn run_async_bridges_on_user_message_state_into_before_agent_callback() {
+        // End-to-end proof that `merge_context_state_into_session` closes
+        // the visibility gap: `SaveFilesAsArtifactsPlugin` stashes a
+        // pending delta from `on_user_message_callback` and only flushes
+        // it into `artifact_delta` from `before_agent_callback` — a
+        // different, later `Context`. Without the bridge, the stash would
+        // never be visible there.
+        let artifact_service =
+            Arc::new(adk_agents::in_memory_artifact_service::InMemoryArtifactService::new());
+        let plugin =
+            Arc::new(adk_agents::save_files_as_artifacts_plugin::SaveFilesAsArtifactsPlugin::new());
+        let runner = Runner::new(
+            "app",
+            BaseAgent::new("echo_agent", EchoBehavior).unwrap(),
+            Arc::new(InMemorySessionService::new()),
+        )
+        .with_auto_create_session(true)
+        .with_artifact_service(artifact_service)
+        .with_plugin(plugin)
+        .unwrap();
+
+        let message = Content::new(
+            "user",
+            vec![Part {
+                inline_data: Some(adk_genai::content::MediaBlobStub {
+                    mime_type: Some("text/plain".to_string()),
+                    rest: Some(Value::Map(vec![
+                        (
+                            "displayName".to_string(),
+                            Value::String("f.txt".to_string()),
+                        ),
+                        ("data".to_string(), Value::String("aGVsbG8=".to_string())),
+                    ])),
+                }),
+                ..Default::default()
+            }],
+        );
+
+        let events = runner.run_async("user", "s1", message).await.unwrap();
+
+        assert!(events
+            .iter()
+            .any(|e| e.actions.artifact_delta.get("f.txt") == Some(&0)));
+
+        let session = runner
+            .session_service
+            .get_session("app", "user", "s1")
+            .await
+            .unwrap();
+        assert!(session.events[0].content.as_ref().unwrap().parts[0]
+            .inline_data
+            .is_none());
     }
 
     #[rusty_tokio::test]
