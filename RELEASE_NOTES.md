@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `artifact_util` (artifact URI scheme + path safety)
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_agents::artifact_util::{ParsedArtifactUri,
+  parse_artifact_uri, get_artifact_uri, is_artifact_ref,
+  validate_artifact_reference_scope, validate_path_segment}`
+  (C0262/C0263/C0264) — the canonical
+  `artifact://apps/{app}/users/{user}/[sessions/{sid}/]artifacts/{filename}/versions/{v}`
+  URI scheme (parse/construct, round-trip tested), the security
+  boundary preventing cross-tenant artifact-reference escapes, and the
+  path-segment validator every artifact backend needs for app/user/
+  session identifiers (rejects empty/null-byte/absolute/drive-qualified/
+  traversal segments, both `/`- and `\`-separated).
+- Pure string/regex logic, no I/O — builds on the already-real
+  `adk_errors::input_validation::InputValidationError`.
+- **Adaptation:** `is_artifact_ref` reads `"fileUri"` out of
+  `Part.file_data`'s opaque flattened `rest` map rather than a typed
+  field — this port's `MediaBlobStub` has no typed `file_uri` field
+  (`adk-genai::content`'s own documented narrowing) — the same
+  read-a-flattened-field pattern `load_artifacts_tool.rs` already uses
+  for `inline_data.rest.get("data")`.
+- **Disclosed, not built yet:** `InMemoryArtifactService` (C0265)
+  doesn't exist in this port yet, so nothing produces a real
+  artifact-backed `Part` in a live turn to exercise these against —
+  this utility is real and tested, ahead of its own only caller, the
+  same situation `remote_mcp_server.rs` disclosed.
+- 17 new tests.
+
+---
+
 ## PR #TBD — `InMemoryMemoryService`
 **2026-08-24** · (link added once this PR is opened)
 
