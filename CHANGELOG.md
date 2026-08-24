@@ -5,6 +5,16 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::vertex_ai_search_tool::{VertexAiSearchTool, VertexAiSearchConfig}`
+  (C0433 DONE) — a built-in Gemini retrieval tool bound to a Vertex AI
+  Search data-store/search-engine (mutually exclusive, constructor
+  validated). Ports the full populated
+  `{"retrieval":{"vertexAiSearch":{...}}}` config shape. The source's
+  subclass-based dynamic-filter customization point becomes an optional
+  closure field (`with_config_builder`) — the same "overridable Python
+  method → closure field" adaptation `base_agent.rs`'s `AgentCallback`
+  already established. 8 new tests. No new dependency.
+### Added
 - `adk-agents::base_agent::{AgentBehavior::as_any, AsAny, BaseAgent::as_any}`
   (new) — a downcast escape hatch letting code holding a `BaseAgent`
   (type-erased: `Box<dyn AgentBehavior>`) recover a concrete behavior type

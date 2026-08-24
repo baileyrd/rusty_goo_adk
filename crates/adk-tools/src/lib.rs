@@ -165,4 +165,5 @@ pub mod tool_context;
 pub mod transfer_to_agent_tool;
 pub mod unsafe_local_code_executor;
 pub mod url_context_tool;
+pub mod vertex_ai_search_tool;
 pub mod write_file_tool;
