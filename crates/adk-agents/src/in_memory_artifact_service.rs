@@ -179,8 +179,15 @@ impl ArtifactService for InMemoryArtifactService {
         custom_metadata: Option<BTreeMap<String, Value>>,
     ) -> i64 {
         let path = artifact_path(app_name, user_id, filename, session_id);
-        let part: Part =
-            rusty_serde::json::from_value(artifact).unwrap_or_else(|_| Part::default());
+        // C0259: `artifacts.base_artifact_service.ensure_part` — the
+        // source's `Union[Part, dict]` input collapses to a single
+        // `Value` here (this port's trait boundary can't carry an
+        // already-constructed `Part`), so this deserialize is the
+        // whole of `ensure_part`'s behavior in this port: a failure
+        // panics, matching `model_validate`'s raised `ValidationError`
+        // rather than silently substituting an empty artifact.
+        let part: Part = rusty_serde::json::from_value(artifact)
+            .unwrap_or_else(|e| panic!("Invalid artifact: {e}"));
 
         let mut artifacts = self.artifacts.lock().unwrap();
         let versions = artifacts.entry(path).or_default();
@@ -328,6 +335,20 @@ mod tests {
 
     fn text_artifact(text: &str) -> Value {
         rusty_serde::json::to_value(&Part::text(text)).unwrap()
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid artifact")]
+    fn save_artifact_panics_on_a_malformed_artifact_value() {
+        let service = InMemoryArtifactService::new();
+        service.save_artifact(
+            "app",
+            "user1",
+            "s1",
+            "f",
+            Value::String("not a part".to_string()),
+            None,
+        );
     }
 
     #[test]

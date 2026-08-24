@@ -22,6 +22,30 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Fix `InMemoryArtifactService` malformed-input handling; close out C0259/C0260/C0261
+**2026-08-24** · (link added once this PR is opened)
+
+- **Fixed:** `InMemoryArtifactService::save_artifact` now panics on a
+  malformed `artifact` value instead of silently substituting an
+  empty `Part` — matching the source's `ensure_part`/`model_validate`
+  raising a `ValidationError` rather than losing data quietly. This
+  is `ensure_part`'s (C0259) entire behavior in this port, disclosed:
+  the source's `Union[Part, dict]` input collapses to a single `Value`
+  at this trait boundary, since nothing here can pass an
+  already-constructed `Part` object through `ArtifactService::save_artifact`
+  — only a `Value`.
+- **Also:** marks C0259 (`ArtifactVersion`/`ensure_part`) and C0260
+  (`BaseArtifactService`'s full 7-method abstract interface) `DONE` —
+  both were already fully satisfied by the `InMemoryArtifactService`
+  batch (PR #61), just not yet reflected in the manifest. Fills in
+  C0261's evidence (package lazy-export): the eager-vs-lazy
+  `__init__.py` import distinction has no analogue in this port's flat
+  `pub mod` crate structure, the same disclosure C0493 already gave
+  for `auth/__init__.py`'s own asymmetry.
+- 1 new test.
+
+---
+
 ## PR #TBD — Session-state utilities (`_session_util`)
 **2026-08-24** · (link added once this PR is opened)
 

@@ -954,6 +954,14 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     tree (`BaseAgent::build` warns on duplicates).
 ### Changed
 ### Fixed
+- `InMemoryArtifactService::save_artifact` (Phase 6, C0259) now panics
+  on a malformed `artifact` value instead of silently substituting an
+  empty `Part` — matching the source's `ensure_part`/`model_validate`
+  raising a `ValidationError` rather than losing data quietly. Closes
+  out C0259 (`ArtifactVersion`/`ensure_part`) and C0260
+  (`BaseArtifactService`'s full 7-method abstract interface) as `DONE`
+  — both already fully satisfied by the C0265 batch, just not yet
+  reflected in the manifest. 1 new test.
 ### Security
 
 <!-- ## [0.1.0] - YYYY-MM-DD
