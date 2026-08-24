@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Start `code_executors/`: `CodeExecutionUtils` + `BaseCodeExecutor` (C0383, C0391)
+**2026-08-24** · (link added once this PR is opened)
+
+The first landing in a new capability area, `code_executors/` — none of
+it existed in this workspace before. This batch covers the data/utility
+layer; `BuiltInCodeExecutor`/`CodeExecutorContext`/`UnsafeLocalCodeExecutor`
+are tracked separately for future batches (`ContainerCodeExecutor`/
+`GkeCodeExecutor`/cloud-backend executors need a new SDK dependency
+decision and stay flagged `REQUIRED`).
+
+- **Added:** `adk-tools::code_execution_utils::{File, CodeExecutionInput,
+  CodeExecutionResult, get_encoded_file_content,
+  extract_code_and_truncate_content, build_executable_code_part,
+  build_code_execution_result_part, convert_code_execution_parts}`
+  (C0391) — every function ported exactly, including the truthy
+  (not merely non-empty-Optional) text-part filter and the
+  "convert a trailing result part to text only when `Content` has
+  exactly one part" guard.
+- **Added:** `adk-tools::base_code_executor::{BaseCodeExecutor,
+  CodeExecutorConfig}` (C0383) — the source's Pydantic `BaseModel`
+  (fields + one abstract method) splits into a plain config struct a
+  concrete executor embeds, plus a trait with `config()`/`execute_code()`.
+- **Disclosed adaptation:** `Part.executable_code`/`code_execution_result`
+  (opaque `Value` placeholders per `adk-genai::content`'s own doc) are
+  read/written by known Gemini wire keys (`code`/`language`/`outcome`/
+  `output`) — the same established opaque-boundary-field pattern used
+  elsewhere, not a widening of `Part`.
+- **Disclosed adaptation:** `File.content`'s `str | bytes` union
+  narrows to always-raw `Vec<u8>`. A small base64 codec is duplicated
+  locally (no `base64` crate is a workspace dependency, and neither
+  existing hand-rolled copy in this port has the right visibility/
+  byte-vs-str shape for reuse here).
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-tools +14 new tests, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `FileArtifactService` (C0268-C0274, plus C0266/C0267 parity tests)
 **2026-08-24** · (link added once this PR is opened)
 
