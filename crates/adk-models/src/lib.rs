@@ -32,3 +32,4 @@ pub mod llm_response;
 pub mod ollama;
 pub mod registry;
 pub mod streaming_utils;
+pub mod vertex_ai_utils;

@@ -13,6 +13,7 @@ mod event_actions;
 mod request_input;
 
 pub mod branch_path;
+pub mod debug_output;
 pub mod event_compaction;
 pub mod json_safe;
 pub mod node_info;

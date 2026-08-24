@@ -4,14 +4,14 @@
 //! **Forward-pull**: `is_gemini_model`/`extract_model_name`
 //! (`utils/model_name_utils.py`) and `get_google_llm_variant`/
 //! `is_enterprise_mode_enabled`/`is_env_enabled` (`utils/variant_utils.py`,
-//! `utils/env_utils.py`, C0796) aren't inventoried under a `utils/`
-//! phase of their own, but `BaseLlm.capabilities`'s deprecated
-//! name-based fallback needs them, so they're pulled forward here —
-//! small, self-contained, env-var/regex-based utilities, same
-//! rationale as `sessions.state.State` in Phase 2. (`is_env_enabled`/
-//! `is_enterprise_mode_enabled` do have their own manifest row,
-//! C0796 — this doc originally said otherwise; corrected once that
-//! row's evidence was filled in.)
+//! `utils/env_utils.py`) aren't inventoried under a `utils/` phase of
+//! their own, but `BaseLlm.capabilities`'s deprecated name-based fallback
+//! needs them, so they're pulled forward here — small, self-contained,
+//! env-var/regex-based utilities, same rationale as `sessions.state.State`
+//! in Phase 2. `is_env_enabled`/`is_enterprise_mode_enabled` (C0796) and
+//! `GoogleLlmVariant`/`get_google_llm_variant` (C0930) do have their own
+//! manifest rows — this doc originally said otherwise; corrected once
+//! each row's evidence was filled in.
 
 use rusty_serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -39,14 +39,14 @@ pub fn is_enterprise_mode_enabled() -> bool {
     false
 }
 
-/// `utils/variant_utils.py::GoogleLLMVariant`.
+/// C0930: `utils/variant_utils.py::GoogleLLMVariant`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoogleLlmVariant {
     VertexAi,
     GeminiApi,
 }
 
-/// `utils/variant_utils.py::get_google_llm_variant`.
+/// C0930: `utils/variant_utils.py::get_google_llm_variant`.
 pub fn get_google_llm_variant() -> GoogleLlmVariant {
     if is_enterprise_mode_enabled() {
         GoogleLlmVariant::VertexAi
@@ -138,6 +138,14 @@ pub fn legacy_output_schema_and_tools(model_name: &str, type_name: &str) -> bool
     true
 }
 
+/// Serializes tests (in this module and `vertex_ai_utils`'s) that mutate
+/// `GOOGLE_GENAI_USE_ENTERPRISE`/`GOOGLE_GENAI_USE_VERTEXAI`/
+/// `GOOGLE_API_KEY`, process-wide env state — a single shared lock so tests
+/// in different modules can't interleave their mutations under `cargo
+/// test`'s default parallel execution.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,10 +211,6 @@ mod tests {
         assert!(!is_env_enabled(None, "0"));
     }
 
-    // Serializes tests that mutate GOOGLE_GENAI_USE_ENTERPRISE/
-    // GOOGLE_GENAI_USE_VERTEXAI, process-wide env state.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn is_enterprise_mode_enabled_reads_the_preferred_env_var() {
         let _guard = ENV_LOCK.lock().unwrap();
@@ -258,6 +262,25 @@ mod tests {
             std::env::remove_var("GOOGLE_GENAI_USE_VERTEXAI");
         }
         assert!(!is_enterprise_mode_enabled());
+    }
+
+    #[test]
+    fn get_google_llm_variant_tracks_enterprise_mode() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("GOOGLE_GENAI_USE_ENTERPRISE");
+            std::env::remove_var("GOOGLE_GENAI_USE_VERTEXAI");
+        }
+        assert_eq!(get_google_llm_variant(), GoogleLlmVariant::GeminiApi);
+
+        unsafe {
+            std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "true");
+        }
+        let result = get_google_llm_variant();
+        unsafe {
+            std::env::remove_var("GOOGLE_GENAI_USE_ENTERPRISE");
+        }
+        assert_eq!(result, GoogleLlmVariant::VertexAi);
     }
 
     #[test]

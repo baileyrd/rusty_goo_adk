@@ -5,6 +5,29 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-genai::json_utils::safe_json_loads` (C0931), ported from
+  `google.adk.utils._json_utils` — generic over the target `Deserialize`
+  type (the source returns a dynamically-typed `Any`), returning a
+  uniform `Result<T, String>` with an optional context label folded
+  into the error message.
+- `adk-models::google_client_headers::{ClientLabelScope, EVAL_CLIENT_LABEL}`
+  (C0932), ported from `google.adk.utils._client_labels_utils` —
+  previously deferred (folded into C0133's evidence) since only the two
+  unconditional tracking labels were ported. The source's
+  `@contextmanager` becomes an RAII guard (`Drop`-based restore), the
+  same pattern as `adk-features::TemporaryFeatureOverride`. `contextvars`'
+  async-task-scoping becomes a `thread_local!` (only thread-scoped, a
+  disclosed narrowing).
+- `adk-events::debug_output::print_event` (C0933), ported from
+  `google.adk.utils._debug_output` — prints an `Event` to stdout,
+  showing tool calls/results/code execution/inline-or-file-data parts
+  only when `verbose`.
+- `adk-models::vertex_ai_utils::get_express_mode_api_key` (C0934),
+  ported from `google.adk.utils.vertex_ai_utils`.
+- `adk-models::capabilities::{GoogleLlmVariant, get_google_llm_variant}`
+  gained its own manifest row (C0930, `variant_utils.py`) and a
+  dedicated parity test — already ported in an earlier forward-pull
+  batch but never linked or directly tested.
 - 4 new tests for `adk-models::capabilities::is_enterprise_mode_enabled`
   (Phase 16, C0796) covering its `GOOGLE_GENAI_USE_ENTERPRISE` vs.
   deprecated `GOOGLE_GENAI_USE_VERTEXAI` precedence — the function
