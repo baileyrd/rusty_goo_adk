@@ -22,6 +22,32 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 8: `exit_loop`, `LongRunningFunctionTool`, `get_user_choice`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::exit_loop_tool::exit_loop` (C0420, DONE) — sets
+  `escalate`+`skip_summarization` on the tool context's actions to
+  break a loop-type agent, matching the source verbatim.
+- **Added:** `adk_tools::long_running_tool::LongRunningFunctionTool`
+  (C0422, DONE) — wraps a `FunctionTool` by composition (Rust has no
+  struct inheritance to subclass `FunctionTool` the way the source
+  does), delegating every `BaseTool` method except `is_long_running`
+  (always `true`) and `get_declaration` (appends a "don't call again
+  while pending" instruction to the description).
+- **Added:** `adk_tools::get_user_choice_tool::{get_user_choice,
+  get_user_choice_tool}` (C0421, DONE) — `get_user_choice` ignores its
+  `options` arg and always sets `skip_summarization`+returns `Null`
+  (always defers to client-side resolution, matching the source);
+  `get_user_choice_tool()` wraps it in the new
+  `LongRunningFunctionTool`.
+- **Adaptation:** since this port's `FunctionTool` needs an explicit
+  `FunctionDeclaration` (no runtime reflection over Rust function
+  signatures — `function_tool.rs`'s own module doc already discloses
+  this), `get_user_choice_tool`'s declaration uses a hand-written
+  JSON-schema `parameters` value in place of the source's
+  inferred-from-signature `options: list[str]`.
+- 9 new tests across the three modules.
+
 ## PR #TBD — Phase 4: Planners (`BasePlanner`, `BuiltInPlanner`, `PlanReActPlanner`)
 **2026-08-24** · (link added once this PR is opened)
 

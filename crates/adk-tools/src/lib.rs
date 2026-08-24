@@ -23,6 +23,9 @@
 pub mod append_tools;
 pub mod base_tool;
 pub mod base_toolset;
+pub mod exit_loop_tool;
 pub mod function_tool;
+pub mod get_user_choice_tool;
+pub mod long_running_tool;
 pub mod tool_confirmation;
 pub mod tool_context;

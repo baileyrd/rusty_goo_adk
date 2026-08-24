@@ -5,6 +5,15 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::{exit_loop_tool, long_running_tool, get_user_choice_tool}`
+  (Phase 8, C0420-C0422, DONE) — `exit_loop` (sets
+  `escalate`+`skip_summarization` to break a loop-type agent),
+  `LongRunningFunctionTool` (wraps a `FunctionTool` by composition —
+  no struct inheritance in Rust — delegating every method except
+  `is_long_running` and `get_declaration`, which appends the "don't
+  call again while pending" instruction), and `get_user_choice`/
+  `get_user_choice_tool` (always defers to client-side resolution). 9
+  new tests.
 - `adk-flows::planners` (Phase 4, C0200-C0203, DONE) — `BasePlanner`
   trait, `BuiltInPlanner` (thinking-config passthrough, both hooks
   no-ops), and `PlanReActPlanner` (prompted Plan-Re-Act: 5-tag NL
