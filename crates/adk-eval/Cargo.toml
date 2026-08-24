@@ -6,6 +6,9 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+adk-errors = { path = "../adk-errors" }
 adk-genai = { path = "../adk-genai" }
+adk-platform = { path = "../adk-platform" }
 rusty_serde = { workspace = true }
+rusty_err = { workspace = true }
 unicode-general-category = "1.1.0"

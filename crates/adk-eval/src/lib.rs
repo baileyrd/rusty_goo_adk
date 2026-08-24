@@ -49,6 +49,28 @@
 //! far) never read any of these, matching the source's own `del
 //! conversation_scenario, "not supported for per-invocation evaluation"`.
 //!
+//! **Third batch — local persistence**: [`path_validation`] (C0614),
+//! [`eval_sets_manager`] (the `EvalSetsManager` trait + shared
+//! [`eval_sets_manager::EvalManagerError`], part of C0613),
+//! [`eval_sets_manager_utils`]/[`eval_set_results_manager_utils`]
+//! (support functions shared across implementors), and two concrete
+//! implementors each: [`in_memory_eval_sets_manager`]/
+//! [`local_eval_sets_manager`] (C0613), [`eval_set_results_manager`]
+//! (the trait, C0615) with [`local_eval_set_results_manager`] (C0615).
+//! `GcsEvalSetsManager`/`GcsEvalSetResultsManager` stay `REQUIRED` — no
+//! GCS SDK dependency is decided anywhere in this workspace yet, and
+//! nothing else in this crate needs one added just to close those two
+//! rows out.
+//!
+//! Adds `adk-errors` (for `NotFoundError`/`AlreadyExistsError`-shaped
+//! error variants — already a lightweight leaf crate, only depending on
+//! `rusty_err`) and `adk-platform` (for `uuid::new_uuid`/`time::get_time`,
+//! the workspace's existing provider-swappable ID/clock abstractions —
+//! also lightweight, only `rusty_uuid` + `rusty_serde`) as new
+//! dependencies. Neither widens `adk-eval`'s graph anywhere near as much
+//! as `adk-agents` would (see [`eval_result`]'s doc on why
+//! `session_details` stays opaque instead).
+//!
 //! **`EvalStatus`, wire format disclosed**: the source's `EvalStatus` is
 //! a plain (non-`str`) `Enum` with int values (`PASSED = 1`, ...); under
 //! Pydantic v2's default enum serialization that means the wire form is
@@ -79,8 +101,16 @@ pub mod eval_metrics;
 pub mod eval_result;
 pub mod eval_rubrics;
 pub mod eval_set;
+pub mod eval_set_results_manager;
+pub mod eval_set_results_manager_utils;
+pub mod eval_sets_manager;
+pub mod eval_sets_manager_utils;
 pub mod evaluator;
 pub mod final_response_match_v1;
+pub mod in_memory_eval_sets_manager;
+pub mod local_eval_set_results_manager;
+pub mod local_eval_sets_manager;
+pub mod path_validation;
 mod porter_stemmer;
 pub mod rouge;
 pub mod trajectory_evaluator;

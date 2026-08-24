@@ -22,6 +22,84 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: local `EvalSetsManager`/`EvalSetResultsManager` persistence (C0613/C0615 partial, C0614)
+**2026-08-24** · (link added once this PR is opened)
+
+Follow-on to the `EvalSet`/`EvalCase` data-model PR — the local-disk
+persistence layer that actually stores and retrieves them. `Gcs*`
+implementors of both manager traits stay `REQUIRED`; no GCS SDK
+dependency is decided anywhere in this workspace yet.
+
+- **Added:** `eval_sets_manager::EvalSetsManager` trait + a shared
+  `EvalManagerError` enum (`NotFound`/`InvalidPath`/`InvalidArgument`/
+  `Io` variants) used by every manager in this PR — the source mixes
+  plain `ValueError` and the typed `NotFoundError`; this port keeps that
+  same split as distinct variants instead of collapsing everything into
+  one string, so a caller can match on "not found" specifically.
+- **Added:** `eval_sets_manager_utils` (`get_eval_set_from_app_and_id`/
+  `get_eval_case_from_eval_set`/`add_eval_case_to_eval_set`/
+  `update_eval_case_in_eval_set`/`delete_eval_case_from_eval_set`),
+  shared by every `EvalSetsManager` implementor.
+- **Added:** `in_memory_eval_sets_manager::InMemoryEvalSetsManager` —
+  `Mutex`-guarded maps (the trait takes `&self`, to stay object-safe
+  alongside the local/disk implementor too), the same interior-mutability
+  pattern `adk_agents::in_memory_memory_service::InMemoryMemoryService`
+  already uses for the identical shape of problem.
+- **Added:** `local_eval_sets_manager::LocalEvalSetsManager` — real
+  `std::fs` I/O, one `.evalset.json` file per `(app_name, eval_set_id)`.
+  `load_eval_set_from_file` tries the current typed schema first, falling
+  back to converting the legacy JSON-array format
+  (`convert_eval_set_to_pydantic_schema`) on a parse failure — verified
+  against an actual legacy-format fixture file, not just unit-level
+  pieces of the conversion.
+- **Added:** `path_validation::validate_path_segment` (C0614) —
+  empty/null-byte/path-separator/traversal-segment rejection, applied at
+  every filesystem-path construction site in both local managers.
+- **Added:** `eval_set_results_manager::EvalSetResultsManager` trait and
+  `eval_set_results_manager_utils` (`create_eval_set_result`/
+  `parse_eval_set_result_json`, with the back-compat double-JSON-decode
+  fallback for legacy result files — verified by actually double-encoding
+  a real result and reading it back, not just exercising the happy path).
+- **Added:** `local_eval_set_results_manager::LocalEvalSetResultsManager`
+  — stores results under `<agents_dir>/<app_name>/.adk/eval_history/`.
+- **New dependencies:** `adk-errors` (for `NotFoundError`/
+  `InputValidationError`-shaped error variants) and `adk-platform` (for
+  `uuid::new_uuid`/`time::get_time`, the workspace's existing
+  provider-swappable id/clock abstractions). Both are lightweight —
+  `adk-errors` only depends on `rusty_err`, `adk-platform` only on
+  `rusty_uuid` + `rusty_serde` — chosen deliberately over `adk-agents`
+  (which would be needed for `EvalCaseResult.session_details`'s real
+  type, still left opaque — see the previous PR).
+- **Disclosed adaptation:** `validate_path_segment`'s source raises a
+  plain `ValueError`; this port uses `adk_errors::input_validation::InputValidationError`
+  (`ValueErrorLike`), the same typed stand-in this codebase already uses
+  for the artifacts subsystem's identical path-traversal/null-byte
+  rejection category.
+- **Disclosed adaptation:** `LocalEvalSetsManager::_validate_id`'s
+  `^[a-zA-Z0-9_]+$` regex check is hand-rolled (non-empty, every
+  character ASCII-alphanumeric-or-underscore) rather than adding a
+  `regex` dependency for one trivial pattern.
+- **Disclosed narrowing:** the source's `model_dump_json(indent=2,
+  exclude_unset=True, exclude_defaults=True, exclude_none=True)` writes
+  pretty-printed, sparse JSON. `rusty_serde::json` has no pretty-printer
+  and this port's structs don't use `skip_serializing_if` anywhere, so
+  every write is a compact JSON object with every field present
+  (including `null`s and defaults) — round-trips correctly through this
+  same port's own `Deserialize` either way, just denser on disk.
+- **Disclosed narrowing:** the legacy-format converter's `value_str`
+  helper defaults every missing JSON key to `""` uniformly, where the
+  source mixes required-key direct indexing (`KeyError` on a malformed
+  file) with `.get(key, default)` for a few optional ones.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-eval +40 new tests; zero regressions elsewhere)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `evaluation/`: `EvalSet`/`EvalCase` data model + rubrics/app-details/results (C0606, C0607, C0609, C0610, C0635)
 **2026-08-24** · (link added once this PR is opened)
 

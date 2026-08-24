@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-eval` local persistence batch (C0613/C0615 partial, C0614 DONE) —
+  `eval_sets_manager::EvalSetsManager` trait + shared `EvalManagerError`,
+  `eval_sets_manager_utils`/`eval_set_results_manager_utils` support
+  functions, `in_memory_eval_sets_manager::InMemoryEvalSetsManager`,
+  `local_eval_sets_manager::LocalEvalSetsManager` (real `.evalset.json`
+  file I/O, old→new legacy-format schema migration on read, verified
+  against a real legacy-format fixture), `path_validation::validate_path_segment`
+  (path-traversal/null-byte hardening, applied at every filesystem path
+  construction site), `eval_set_results_manager::EvalSetResultsManager`
+  trait, and `local_eval_set_results_manager::LocalEvalSetResultsManager`
+  (with the back-compat double-JSON-decode fallback for legacy result
+  files, verified by actually double-encoding a result and reading it
+  back). `GcsEvalSetsManager`/`GcsEvalSetResultsManager` stay `REQUIRED`
+  — no GCS SDK dependency is decided in this workspace. Adds `adk-errors`
+  and `adk-platform` as new `adk-eval` dependencies — both lightweight
+  leaf-ish crates, deliberately chosen over `adk-agents` (see the crate
+  root doc). Disclosed narrowing: writes always include every field
+  (`rusty_serde::json` has no pretty-printer or `skip_serializing_if`
+  support), unlike the source's sparse, pretty-printed
+  `exclude_unset`/`exclude_defaults`/`exclude_none` output — files
+  round-trip correctly either way. 40 new tests.
 - `adk-eval` data-model batch (C0606, C0607, C0609, C0610, C0635) —
   `eval_case::EvalCase`/`SessionInput`/`SessionState` (`conversation` XOR
   `conversation_scenario`, enforced via `EvalCase::validate()` rather
