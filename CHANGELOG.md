@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::load_web_page::{load_web_page, LoadWebPageTool}` (Phase
+  8, C0427, partial) — fetches a URL and extracts its text, with the
+  source's SSRF-hardening core ported in full: URL/host/port
+  validation, `localhost` rejection, DNS resolution with every
+  resolved address vetted, IPv4/IPv6 global-reachability
+  classification transcribed field-for-field from CPython 3.11's
+  `ipaddress.py` (ground-truthed against a 30+-address battery run
+  through the real module), embedded-IPv4-in-IPv6 checks (mapped/
+  6to4/NAT64/deprecated-compatible forms — verified this catches
+  `64:ff9b::169.254.169.254`-style addresses the plain IPv6
+  `is_global` check alone misses), IP-pinned fetch via
+  `reqwest::blocking::ClientBuilder::resolve`, and disabled redirects.
+  New `adk-tools` dependencies: `reqwest` (new usage site of an
+  already-vetted workspace dependency), `url` (the exact crate
+  `reqwest::Url` re-exports), `regex` (new usage site). Disclosed
+  narrowings: no proxy-env-var-aware branching (always does the
+  direct IP-pinned fetch — strictly more restrictive, not a safety
+  regression); a regex-based HTML text extractor stands in for
+  `BeautifulSoup`+`lxml`; the live-fetch path itself is untested in
+  this sandboxed environment (network-dependent, and its own targets
+  like `127.0.0.1` are correctly rejected by design). 15 new tests.
 - `adk-tools::load_artifacts_tool::{LoadArtifactsTool,
   as_safe_part_for_llm}` (Phase 8, C0425, partial) — lists artifacts
   and injects them into the LLM request on demand: MIME

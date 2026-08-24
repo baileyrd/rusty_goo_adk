@@ -110,9 +110,12 @@ dependencies = [
  "adk-genai",
  "adk-models",
  "adk-runners",
+ "regex",
+ "reqwest",
  "rusty_err",
  "rusty_serde",
  "rusty_tokio",
+ "url",
 ]
 
 [[package]]

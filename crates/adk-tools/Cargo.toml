@@ -15,3 +15,14 @@ adk-runners = { path = "../adk-runners" }
 rusty_serde = { workspace = true }
 rusty_err = { workspace = true }
 rusty_tokio = { workspace = true }
+# `load_web_page` (C0427) needs a real HTTP client for the same reason
+# `gemini.rs` already adopted `reqwest` (Phase 3) -- no new sovereignty
+# decision here, just a new usage site of an already-vetted workspace
+# dependency. `url` is added explicitly (not just used transitively
+# through `reqwest::Url`) because the SSRF-hardening logic needs
+# `url::Host`'s already-parsed Domain/Ipv4/Ipv6 variant, not just the
+# opaque `Url` type -- and it's the exact crate `reqwest` itself
+# re-exports `Url` from, so this isn't a new supply-chain surface.
+reqwest = { workspace = true }
+url = "2"
+regex = { workspace = true }
