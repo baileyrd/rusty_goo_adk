@@ -22,6 +22,30 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `runners.py`: two module-level helper closures (C0833, C0836)
+**2026-08-24** · (link added once this PR is opened)
+
+Two rows found already fully implemented while scoping the next batch —
+closed with proper evidence rather than left understating real coverage.
+
+- **C0833** (`_notify_run_error`): already wired — `Runner::run_async_with_config`'s
+  one unhandled-`agent.run_async`-error path already calls
+  `PluginManager::run_on_run_error_callback` as a best-effort notifier,
+  and the original run error always still propagates afterward. The
+  source's "logs+suppresses any exception the callback itself raises"
+  behavior is N/A by construction, not by omission: this port's plugin
+  callback trait methods return `()`, not `Result` — there's no
+  exception channel for a callback to raise through in the first place.
+- **C0836** (`_apply_run_config_custom_metadata`): already implemented
+  and correct (`run_config.custom_metadata` merges in first,
+  `event.custom_metadata`'s own keys layered on top so they win on
+  conflict; a no-op when the config side is `None` or `Some` but empty)
+  — but only ever exercised indirectly through `run_async` tests. Added
+  3 direct unit tests covering each case by name.
+- **Scope:** 3 new tests, no behavior changes.
+
+---
+
 ## PR #TBD — `runners.py`: `Runner::run` sync wrapper (C0877, C0878, C0879, C0880)
 **2026-08-24** · (link added once this PR is opened)
 
