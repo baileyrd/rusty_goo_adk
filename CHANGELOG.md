@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/oauth2_discovery.rs`:
+  `AuthorizationServerMetadata` (RFC8414) and `ProtectedResourceMetadata`
+  (RFC9728), C0533's two data models. Field names stay literal
+  snake_case (both RFCs specify snake_case wire fields, unlike this
+  crate's Google-genai-facing camelCase types); `@experimental`'s
+  warn-on-construction ported via an explicit `::new()` calling
+  `warn_experimental`, the same `ResumabilityConfig::new` precedent.
+  `OAuth2DiscoveryManager`'s actual fetching logic stays its own rows
+  (C0534/C0535), needing an async HTTP client this port hasn't adopted
+  anywhere. 4 new tests.
+- `adk-runners::runner::get_function_responses_from_content` (C0835
+  DONE) — extracts every `FunctionResponse` from a `Content`'s parts,
+  `[]` for `None`/no-parts, reusing the already-real
+  `Content::get_function_responses`. Built ahead of its own caller
+  (`_resolve_invocation_id`, C0855 — needs resumability wiring `Runner`
+  doesn't have yet). 3 new tests.
 - `adk-agents::services::{GetSessionConfig, SessionService::get_session_with_config}`
   (C0207 DONE) — `num_recent_events`/`after_timestamp` session-history
   bounding, ported as a new default trait method on `SessionService`

@@ -170,7 +170,7 @@ use adk_errors::session_not_found::SessionNotFoundError;
 use adk_events::debug_output::print_event;
 use adk_events::node_info::NodeInfo;
 use adk_events::Event;
-use adk_genai::content::{Content, Part};
+use adk_genai::content::{Content, FunctionResponse, Part};
 use rusty_serde::value::Value;
 
 #[derive(Debug, rusty_err::Error)]
@@ -288,6 +288,24 @@ fn merge_context_state_into_session(
     }
     session.state.extend(state_delta);
     invocation_context.session = session.clone();
+}
+
+/// C0835: `_get_function_responses_from_content` — extracts every
+/// `FunctionResponse` from `content`'s parts; `[]` when `content` is
+/// `None` or has no parts. Built ahead of its own caller
+/// (`_resolve_invocation_id`, C0855) — needs resumability wiring
+/// `Runner` doesn't have yet, the same "widen/build once a real
+/// consumer needs it" precedent used elsewhere in this port.
+pub fn get_function_responses_from_content(content: Option<&Content>) -> Vec<FunctionResponse> {
+    content
+        .map(|content| {
+            content
+                .get_function_responses()
+                .into_iter()
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Mirrors `_apply_run_config_custom_metadata`: merges
@@ -2131,6 +2149,43 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RunnerError::SessionNotFound(_)));
+    }
+
+    // C0835: `get_function_responses_from_content`.
+
+    #[test]
+    fn get_function_responses_from_content_is_empty_for_none() {
+        assert!(get_function_responses_from_content(None).is_empty());
+    }
+
+    #[test]
+    fn get_function_responses_from_content_is_empty_for_no_parts() {
+        let content = Content::new("user", vec![]);
+        assert!(get_function_responses_from_content(Some(&content)).is_empty());
+    }
+
+    #[test]
+    fn get_function_responses_from_content_extracts_only_response_bearing_parts() {
+        let content = Content::new(
+            "user",
+            vec![
+                Part::text("not a response"),
+                Part::function_response(FunctionResponse {
+                    id: Some("fc-1".to_string()),
+                    name: Some("tool_a".to_string()),
+                    ..Default::default()
+                }),
+                Part::function_response(FunctionResponse {
+                    id: Some("fc-2".to_string()),
+                    name: Some("tool_b".to_string()),
+                    ..Default::default()
+                }),
+            ],
+        );
+        let responses = get_function_responses_from_content(Some(&content));
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0].id.as_deref(), Some("fc-1"));
+        assert_eq!(responses[1].id.as_deref(), Some("fc-2"));
     }
 
     // C0836: `apply_run_config_custom_metadata` — exercised indirectly by
