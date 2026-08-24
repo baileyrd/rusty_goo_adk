@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::skill_toolset::SkillScriptCodeExecutor` +
+  `{python_str_literal, python_bytes_literal, python_list_literal,
+  python_dict_literal}` (C0410 DONE — the `code_executor`-configured
+  path of `RunSkillScriptTool`, closing this row out in full). 11 new
+  tests, including two end-to-end runs against real `python3`/`bash`
+  interpreters and a byte-for-byte round-trip test for the Python-
+  literal escaping. Generates the same self-extracting Python wrapper
+  source the original does (embedding every skill resource as a Python
+  literal, extracting to a temp dir, then `runpy.run_path`-ing a `.py`
+  target or `subprocess.run`-ing a `.sh`/`.bash` target through `bash`
+  with a JSON-envelope result), executed via `rusty_tokio::spawn_blocking`
+  (the `asyncio.to_thread` equivalent). Also adds the
+  `code_executor`/`environment` mutual-exclusivity check the constructor
+  was missing. Disclosed narrowing: the Python-literal helpers are
+  round-trip-correct but not byte-identical to CPython's `repr()`
+  (adaptive quote selection); the source's `except SystemExit as e:`
+  branch is dead code for this port's only concrete `BaseCodeExecutor`
+  (`UnsafeLocalCodeExecutor`, always subprocess-based, with no exit-code
+  field on `CodeExecutionResult` to inspect). No new dependency.
 - `adk-tools::skill_toolset::{AdditionalTool, SkillToolsetConfig
   ::additional_tools, SkillToolset::{resolve_additional_tools_from_state,
   clone_with_updated_skills}}` (C0950 DONE, closing the gap discovered

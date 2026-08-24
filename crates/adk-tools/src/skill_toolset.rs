@@ -1,9 +1,9 @@
 //! Capabilities C0408 (core `SkillToolset`/`ListSkillsTool`/
 //! `SearchSkillsTool`/`LoadSkillTool`), C0409 (`LoadSkillResourceTool`),
-//! C0410 (`RunSkillScriptTool`, partial), C0411
-//! (`DEFAULT_SKILL_SYSTEM_INSTRUCTION`), C0401 (`adk_inject_state`
-//! interpolation, exercised via `LoadSkillTool`), and C0950
-//! (`SkillToolset.additional_tools`/`_resolve_additional_tools_from_state`/
+//! C0410 (`RunSkillScriptTool`, now in full — both the `environment` and
+//! `code_executor` branches), C0411 (`DEFAULT_SKILL_SYSTEM_INSTRUCTION`),
+//! C0401 (`adk_inject_state` interpolation, exercised via `LoadSkillTool`),
+//! and C0950 (`SkillToolset.additional_tools`/`_resolve_additional_tools_from_state`/
 //! `clone_with_updated_skills`), ported from `google.adk.tools.skill_toolset`.
 //!
 //! **Architectural adaptation, disclosed at length**: the source's five
@@ -35,24 +35,30 @@
 //! overload in Python with no faithful equivalent here, not a capability
 //! this port drops.
 //!
-//! **C0410, partial**: `RunSkillScriptTool`'s `environment`-configured
-//! branch (JIT resource materialization + `env.execute(command)`) and its
-//! "neither environment nor code executor configured" error branch are
-//! both ported in full. The `code_executor`-configured branch — which
-//! needs `_SkillScriptCodeExecutor`, generating literal Python wrapper
-//! source (`runpy.run_path` for `.py`, a `subprocess.run`-plus-JSON-
-//! envelope wrapper for `.sh`/`.bash`) to hand to `BaseCodeExecutor
-//! ::execute_code` — is NOT ported: it's a from-scratch code-generation
-//! design, not a mechanical translation, and is substantial enough to
-//! warrant its own batch. Consequently this port's [`SkillCoreState`]
-//! (and [`SkillToolsetConfig`]) has no `code_executor` field at all, only
-//! `environment` — exposing a `code_executor` option that couldn't
-//! actually run a script would be worse than not exposing it. When
-//! `environment` is `None`, this port's `RunSkillScriptTool` always
-//! returns `NO_CODE_EXECUTOR`, matching the source's own behavior for
-//! that same "neither configured" case exactly (the source's own
-//! agent-level `code_executor` fallback lookup, one indirection deeper
-//! still, is likewise not reproduced for the same reason).
+//! **C0410, now DONE — `SkillScriptCodeExecutor`**: `RunSkillScriptTool`'s
+//! `code_executor`-configured branch (`_SkillScriptCodeExecutor` in the
+//! source) is ported in full: [`SkillScriptCodeExecutor::build_wrapper_code`]
+//! generates the same self-extracting Python wrapper source (embedding
+//! every skill resource as a Python literal, extracting to a temp dir,
+//! then either `runpy.run_path`-ing a `.py` target or `subprocess.run`-ing
+//! a `.sh`/`.bash` target through `bash` with a JSON-envelope result) and
+//! hands it to [`BaseCodeExecutor::execute_code`] via
+//! `rusty_tokio::spawn_blocking` (the `asyncio.to_thread` equivalent).
+//! [`python_str_literal`]/[`python_bytes_literal`]/[`python_list_literal`]/
+//! [`python_dict_literal`] are this port's `repr()`-equivalent — round-
+//! trip-correct (verified against a real `python3` interpreter in this
+//! module's own tests) but not byte-identical to CPython's adaptive
+//! quote-selection, the same disclosed caveat already given to
+//! `value_to_display_string` elsewhere in this port. This port's only
+//! concrete `BaseCodeExecutor` (`UnsafeLocalCodeExecutor`, C0385) always
+//! runs the wrapper as a real subprocess, so the source's defensive
+//! `except SystemExit as e:` branch (meaningful only for an in-process-
+//! `exec`-based executor) is dead code here — see
+//! [`SkillScriptCodeExecutor`]'s own doc for why it isn't reproduced.
+//! Also added: the mutual-exclusivity check
+//! (`"Cannot have both code_executor and environment"`) the source's own
+//! constructor enforces, which this port's constructor was missing until
+//! now.
 //!
 //! **`_get_or_fetch_skill`'s cache, disclosed narrowing**: the source
 //! stores an `asyncio.Future` in the per-invocation turn cache the
@@ -101,10 +107,11 @@ use adk_genai::content::{Content, FunctionDeclaration, MediaBlobStub, Part};
 use adk_models::llm_request::{Instructions, LlmRequest};
 use rusty_serde::value::Value;
 
+use crate::base_code_executor::BaseCodeExecutor;
 use crate::base_environment::BaseEnvironment;
 use crate::base_tool::{BaseTool, BoxFuture, ToolError};
 use crate::base_toolset::{BaseToolset, PrefixCache, ToolFilter};
-use crate::code_execution_utils::base64_encode;
+use crate::code_execution_utils::{base64_encode, CodeExecutionInput};
 use crate::skill_instructions_utils::inject_session_state;
 use crate::skill_registry::SkillRegistry;
 use crate::skills_models::{ResourceContent, Skill};
@@ -113,6 +120,7 @@ use crate::tool_context::ToolContext;
 
 const DEFAULT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_CACHE_TURNS: usize = 16;
+const MAX_SKILL_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 const BINARY_FILE_DETECTED_MSG: &str = "Binary file detected. The content has been injected into the conversation history for you to analyze.";
 
 // ---------------------------------------------------------------------
@@ -290,6 +298,7 @@ struct SkillCoreState {
     skills: HashMap<String, Skill>,
     registry: Option<Arc<dyn SkillRegistry>>,
     env: Option<Arc<dyn BaseEnvironment>>,
+    code_executor: Option<Arc<dyn BaseCodeExecutor + Send + Sync>>,
     skills_folder_override: Option<PathBuf>,
     script_timeout: Duration,
     fetched_skill_cache: Mutex<FetchedSkillCache>,
@@ -938,13 +947,472 @@ impl BaseTool for LoadSkillResourceTool {
 }
 
 // ---------------------------------------------------------------------
+// SkillScriptCodeExecutor: `_SkillScriptCodeExecutor`'s Python-wrapper-
+// generation path (the `code_executor`-configured branch of C0410).
+// ---------------------------------------------------------------------
+
+/// Python `str.__repr__`-equivalent — a single-quoted literal, escaping
+/// backslash/quote/control characters so the result is valid Python
+/// source that parses back to exactly this string. **Not** byte-identical
+/// to CPython's `repr()` (which adaptively picks the quote character and
+/// may render some characters differently) — only guaranteed
+/// round-trip-correct, the same "reasonable, not byte-identical"
+/// treatment already given to `value_to_display_string` elsewhere in
+/// this port.
+fn python_str_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Python `bytes.__repr__`-equivalent — see [`python_str_literal`]'s doc
+/// for the same round-trip-correct-not-byte-identical caveat.
+fn python_bytes_literal(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() + 3);
+    out.push_str("b'");
+    for &b in bytes {
+        match b {
+            b'\\' => out.push_str("\\\\"),
+            b'\'' => out.push_str("\\'"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            0x20..=0x7e => out.push(b as char),
+            _ => out.push_str(&format!("\\x{b:02x}")),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Python `list[str].__repr__`-equivalent.
+fn python_list_literal(items: &[String]) -> String {
+    let reprs: Vec<String> = items.iter().map(|s| python_str_literal(s)).collect();
+    format!("[{}]", reprs.join(", "))
+}
+
+/// Python `dict[str, str | bytes].__repr__`-equivalent — `_build_wrapper_code`'s
+/// `{files_dict!r}` embedding.
+fn python_dict_literal(entries: &[(String, ResourceContent)]) -> String {
+    let parts: Vec<String> = entries
+        .iter()
+        .map(|(key, value)| {
+            let value_repr = match value {
+                ResourceContent::Text(s) => python_str_literal(s),
+                ResourceContent::Bytes(b) => python_bytes_literal(b),
+            };
+            format!("{}: {}", python_str_literal(key), value_repr)
+        })
+        .collect();
+    format!("{{{}}}", parts.join(", "))
+}
+
+/// `type(x).__name__`-equivalent, for the `script_args`/`short_options`/
+/// `positional_args` type-validation error messages — approximate, not
+/// distinguishing every Python type precisely (e.g. `tuple` vs `list`),
+/// since `rusty_serde::value::Value`'s variants don't map onto Python's
+/// type system 1:1.
+fn value_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Int(_) | Value::UInt(_) => "int",
+        Value::Float(_) => "float",
+        Value::String(_) => "str",
+        Value::Seq(_) => "list",
+        Value::Map(_) => "dict",
+    }
+}
+
+/// Python `str(v)`-equivalent for a JSON-sourced value — used to render
+/// `script_args`/`short_options` values into `--flag value` argv
+/// entries. Same shape (and same disclosed non-byte-identical `float`/
+/// `list`/`dict` rendering) as `skill_instructions_utils::value_to_display_string`,
+/// duplicated locally rather than shared — this is the only other call
+/// site in this crate, not worth a shared helper.
+fn python_str_of_value(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::String(s) => s.clone(),
+        Value::Int(i) => i.to_string(),
+        Value::UInt(u) => u.to_string(),
+        Value::Float(_) | Value::Seq(_) | Value::Map(_) => {
+            rusty_serde::json::to_string(value).unwrap_or_default()
+        }
+    }
+}
+
+/// `script_args: dict[str, Any] | list[str] | None` — see the module's
+/// use of this in `RunSkillScriptTool::run_async`'s validation.
+enum ScriptArgsValue {
+    List(Vec<Value>),
+    Map(Vec<(String, Value)>),
+}
+
+/// Builds the `--{k} {v}`/`-{k} {v}`/positional argv entries shared by
+/// both the `.py` and `.sh`/`.bash` wrapper branches — `_build_wrapper_code`'s
+/// `argv_list`/`arr` construction (identical shape in both branches; the
+/// source's cosmetic `str(v) for v in positional_args` vs. bare
+/// `positional_args` difference between the two branches has no
+/// behavioral effect, since `positional_args` is always `list[str]` by
+/// the point this runs — validated before either branch is reached).
+fn build_argv(
+    script_args: Option<&ScriptArgsValue>,
+    short_options: Option<&[(String, Value)]>,
+    positional_args: Option<&[String]>,
+) -> Vec<String> {
+    let mut argv = Vec::new();
+    match script_args {
+        Some(ScriptArgsValue::List(items)) => {
+            argv.extend(items.iter().map(python_str_of_value));
+        }
+        _ => {
+            if let Some(ScriptArgsValue::Map(entries)) = script_args {
+                for (k, v) in entries {
+                    argv.push(format!("--{k}"));
+                    argv.push(python_str_of_value(v));
+                }
+            }
+            if let Some(entries) = short_options {
+                for (k, v) in entries {
+                    argv.push(format!("-{k}"));
+                    argv.push(python_str_of_value(v));
+                }
+            }
+            if let Some(positional) = positional_args {
+                if !positional.is_empty() {
+                    argv.push("--".to_string());
+                    argv.extend(positional.iter().cloned());
+                }
+            }
+        }
+    }
+    argv
+}
+
+fn skill_files_dict(skill: &Skill) -> Vec<(String, ResourceContent)> {
+    let mut files = Vec::new();
+    for ref_name in skill.resources.list_references() {
+        if let Some(content) = skill.resources.get_reference(ref_name) {
+            files.push((format!("references/{ref_name}"), content.clone()));
+        }
+    }
+    for asset_name in skill.resources.list_assets() {
+        if let Some(content) = skill.resources.get_asset(asset_name) {
+            files.push((format!("assets/{asset_name}"), content.clone()));
+        }
+    }
+    for script_name in skill.resources.list_scripts() {
+        if let Some(script) = skill.resources.get_script(script_name) {
+            files.push((
+                format!("scripts/{script_name}"),
+                ResourceContent::Text(script.src.clone()),
+            ));
+        }
+    }
+    files
+}
+
+/// C0410: `_SkillScriptCodeExecutor` — materializes a skill's files and
+/// executes a `.py`/`.sh`/`.bash` script against a [`BaseCodeExecutor`]
+/// by generating a self-extracting Python wrapper script (embedding every
+/// resource as a Python literal, extracting to a temp dir, then either
+/// `runpy.run_path`-ing the target `.py` file or `subprocess.run`-ing it
+/// through `bash` with a JSON-envelope result).
+///
+/// **`except SystemExit`, dead code for this port's only concrete
+/// executor, disclosed**: the source's `execute_script_async` catches a
+/// `SystemExit` the underlying executor might raise back into the
+/// *calling* Python process — meaningful only for an in-process-`exec`-
+/// based `BaseCodeExecutor`. This port's only concrete implementor,
+/// `UnsafeLocalCodeExecutor` (C0385), always runs the wrapper as a real
+/// subprocess — a subprocess's own uncaught `SystemExit` just becomes
+/// its process exit status, never a Rust-visible exception, and
+/// `CodeExecutionResult` (C0391) carries no exit-code field to inspect
+/// either. Not reproduced: there is nothing this port's executors could
+/// raise into that branch.
+struct SkillScriptCodeExecutor {
+    base_executor: Arc<dyn BaseCodeExecutor + Send + Sync>,
+    script_timeout: Duration,
+}
+
+impl SkillScriptCodeExecutor {
+    fn new(
+        base_executor: Arc<dyn BaseCodeExecutor + Send + Sync>,
+        script_timeout: Duration,
+    ) -> Self {
+        Self {
+            base_executor,
+            script_timeout,
+        }
+    }
+
+    /// `_SkillScriptCodeExecutor._build_wrapper_code`. `None` for an
+    /// unsupported extension (matches the source's `.py`/`.sh`/`.bash`-only
+    /// support, surfaced by the caller as `UNSUPPORTED_SCRIPT_TYPE`).
+    fn build_wrapper_code(
+        &self,
+        skill: &Skill,
+        file_path: &str,
+        script_args: Option<&ScriptArgsValue>,
+        short_options: Option<&[(String, Value)]>,
+        positional_args: Option<&[String]>,
+    ) -> Option<String> {
+        let ext = if file_path.contains('.') {
+            file_path
+                .rsplit('.')
+                .next()
+                .unwrap_or_default()
+                .to_lowercase()
+        } else {
+            String::new()
+        };
+
+        let file_path = if file_path.starts_with("scripts/") {
+            file_path.to_string()
+        } else {
+            format!("scripts/{file_path}")
+        };
+
+        let files_dict = skill_files_dict(skill);
+        let total_size: usize = files_dict
+            .iter()
+            .map(|(_, content)| match content {
+                ResourceContent::Text(s) => s.len(),
+                ResourceContent::Bytes(b) => b.len(),
+            })
+            .sum();
+        if total_size > MAX_SKILL_PAYLOAD_BYTES {
+            eprintln!(
+                "Skill '{}' resources total {total_size} bytes, exceeding the recommended \
+                 limit of {MAX_SKILL_PAYLOAD_BYTES} bytes.",
+                skill.name()
+            );
+        }
+
+        let mut code_lines: Vec<String> = vec![
+            "import os".to_string(),
+            "import tempfile".to_string(),
+            "import sys".to_string(),
+            "import json as _json".to_string(),
+            "import subprocess".to_string(),
+            "import runpy".to_string(),
+            format!("_files = {}", python_dict_literal(&files_dict)),
+            "def _materialize_and_run():".to_string(),
+            "  _orig_cwd = os.getcwd()".to_string(),
+            "  with tempfile.TemporaryDirectory() as td:".to_string(),
+            "    for rel_path, content in _files.items():".to_string(),
+            "      norm_rel = os.path.normpath(rel_path)".to_string(),
+            "      if norm_rel.startswith('..') or os.path.isabs(norm_rel):".to_string(),
+            "        raise PermissionError('Path traversal blocked in skill file: ' + rel_path)"
+                .to_string(),
+            "      full_path = os.path.join(os.path.abspath(td), norm_rel)".to_string(),
+            "      os.makedirs(os.path.dirname(full_path), exist_ok=True)".to_string(),
+            "      mode = 'wb' if isinstance(content, bytes) else 'w'".to_string(),
+            "      with open(full_path, mode, encoding='utf-8' if mode == 'w' else None) as f:"
+                .to_string(),
+            "        f.write(content)".to_string(),
+            "    os.chdir(td)".to_string(),
+            "    try:".to_string(),
+        ];
+
+        if ext == "py" {
+            let mut argv_list = vec![file_path.clone()];
+            argv_list.extend(build_argv(script_args, short_options, positional_args));
+            code_lines.push(format!(
+                "      sys.argv = {}",
+                python_list_literal(&argv_list)
+            ));
+            code_lines.push(format!(
+                "      sys.path.insert(0, os.path.dirname(os.path.abspath({})))",
+                python_str_literal(&file_path)
+            ));
+            code_lines.push("      try:".to_string());
+            code_lines.push(format!(
+                "        runpy.run_path({}, run_name='__main__')",
+                python_str_literal(&file_path)
+            ));
+            code_lines.push("      except SystemExit as e:".to_string());
+            code_lines.push("        if e.code is not None and e.code != 0:".to_string());
+            code_lines.push("          raise e".to_string());
+        } else if ext == "sh" || ext == "bash" {
+            let mut arr = vec!["bash".to_string(), file_path.clone()];
+            arr.extend(build_argv(script_args, short_options, positional_args));
+            let timeout_secs = self.script_timeout.as_secs();
+            code_lines.push("      try:".to_string());
+            code_lines.push("        _r = subprocess.run(".to_string());
+            code_lines.push(format!("          {},", python_list_literal(&arr)));
+            code_lines.push("          capture_output=True, text=True,".to_string());
+            code_lines.push("          encoding='utf-8', errors='replace',".to_string());
+            code_lines.push(format!("          timeout={timeout_secs}, cwd=td,"));
+            code_lines.push("        )".to_string());
+            code_lines.push("        print(_json.dumps({".to_string());
+            code_lines.push("            '__shell_result__': True,".to_string());
+            code_lines.push("            'stdout': _r.stdout,".to_string());
+            code_lines.push("            'stderr': _r.stderr,".to_string());
+            code_lines.push("            'returncode': _r.returncode,".to_string());
+            code_lines.push("        }))".to_string());
+            code_lines.push("      except subprocess.TimeoutExpired as _e:".to_string());
+            code_lines.push("        print(_json.dumps({".to_string());
+            code_lines.push("            '__shell_result__': True,".to_string());
+            code_lines.push("            'stdout': _e.stdout or '',".to_string());
+            code_lines.push(format!(
+                "            'stderr': 'Timed out after {timeout_secs}s',"
+            ));
+            code_lines.push("            'returncode': -1,".to_string());
+            code_lines.push("            'timeout': True,".to_string());
+            code_lines.push("        }))".to_string());
+        } else {
+            return None;
+        }
+
+        code_lines.push("    finally:".to_string());
+        code_lines.push("      os.chdir(_orig_cwd)".to_string());
+        code_lines.push("_materialize_and_run()".to_string());
+        Some(code_lines.join("\n"))
+    }
+
+    /// `_SkillScriptCodeExecutor.execute_script_async`.
+    async fn execute_script_async(
+        &self,
+        invocation_context: &adk_agents::invocation_context::InvocationContext,
+        skill: &Skill,
+        file_path: &str,
+        script_args: Option<&ScriptArgsValue>,
+        short_options: Option<&[(String, Value)]>,
+        positional_args: Option<&[String]>,
+    ) -> Value {
+        let Some(code) = self.build_wrapper_code(
+            skill,
+            file_path,
+            script_args,
+            short_options,
+            positional_args,
+        ) else {
+            let ext_msg = if let Some((_, ext)) = file_path.rsplit_once('.') {
+                format!("'.{ext}'")
+            } else {
+                "(no extension)".to_string()
+            };
+            return error_response(
+                format!("Unsupported script type {ext_msg}. Supported types: .py, .sh, .bash"),
+                "UNSUPPORTED_SCRIPT_TYPE",
+            );
+        };
+
+        let input = CodeExecutionInput {
+            code,
+            input_files: Vec::new(),
+            execution_id: None,
+        };
+
+        // `asyncio.to_thread`-equivalent: `execute_code` is synchronous.
+        let executor = self.base_executor.clone();
+        let invocation_context_owned = invocation_context.clone();
+        let outcome = rusty_tokio::spawn_blocking(move || {
+            executor.execute_code(&invocation_context_owned, &input)
+        })
+        .await;
+
+        let result = match outcome {
+            Ok(result) => result,
+            Err(join_error) => {
+                return error_response(
+                    format!("Failed to execute script '{file_path}':\n{join_error}"),
+                    "EXECUTION_ERROR",
+                )
+            }
+        };
+
+        let mut stdout = result.stdout;
+        let mut stderr = result.stderr;
+        let mut return_code: i64 = 0;
+
+        let extension = file_path.rsplit('.').next().unwrap_or("").to_lowercase();
+        let is_shell = file_path.contains('.') && (extension == "sh" || extension == "bash");
+        if is_shell && !stdout.is_empty() {
+            if let Ok(Value::Map(fields)) = rusty_serde::json::from_str::<Value>(&stdout) {
+                let get = |key: &str| {
+                    fields
+                        .iter()
+                        .find(|(k, _)| k == key)
+                        .map(|(_, v)| v.clone())
+                };
+                let is_shell_result = matches!(get("__shell_result__"), Some(Value::Bool(true)));
+                if is_shell_result {
+                    stdout = match get("stdout") {
+                        Some(Value::String(s)) => s,
+                        _ => String::new(),
+                    };
+                    stderr = match get("stderr") {
+                        Some(Value::String(s)) => s,
+                        _ => String::new(),
+                    };
+                    return_code = match get("returncode") {
+                        Some(Value::Int(n)) => n,
+                        Some(Value::UInt(n)) => n as i64,
+                        _ => 0,
+                    };
+                    let timed_out = matches!(get("timeout"), Some(Value::Bool(true)));
+                    if return_code != 0 && !timed_out {
+                        let exit_code_message = format!("Exit code {return_code}");
+                        stderr = if stderr.is_empty() {
+                            exit_code_message
+                        } else {
+                            format!("{}\n{exit_code_message}", stderr.trim_end())
+                        };
+                    }
+                }
+            }
+        }
+
+        let status = if return_code != 0 || (!stderr.is_empty() && stdout.is_empty()) {
+            "error"
+        } else if !stderr.is_empty() {
+            "warning"
+        } else {
+            "success"
+        };
+
+        Value::Map(vec![
+            (
+                "skill_name".to_string(),
+                Value::String(skill.name().to_string()),
+            ),
+            (
+                "file_path".to_string(),
+                Value::String(file_path.to_string()),
+            ),
+            ("stdout".to_string(), Value::String(stdout)),
+            ("stderr".to_string(), Value::String(stderr)),
+            ("status".to_string(), Value::String(status.to_string())),
+        ])
+    }
+}
+
+// ---------------------------------------------------------------------
 // RunSkillScriptTool
 // ---------------------------------------------------------------------
 
-/// C0410 (partial — see this module's doc): `RunSkillScriptTool`
-/// (`run_skill_script`) — executes a script from a skill's `scripts/`
-/// directory. Only the `environment`-configured path (and the "neither
-/// configured" error) are ported this batch.
+/// C0410: `RunSkillScriptTool` (`run_skill_script`) — executes a script
+/// from a skill's `scripts/` directory, against either an `environment`
+/// or a `code_executor`.
 pub struct RunSkillScriptTool {
     core: Arc<SkillCoreState>,
 }
@@ -1159,11 +1627,67 @@ impl BaseTool for RunSkillScriptTool {
                 _ => None,
             });
 
-            if self.core.env.is_some() && command.is_none() {
-                return Ok(error_response(
-                    "Argument 'command' is required and must be a string.",
-                    "INVALID_ARGUMENTS",
-                ));
+            let mut script_args: Option<ScriptArgsValue> = None;
+            let mut short_options: Option<Vec<(String, Value)>> = None;
+            let mut positional_args: Option<Vec<String>> = None;
+
+            if self.core.env.is_some() {
+                if command.is_none() {
+                    return Ok(error_response(
+                        "Argument 'command' is required and must be a string.",
+                        "INVALID_ARGUMENTS",
+                    ));
+                }
+            } else {
+                let mut errors: Vec<String> = Vec::new();
+
+                match args.get("args") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::Seq(items)) => {
+                        script_args = Some(ScriptArgsValue::List(items.clone()))
+                    }
+                    Some(Value::Map(entries)) => {
+                        script_args = Some(ScriptArgsValue::Map(entries.clone()))
+                    }
+                    Some(other) => errors.push(format!(
+                        "'args' must be a JSON object (dict) or a list of strings, got {}.",
+                        value_type_name(other)
+                    )),
+                }
+
+                match args.get("short_options") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::Map(entries)) => short_options = Some(entries.clone()),
+                    Some(other) => errors.push(format!(
+                        "'short_options' must be a JSON object (dict), got {}.",
+                        value_type_name(other)
+                    )),
+                }
+
+                match args.get("positional_args") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::Seq(items)) => {
+                        positional_args = Some(items.iter().map(python_str_of_value).collect())
+                    }
+                    Some(other) => errors.push(format!(
+                        "'positional_args' must be a list of strings, got {}.",
+                        value_type_name(other)
+                    )),
+                }
+
+                if matches!(script_args, Some(ScriptArgsValue::List(_)))
+                    && (short_options.is_some() || positional_args.is_some())
+                {
+                    errors.push(
+                        "Cannot specify 'short_options' or 'positional_args' when 'args' is a \
+                         list."
+                            .to_string(),
+                    );
+                }
+
+                if !errors.is_empty() {
+                    return Ok(error_response(errors.join("\n"), "INVALID_ARGUMENTS"));
+                }
             }
 
             let invocation_id = tool_context.invocation_context().invocation_id.clone();
@@ -1209,7 +1733,32 @@ impl BaseTool for RunSkillScriptTool {
                 ));
             }
 
-            let Some(env) = &self.core.env else {
+            if let Some(env) = &self.core.env {
+                if let Err(e) = self.ensure_materialized(&skill, &file_path, env).await {
+                    return Ok(error_response(
+                        format!("Failed to execute script '{file_path}' in environment:\n{e}"),
+                        "EXECUTION_ERROR",
+                    ));
+                }
+
+                return match env
+                    .execute(&command.unwrap(), Some(self.core.script_timeout))
+                    .await
+                {
+                    Ok(result) => Ok(Value::Map(vec![
+                        ("stdout".to_string(), Value::String(result.stdout)),
+                        ("stderr".to_string(), Value::String(result.stderr)),
+                        ("exit_code".to_string(), Value::Int(result.exit_code as i64)),
+                        ("timed_out".to_string(), Value::Bool(result.timed_out)),
+                    ])),
+                    Err(e) => Ok(error_response(
+                        format!("Failed to execute script '{file_path}' in environment:\n{e}"),
+                        "EXECUTION_ERROR",
+                    )),
+                };
+            }
+
+            let Some(code_executor) = self.core.code_executor.clone() else {
                 return Ok(error_response(
                     "Neither Environment nor CodeExecutor is configured. An environment or \
                      code executor is required to run scripts.",
@@ -1217,28 +1766,19 @@ impl BaseTool for RunSkillScriptTool {
                 ));
             };
 
-            if let Err(e) = self.ensure_materialized(&skill, &file_path, env).await {
-                return Ok(error_response(
-                    format!("Failed to execute script '{file_path}' in environment:\n{e}"),
-                    "EXECUTION_ERROR",
-                ));
-            }
-
-            match env
-                .execute(&command.unwrap(), Some(self.core.script_timeout))
-                .await
-            {
-                Ok(result) => Ok(Value::Map(vec![
-                    ("stdout".to_string(), Value::String(result.stdout)),
-                    ("stderr".to_string(), Value::String(result.stderr)),
-                    ("exit_code".to_string(), Value::Int(result.exit_code as i64)),
-                    ("timed_out".to_string(), Value::Bool(result.timed_out)),
-                ])),
-                Err(e) => Ok(error_response(
-                    format!("Failed to execute script '{file_path}' in environment:\n{e}"),
-                    "EXECUTION_ERROR",
-                )),
-            }
+            let script_executor =
+                SkillScriptCodeExecutor::new(code_executor, self.core.script_timeout);
+            let invocation_context = tool_context.get_invocation_context();
+            Ok(script_executor
+                .execute_script_async(
+                    &invocation_context,
+                    &skill,
+                    &file_path,
+                    script_args.as_ref(),
+                    short_options.as_deref(),
+                    positional_args.as_deref(),
+                )
+                .await)
         })
     }
 }
@@ -1262,6 +1802,9 @@ pub struct SkillToolsetConfig {
     pub skills: Vec<Skill>,
     pub registry: Option<Arc<dyn SkillRegistry>>,
     pub environment: Option<Arc<dyn BaseEnvironment>>,
+    /// C0410: mutually exclusive with `environment` (checked in
+    /// `SkillToolset::new`, matching the source's own `raise ValueError`).
+    pub code_executor: Option<Arc<dyn BaseCodeExecutor + Send + Sync>>,
     pub skills_folder: Option<PathBuf>,
     pub script_timeout: Duration,
     /// C0950: tools/toolsets made available when an activated skill's
@@ -1277,6 +1820,7 @@ impl Default for SkillToolsetConfig {
             skills: Vec::new(),
             registry: None,
             environment: None,
+            code_executor: None,
             skills_folder: None,
             script_timeout: DEFAULT_SCRIPT_TIMEOUT,
             additional_tools: Vec::new(),
@@ -1305,6 +1849,10 @@ impl SkillToolset {
                 return Err(format!("Duplicate skill name '{}'.", skill.name()));
             }
             skills.insert(skill.name().to_string(), skill);
+        }
+
+        if config.code_executor.is_some() && config.environment.is_some() {
+            return Err("Cannot have both code_executor and environment".to_string());
         }
 
         if let Some(folder) = &config.skills_folder {
@@ -1337,6 +1885,7 @@ impl SkillToolset {
             skills,
             registry: config.registry,
             env: config.environment,
+            code_executor: config.code_executor,
             skills_folder_override: config.skills_folder,
             script_timeout: config.script_timeout,
             fetched_skill_cache: Mutex::new(FetchedSkillCache::default()),
@@ -1398,6 +1947,7 @@ impl SkillToolset {
             skills,
             registry: self.core.registry.clone(),
             environment: self.core.env.clone(),
+            code_executor: self.core.code_executor.clone(),
             skills_folder: self.core.skills_folder_override.clone(),
             script_timeout: self.core.script_timeout,
             additional_tools,
@@ -2300,6 +2850,7 @@ mod tests {
             skills: HashMap::new(),
             registry: Some(registry.clone()),
             env: None,
+            code_executor: None,
             skills_folder_override: None,
             script_timeout: DEFAULT_SCRIPT_TIMEOUT,
             fetched_skill_cache: Mutex::new(FetchedSkillCache::default()),
@@ -2322,6 +2873,7 @@ mod tests {
             skills: HashMap::new(),
             registry: Some(registry),
             env: None,
+            code_executor: None,
             skills_folder_override: None,
             script_timeout: DEFAULT_SCRIPT_TIMEOUT,
             fetched_skill_cache: Mutex::new(FetchedSkillCache::default()),
@@ -2523,5 +3075,250 @@ mod tests {
         );
         assert!(cloned.provided_tools_by_name.contains_key("extra_tool"));
         assert_eq!(cloned.tool_name_prefix(), None);
+    }
+
+    // -------------------------------------------------------------
+    // C0410: RunSkillScriptTool's `code_executor` path
+    // -------------------------------------------------------------
+
+    fn python_available() -> bool {
+        std::process::Command::new("python3")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    #[test]
+    fn python_str_literal_round_trips_through_a_real_interpreter() {
+        if !python_available() {
+            eprintln!("skipping: no python3 interpreter on PATH");
+            return;
+        }
+        let tricky = "it's a \\test\\ with\nnewlines\tand\rcontrol\x01chars and 'quotes'";
+        let literal = python_str_literal(tricky);
+        let code = format!("import sys; sys.stdout.write({literal})");
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&code)
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), tricky);
+    }
+
+    #[test]
+    fn python_bytes_literal_round_trips_through_a_real_interpreter() {
+        if !python_available() {
+            eprintln!("skipping: no python3 interpreter on PATH");
+            return;
+        }
+        let tricky: &[u8] = b"raw \xffbytes\x00 with 'quotes' and \\backslash\\";
+        let literal = python_bytes_literal(tricky);
+        let code = format!("import sys; sys.stdout.buffer.write({literal})");
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&code)
+            .output()
+            .unwrap();
+        assert_eq!(output.stdout, tricky);
+    }
+
+    #[test]
+    fn build_wrapper_code_returns_none_for_an_unsupported_extension() {
+        let base_executor: Arc<dyn BaseCodeExecutor + Send + Sync> =
+            Arc::new(crate::unsafe_local_code_executor::UnsafeLocalCodeExecutor::new());
+        let script_executor = SkillScriptCodeExecutor::new(base_executor, DEFAULT_SCRIPT_TIMEOUT);
+        let skill = skill("alpha");
+        assert!(script_executor
+            .build_wrapper_code(&skill, "scripts/run.rb", None, None, None)
+            .is_none());
+    }
+
+    #[rusty_tokio::test]
+    async fn skill_toolset_new_rejects_both_code_executor_and_environment() {
+        let base_executor: Arc<dyn BaseCodeExecutor + Send + Sync> =
+            Arc::new(crate::unsafe_local_code_executor::UnsafeLocalCodeExecutor::new());
+        let config = SkillToolsetConfig {
+            code_executor: Some(base_executor),
+            environment: Some(Arc::new(LocalEnvironment::new()) as Arc<dyn BaseEnvironment>),
+            ..Default::default()
+        };
+        let err = SkillToolset::new(config).err().unwrap();
+        assert!(err.contains("Cannot have both code_executor and environment"));
+    }
+
+    #[rusty_tokio::test]
+    async fn run_skill_script_executes_a_python_script_via_the_code_executor() {
+        if !python_available() {
+            eprintln!("skipping: no python3 interpreter on PATH");
+            return;
+        }
+        let mut with_script = skill("alpha");
+        with_script.resources.scripts.insert(
+            "run.py".to_string(),
+            crate::skills_models::Script {
+                src: "import sys\nprint('argv:', sys.argv[1:])".to_string(),
+            },
+        );
+        let base_executor: Arc<dyn BaseCodeExecutor + Send + Sync> =
+            Arc::new(crate::unsafe_local_code_executor::UnsafeLocalCodeExecutor::new());
+        let config = SkillToolsetConfig {
+            skills: vec![with_script],
+            code_executor: Some(base_executor),
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let tool = toolset
+            .tools
+            .iter()
+            .find(|t| t.name() == "run_skill_script")
+            .unwrap();
+        let mut args = args_map(&[("skill_name", "alpha"), ("file_path", "scripts/run.py")]);
+        args.insert(
+            "args".to_string(),
+            Value::Map(vec![(
+                "greeting".to_string(),
+                Value::String("hi".to_string()),
+            )]),
+        );
+        let mut context = ctx();
+        let result = tool.run_async(&args, &mut context).await.unwrap();
+        match result {
+            Value::Map(fields) => {
+                let stdout = fields.iter().find(|(k, _)| k == "stdout").unwrap();
+                assert!(
+                    matches!(&stdout.1, Value::String(s) if s.contains("--greeting") && s.contains("hi"))
+                );
+                let status = fields.iter().find(|(k, _)| k == "status").unwrap();
+                assert_eq!(status.1, Value::String("success".to_string()));
+            }
+            other => panic!("expected a map, got {other:?}"),
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn run_skill_script_executes_a_shell_script_via_the_code_executor() {
+        if !python_available()
+            || std::process::Command::new("bash")
+                .arg("--version")
+                .output()
+                .is_err()
+        {
+            eprintln!("skipping: no python3/bash interpreter on PATH");
+            return;
+        }
+        let mut with_script = skill("alpha");
+        with_script.resources.scripts.insert(
+            "run.sh".to_string(),
+            crate::skills_models::Script {
+                src: "echo hello-from-shell".to_string(),
+            },
+        );
+        let base_executor: Arc<dyn BaseCodeExecutor + Send + Sync> =
+            Arc::new(crate::unsafe_local_code_executor::UnsafeLocalCodeExecutor::new());
+        let config = SkillToolsetConfig {
+            skills: vec![with_script],
+            code_executor: Some(base_executor),
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let tool = toolset
+            .tools
+            .iter()
+            .find(|t| t.name() == "run_skill_script")
+            .unwrap();
+        let args = args_map(&[("skill_name", "alpha"), ("file_path", "scripts/run.sh")]);
+        let mut context = ctx();
+        let result = tool.run_async(&args, &mut context).await.unwrap();
+        match result {
+            Value::Map(fields) => {
+                let stdout = fields.iter().find(|(k, _)| k == "stdout").unwrap();
+                assert!(matches!(&stdout.1, Value::String(s) if s.trim() == "hello-from-shell"));
+                let status = fields.iter().find(|(k, _)| k == "status").unwrap();
+                assert_eq!(status.1, Value::String("success".to_string()));
+            }
+            other => panic!("expected a map, got {other:?}"),
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn run_skill_script_rejects_a_non_dict_non_list_args_value() {
+        let mut with_script = skill("alpha");
+        with_script.resources.scripts.insert(
+            "run.py".to_string(),
+            crate::skills_models::Script {
+                src: "print('hi')".to_string(),
+            },
+        );
+        let base_executor: Arc<dyn BaseCodeExecutor + Send + Sync> =
+            Arc::new(crate::unsafe_local_code_executor::UnsafeLocalCodeExecutor::new());
+        let config = SkillToolsetConfig {
+            skills: vec![with_script],
+            code_executor: Some(base_executor),
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let tool = toolset
+            .tools
+            .iter()
+            .find(|t| t.name() == "run_skill_script")
+            .unwrap();
+        let mut args = args_map(&[("skill_name", "alpha"), ("file_path", "scripts/run.py")]);
+        args.insert(
+            "args".to_string(),
+            Value::String("not-a-dict-or-list".to_string()),
+        );
+        let mut context = ctx();
+        let result = tool.run_async(&args, &mut context).await.unwrap();
+        match result {
+            Value::Map(fields) => {
+                let error = fields.iter().find(|(k, _)| k == "error").unwrap();
+                assert!(matches!(&error.1, Value::String(s) if s.contains("'args' must be")));
+            }
+            other => panic!("expected a map, got {other:?}"),
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn run_skill_script_rejects_positional_args_combined_with_a_list_args() {
+        let mut with_script = skill("alpha");
+        with_script.resources.scripts.insert(
+            "run.py".to_string(),
+            crate::skills_models::Script {
+                src: "print('hi')".to_string(),
+            },
+        );
+        let base_executor: Arc<dyn BaseCodeExecutor + Send + Sync> =
+            Arc::new(crate::unsafe_local_code_executor::UnsafeLocalCodeExecutor::new());
+        let config = SkillToolsetConfig {
+            skills: vec![with_script],
+            code_executor: Some(base_executor),
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let tool = toolset
+            .tools
+            .iter()
+            .find(|t| t.name() == "run_skill_script")
+            .unwrap();
+        let mut args = args_map(&[("skill_name", "alpha"), ("file_path", "scripts/run.py")]);
+        args.insert(
+            "args".to_string(),
+            Value::Seq(vec![Value::String("a".to_string())]),
+        );
+        args.insert(
+            "positional_args".to_string(),
+            Value::Seq(vec![Value::String("b".to_string())]),
+        );
+        let mut context = ctx();
+        let result = tool.run_async(&args, &mut context).await.unwrap();
+        match result {
+            Value::Map(fields) => {
+                let error = fields.iter().find(|(k, _)| k == "error").unwrap();
+                assert!(matches!(&error.1, Value::String(s) if s.contains("Cannot specify")));
+            }
+            other => panic!("expected a map, got {other:?}"),
+        }
     }
 }
