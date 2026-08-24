@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 adk-errors = { path = "../adk-errors" }
+adk-events = { path = "../adk-events" }
 adk-genai = { path = "../adk-genai" }
 adk-platform = { path = "../adk-platform" }
 rusty_serde = { workspace = true }

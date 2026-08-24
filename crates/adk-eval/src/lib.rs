@@ -50,6 +50,25 @@
 //! far) never read any of these, matching the source's own `del
 //! conversation_scenario, "not supported for per-invocation evaluation"`.
 //!
+//! **Fifth batch — user-simulator core + persona system**:
+//! [`user_simulator`] (`UserSimulator`/`BaseUserSimulatorConfig`/
+//! `NextUserMessage`/`Status` + the config→simulator registry, C0626),
+//! [`static_user_simulator`] (`StaticUserSimulator`, C0629),
+//! [`user_simulator_personas`] (`UserBehavior`/`UserPersona`/
+//! `UserPersonaRegistry`) and [`pre_built_personas`] (`PreBuiltBehaviors`,
+//! the built-in EXPERT/NOVICE/EVALUATOR personas, and
+//! `get_default_persona_registry`, together C0632). None of these need
+//! an LLM-invocation path — `StaticUserSimulator` replays a
+//! pre-authored list, and the persona system is pure data — so, like
+//! the criterion types in the fourth batch, they're useful without the
+//! still-unbuilt `LlmAsJudge`/LLM-backed-simulator infrastructure.
+//! `UserSimulatorProvider` (C0627) and the LLM-backed/audio simulators
+//! (C0628/C0630) stay `REQUIRED` — deliberately not attempted this
+//! batch, since they need that infrastructure for real. Adds
+//! `adk-events` (for the real `Event` type `UserSimulator
+//! ::get_next_user_message` takes — already a lightweight leaf crate,
+//! only `adk-genai` + `adk-platform`) as a new dependency.
+//!
 //! **Fourth batch**: [`eval_config`] (`EvalConfig`/`CustomMetricConfig`/
 //! `LiveModelConfig`, C0611) and the rest of [`eval_metrics`]'s criterion
 //! types (`JudgeModelOptions`/`LlmAsAJudgeCriterion`/
@@ -125,5 +144,9 @@ pub mod local_eval_sets_manager;
 pub mod metric_info_providers;
 pub mod path_validation;
 mod porter_stemmer;
+pub mod pre_built_personas;
 pub mod rouge;
+pub mod static_user_simulator;
 pub mod trajectory_evaluator;
+pub mod user_simulator;
+pub mod user_simulator_personas;
