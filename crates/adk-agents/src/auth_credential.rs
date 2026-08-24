@@ -79,6 +79,23 @@ pub enum AuthCredentialTypes {
     ServiceAccount,
 }
 
+impl AuthCredentialTypes {
+    /// The source's `AuthCredentialTypes.value` — the wire string this
+    /// enum's own `#[rusty_serde(rename = ...)]` already serializes to,
+    /// exposed as a plain accessor for callers (e.g.
+    /// `auth_tool::stable_credential_key`, C0504) that need the string
+    /// without round-tripping through JSON.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AuthCredentialTypes::ApiKey => "apiKey",
+            AuthCredentialTypes::Http => "http",
+            AuthCredentialTypes::OAuth2 => "oauth2",
+            AuthCredentialTypes::OpenIdConnect => "openIdConnect",
+            AuthCredentialTypes::ServiceAccount => "serviceAccount",
+        }
+    }
+}
+
 /// `auth.auth_credential.HttpCredentials` — part of C0496.
 ///
 /// **Adaptation**: the source overrides `model_validate` to read only

@@ -15,6 +15,7 @@ dependencies = [
  "rusty_err",
  "rusty_serde",
  "rusty_tokio",
+ "sha2",
 ]
 
 [[package]]
