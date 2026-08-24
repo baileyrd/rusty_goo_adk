@@ -5,6 +5,21 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-eval::audio_utils` (C0625) — `resample_pcm16`/`to_live_input`/
+  `parse_sample_rate`, a linear-interpolation PCM16 resampler (24kHz
+  TTS → 16kHz Live API) and hand-rolled `rate=` mime-type parameter
+  parser (no `regex` dependency needed). Cross-checked against the real
+  `google.adk.evaluation._audio_utils` functions run directly. 15 new
+  tests.
+- `adk-eval::eval_metrics::{PrebuiltMetrics, Interval, MetricValueInfo,
+  MetricInfo, MetricInfoProvider}` + `adk-eval::metric_info_providers`
+  (C0604 DONE, closes the `Interval`/`MetricValueInfo`/`MetricInfo`/
+  `MetricInfoProvider` slice of C0612 too) — all 12 concrete provider
+  implementors (covering all 13 `PrebuiltMetrics`). Verified the
+  source's two providers that pass a bare `PrebuiltMetrics` enum member
+  (not `.value`) to a `str`-typed field are not a bug — confirmed live
+  that pydantic v2 unwraps a plain-`Enum` member the same way `.value`
+  would; this port uses `.as_str()` uniformly for all 13. 8 new tests.
 - `adk-tools::skills_prompt::format_skills_as_xml` (C0400) — renders
   skills into an `<available_skills>` XML block for LLM instructions,
   HTML-escaped (`html.escape`'s default `quote=True` behavior ported
