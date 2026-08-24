@@ -22,6 +22,73 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/simulation/`: user-simulator core + persona system (C0626, C0629, C0632)
+**2026-08-24** · (link added once this PR is opened)
+
+The user-simulator interface and the built-in personas that steer it:
+what a simulator's config/status shapes look like, one concrete
+implementor (`StaticUserSimulator`), and the EXPERT/NOVICE/EVALUATOR
+personas with their 11 atomic, mix-and-match behaviors.
+
+- **Added:** `adk_eval::user_simulator::{BaseUserSimulatorConfig, Status,
+  NextUserMessage, UserSimulator, parse_simulator_config,
+  register_user_simulator, create_user_simulator}` (C0626) — the
+  `UserSimulator` trait, its `NextUserMessage`/`Status` result shape
+  (with the XOR "message iff `SUCCESS`" validator ported as an explicit
+  `NextUserMessage::validate()`), and the config→simulator dispatch
+  registry.
+- **Added:** `adk_eval::static_user_simulator::StaticUserSimulator`
+  (C0629) — replays a pre-authored invocation list in order, returning
+  `Status::StopSignalDetected` once exhausted.
+- **Added:** `adk_eval::user_simulator_personas::{UserBehavior,
+  UserPersona, UserPersonaRegistry}` + `adk_eval::pre_built_personas::{
+  PreBuiltBehaviors, get_default_persona_registry}` (C0632) — the
+  persona system: 11 atomic behaviors (steering instructions +
+  violation rubrics each), composed into the 3 built-in personas
+  (EXPERT: 6 behaviors, NOVICE: 5, EVALUATOR: 5).
+- **Verification:** cross-checked every behavior's and persona's text
+  byte-for-byte against the real source module (executed directly with
+  stub model classes, since the full package import chain needs
+  `opentelemetry` — same gap noted in the C0611/C0612 entry below).
+  Zero mismatches, including the source's own internal
+  inconsistencies — "Plan.When" with no space, "Response response"
+  doubled, "a a direct" doubled, "inconsist" for "inconsistent", an
+  unterminated `"` inside one `TONE_PROFESSIONAL` violation rubric, and
+  `END_NO_TROUBLESHOOTING`'s description starting with a leading space.
+  These are preserved deliberately: it's judge-model prompt/rubric
+  text, not code, so "fixing" it here would silently diverge this
+  port's prompts from the source's actual behavior.
+- **Adaptation, disclosed:** the source's config→simulator registry
+  (`register_user_simulator`) keys by the concrete
+  `BaseUserSimulatorConfig` *subclass itself* — Python classes are
+  hashable and usable as dict keys, but Rust types aren't runtime
+  values. This port keys the registry by the `type` discriminator
+  *string* each config carries instead (exactly what `EvalConfig`'s own
+  discriminated-union deserialization already dispatches on), with a
+  constructor closure as the registered value rather than a class
+  object.
+- **Adaptation, disclosed:** the source's `UserSimulator` `ABC` marks
+  neither `get_next_user_message` nor `get_simulation_evaluator`
+  `@abstractmethod` — both just raise `NotImplementedError` if a
+  subclass forgets to override them, a runtime-only failure. This
+  port's `UserSimulator` trait makes both required methods instead — a
+  compile-time strengthening, not a behavior change for any
+  implementor that does override both (as every real simulator does).
+  `PreBuiltBehaviors` (an enum-with-instance-values in the source)
+  becomes a plain unit-variant enum with a `user_behavior()` accessor
+  building the owned value on demand, the same shape already used for
+  `eval_metrics::PrebuiltMetrics::as_str`.
+- **Not this batch, still `REQUIRED`:** `UserSimulatorProvider` (C0627,
+  the actual per-`EvalCase` factory that reads this registry) and the
+  LLM-backed/audio simulators (C0628/C0630) — all three need a real
+  LLM-invocation path this batch doesn't build.
+- **New dependency:** `adk-events` — an already lightweight leaf crate
+  (`adk-genai` + `adk-platform` only), new usage site for the real
+  `Event` type `UserSimulator::get_next_user_message` takes.
+- 27 new tests.
+
+---
+
 ## PR #TBD — `evaluation/`: `EvalConfig` + the rest of the criterion types (C0611, C0612)
 **2026-08-24** · (link added once this PR is opened)
 

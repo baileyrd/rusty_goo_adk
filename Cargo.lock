@@ -28,6 +28,7 @@ name = "adk-eval"
 version = "0.1.0"
 dependencies = [
  "adk-errors",
+ "adk-events",
  "adk-genai",
  "adk-platform",
  "rusty_err",

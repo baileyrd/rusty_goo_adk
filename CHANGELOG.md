@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-eval::user_simulator::{UserSimulator, BaseUserSimulatorConfig,
+  NextUserMessage, Status, register_user_simulator,
+  create_user_simulator}` (C0626 DONE) +
+  `adk-eval::static_user_simulator::StaticUserSimulator` (C0629 DONE) +
+  `adk-eval::user_simulator_personas::{UserBehavior, UserPersona,
+  UserPersonaRegistry}` + `adk-eval::pre_built_personas::{
+  PreBuiltBehaviors, get_default_persona_registry}` (C0632 DONE) — the
+  user-simulator core interface and the built-in EXPERT/NOVICE/EVALUATOR
+  persona system. Cross-verified all 11 pre-built behaviors' and all 3
+  personas' text/composition byte-for-byte against the real source
+  module (zero mismatches, including the source's own typos/quirks,
+  deliberately preserved as judge-model prompt content). Two disclosed
+  adaptations: the config→simulator registry keys by the config's
+  `type` discriminator string rather than by config *class* (Rust types
+  aren't runtime dict keys); `UserSimulator`'s two methods are required
+  trait methods rather than the source's non-abstract,
+  `NotImplementedError`-by-default shape. `UserSimulatorProvider`
+  (C0627) and the LLM-backed/audio simulators (C0628/C0630) stay
+  `REQUIRED` — they need a real LLM-invocation path this batch doesn't
+  build. New dependency: `adk-events` (already a lightweight leaf
+  crate, new usage site for the real `Event` type). 27 new tests.
 - `adk-eval::eval_config::{EvalConfig, CustomMetricConfig, LiveModelConfig,
   CodeConfig}` (C0611 DONE) + `adk-eval::eval_metrics::{JudgeModelOptions,
   LlmAsAJudgeCriterion, RubricsBasedCriterion, HallucinationsCriterion,
