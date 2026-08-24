@@ -86,15 +86,19 @@
 //!   `on_run_error_callback`; a panicking plugin propagates the panic
 //!   unchanged, same posture as every other callback in this port.
 //!
+//! **`InMemoryRunner`** (C0926): [`Runner::in_memory`] — a `Runner`
+//! pre-wired with `InMemoryArtifactService`/`InMemorySessionService`/
+//! `InMemoryMemoryService`, for testing and development. See its own
+//! doc for the narrowing (a constructor, not a subclass) and the
+//! `app_name` default.
+//!
 //! **Not ported this batch**: `_find_agent_to_run` (C0907-C0910, picks up
 //! a resumed multi-turn conversation's last-active agent — needs
 //! resumability, always false here); `_resolve_invocation_id` (C0855,
 //! same reason); `Runner.run()`'s sync thread-bridging wrapper
 //! (C0877-C0880, a local-testing convenience — this port's whole call
 //! surface is already async-native, so there's less need for it, and it
-//! can be added later without disturbing anything here);
-//! `InMemoryRunner` (C0926, needs `InMemoryArtifactService`/
-//! `InMemoryMemoryService`, neither built yet); compaction
+//! can be added later without disturbing anything here); compaction
 //! (`_run_post_invocation_compaction`, C0871-C0872, needs
 //! `events_compaction_config` wiring, Phase 7); agent-origin inference
 //! and its warnings (C0851-C0854) — Rust has no runtime module-path
@@ -254,6 +258,33 @@ impl Runner {
             plugin_close_timeout: 5.0,
             auto_create_session: false,
         }
+    }
+
+    /// C0926: `InMemoryRunner` — a `Runner` pre-wired with in-memory
+    /// session/artifact/memory services, for testing and development.
+    /// The source is a `Runner` subclass; this port narrows that to a
+    /// constructor (matching `Runner`'s own C0841 narrowing — no
+    /// `App`/bare-node union to be a subclass alternative *of*).
+    /// `app_name` defaults to the literal `"InMemoryRunner"`, matching
+    /// the source's own default (there is no `App` here to make that
+    /// default conditional on). `credential_service` stays unset,
+    /// matching the source exactly. To use a different `app_name`, or
+    /// to register plugins/a custom `plugin_close_timeout`, call
+    /// `Runner::new`/`.with_artifact_service`/`.with_memory_service`
+    /// directly instead — every argument this constructor would forward
+    /// is already reachable through `Runner`'s existing builder methods.
+    pub fn in_memory(agent: BaseAgent) -> Self {
+        Self::new(
+            "InMemoryRunner",
+            agent,
+            Arc::new(adk_agents::services::InMemorySessionService::new()),
+        )
+        .with_artifact_service(Arc::new(
+            adk_agents::in_memory_artifact_service::InMemoryArtifactService::new(),
+        ))
+        .with_memory_service(Arc::new(
+            adk_agents::in_memory_memory_service::InMemoryMemoryService::new(),
+        ))
     }
 
     /// C0518-in-spirit for `Runner` itself (not the auth `CredentialManager`
@@ -652,6 +683,29 @@ mod tests {
     async fn close_flushes_the_session_service() {
         let runner = runner(true);
         runner.close().await;
+    }
+
+    #[test]
+    fn in_memory_defaults_the_app_name_to_the_literal_in_memory_runner() {
+        let agent = BaseAgent::new("echo_agent", EchoBehavior).unwrap();
+        let runner = Runner::in_memory(agent);
+        assert_eq!(runner.app_name(), "InMemoryRunner");
+    }
+
+    #[rusty_tokio::test]
+    async fn in_memory_drives_a_turn_using_its_pre_wired_in_memory_services() {
+        let agent = BaseAgent::new("echo_agent", EchoBehavior).unwrap();
+        // `Runner::in_memory` doesn't set `auto_create_session` (matching
+        // the source's own constructor, which doesn't either) — so the
+        // session must be created first, same as any other `Runner`.
+        let runner = Runner::in_memory(agent).with_auto_create_session(true);
+
+        let events = runner
+            .run_async("user", "s1", Content::user_text("hi"))
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].author, "echo_agent");
     }
 
     #[rusty_tokio::test]

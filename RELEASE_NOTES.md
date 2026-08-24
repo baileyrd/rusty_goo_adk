@@ -22,6 +22,30 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `runners.py`: `InMemoryRunner` (C0926)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the testing/development convenience `Runner` subclass, and
+corrects a stale module doc along the way.
+
+- **Added:** `adk_runners::Runner::in_memory(agent) -> Runner` — narrowed
+  from a `Runner` subclass to a constructor, matching `Runner`'s own
+  C0841 narrowing (no `App`/bare-node union exists for a subclass to be
+  an alternative *of*). Pre-wires `InMemorySessionService`/
+  `InMemoryArtifactService`/`InMemoryMemoryService`; `credential_service`
+  stays unset, matching the source. `app_name` defaults to the literal
+  `"InMemoryRunner"` unconditionally (the source's app-vs-app_name
+  conditional doesn't apply — there's no `App` here).
+- **Disclosed:** `plugins`/`plugin_close_timeout` aren't forwarded as
+  separate constructor parameters — already reachable through `Runner`'s
+  existing `.with_plugin`/`.with_plugin_close_timeout` builders.
+- **Corrected:** `runner.rs`'s own module doc previously claimed
+  `InMemoryArtifactService`/`InMemoryMemoryService` were "neither built
+  yet" — both have been DONE for several batches.
+- **Scope:** no new dependency. 2 new tests.
+
+---
+
 ## PR #TBD — `BaseLlm::as_any` downcast + real `interactions_processor` wiring (C0174)
 **2026-08-24** · (link added once this PR is opened)
 
