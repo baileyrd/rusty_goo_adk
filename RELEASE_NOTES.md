@@ -22,6 +22,71 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: eval-service interface + metric-evaluator registry (C0599, C0603, C0616)
+**2026-08-24** · (link added once this PR is opened)
+
+Rounds out the pure-data-model slice of `evaluation/`: the request/
+result shapes an eval service works with, the custom-metric extension
+point, and the registry that maps a metric name to the evaluator that
+scores it.
+
+- **Added:** `adk_eval::base_eval_service::{EvaluateConfig,
+  InferenceConfig, InferenceRequest, InferenceStatus, InferenceResult,
+  EvaluateRequest, BaseEvalService}` (C0616) — every field ported;
+  cross-verified `InferenceConfig`'s defaults and camelCase wire form
+  directly against a real pydantic model built from the source.
+- **Added:** `adk_eval::custom_metric_evaluator::{CustomMetricEvaluator,
+  register_custom_metric_function}` (C0599) — the deep-copy-then-clear-
+  `threshold` step before calling a custom function (so it only ever
+  reads `criterion.threshold`, never the deprecated top-level field),
+  and error propagation.
+- **Added:** `adk_eval::metric_evaluator_registry::{
+  MetricEvaluatorRegistry, default_registry,
+  register_custom_metrics_from_config}` (C0603, partial) —
+  `get_evaluator`/`register_evaluator`/`get_registered_metrics`/`fork`,
+  seeding only `TrajectoryEvaluator` among the 13 standard evaluators
+  (the only one this port has actually built so far).
+- **Adaptation, disclosed:** `BaseEvalService`'s `perform_inference`/
+  `evaluate` are `AsyncGenerator`s in the source; this port's trait
+  returns a fully-materialized `Vec` instead — the same "collected, not
+  a live stream" choice already disclosed for `BaseAgent::run_async_impl`.
+- **Adaptation, disclosed:** `custom_metric_evaluator`'s source resolves
+  a scoring function at runtime via `importlib.import_module`+`getattr`
+  on a dotted path. Rust has no dynamic module loader, so this port
+  replaces it with an explicit registration API
+  (`register_custom_metric_function`) keyed by the same dotted-path
+  string — the same "class → registered closure, keyed by a string"
+  pattern already used for `user_simulator::register_user_simulator`.
+  Custom functions are sync-only (the source supports sync+async),
+  matching the already-sync `Evaluator` trait (C0600).
+- **Adaptation, disclosed:** `MetricEvaluatorRegistry`'s stored
+  `type[Evaluator]` class + runtime `issubclass` check (to decide how
+  to construct an evaluator) becomes a tagged factory closure
+  (`Factory`/`Custom`), decided once at registration instead of every
+  lookup. Its `DEFAULT_METRIC_EVALUATOR_REGISTRY` mutable module-level
+  singleton becomes `default_registry()`, a lazily-initialized
+  mutex-guarded static (same pattern as `user_simulator`'s own
+  registry); `register_custom_metrics_from_config` always takes an
+  explicit `&mut MetricEvaluatorRegistry` rather than defaulting to it,
+  since a borrow can't outlive a `MutexGuard` the way Python's
+  shared-object-identity default can.
+- **Not this batch, still `REQUIRED`:** the other 12 standard
+  evaluators (`ResponseEvaluator`, `SafetyEvaluatorV1`, the multi-turn
+  and rubric-based evaluators, `PerTurnUserSimulatorQualityV1`) under
+  C0591-C0598 — each blocked on GCP or the still-deferred `LlmAsJudge`
+  harness, not on anything this batch builds. Registering each is one
+  call, added alongside its own evaluator once it lands.
+- **Manifest housekeeping:** adds C0947 for
+  `evaluation/llm_as_judge_utils.py` — a genuine inventory gap found
+  while scoping this batch (the source file existed with no manifest
+  row at all, not folded into any other row). Landed in a separate,
+  earlier PR as a pure bookkeeping fix; flagged as a future-batch
+  candidate, not implemented yet.
+- **New dependencies:** none.
+- 17 new tests.
+
+---
+
 ## PR #TBD — `evaluation/simulation/`: user-simulator core + persona system (C0626, C0629, C0632)
 **2026-08-24** · (link added once this PR is opened)
 
