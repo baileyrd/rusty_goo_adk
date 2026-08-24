@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::load_artifacts_tool::{LoadArtifactsTool,
+  as_safe_part_for_llm}` (Phase 8, C0425, partial) — lists artifacts
+  and injects them into the LLM request on demand: MIME
+  normalization/classification, a hand-rolled base64 decoder
+  (standard-strict then URL-safe-lenient), text-like decoding, and a
+  binary-placeholder fallback; the full list→instruction-inject→
+  `load_artifacts`-function-response-detect→per-artifact-load→append
+  flow, including the session-scoped-then-`user:`-prefixed
+  cross-session fallback. Disclosed narrowings (module doc, at
+  length): no DOCX regex text extraction (needs a zip reader, not a
+  workspace dependency), no spreadsheet parsing (needs a `pandas`
+  equivalent — disabled by default upstream too), no `process_artifact`
+  custom-callback override. 11 new tests.
 - `adk-tools::bash_tool::ExecuteBashTool` (Phase 8, C0418, partial) —
   runs a validated bash command in a workspace directory via
   `rusty_tokio::process::Command` (no shell, matching the source's own
