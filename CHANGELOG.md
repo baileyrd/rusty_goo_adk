@@ -5,6 +5,24 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `adk-examples` crate (Phase 17, C0829/C0831/C0832, DONE) —
+  `Example`/`BaseExampleProvider` (the few-shot-example extension
+  point) and `example_util::{convert_examples_to_text,
+  build_example_si, get_latest_message_from_user}`. All 10 of the
+  source's own `test_example_util.py` cases ported, including the
+  gemini-2-vs-other-model fence-style switch. Adaptations disclosed at
+  length in the module doc: a compact-JSON stand-in for Python's
+  dict/object `str()`/`repr()` (function-call-arg and
+  function-response rendering), and `FunctionCall.args`'s `BTreeMap`
+  rendering multi-argument calls in sorted-key rather than call-site
+  order. `VertexAiExampleStore` (C0830) stays `REQUIRED`, deferred for
+  the same Vertex-AI-auth reason already disclosed by
+  `gemini_context_cache_manager.rs`. 14 new tests.
+- `adk-tools::example_tool::ExampleTool` (Phase 8, C0419, DONE) —
+  wires the new `adk-examples` crate into a `BaseTool`: reads the tool
+  context's opaque `user_content` back into a typed `Content`, builds
+  the examples instruction, and appends it to the LLM request via the
+  already-real `LlmRequest::append_instructions`. 5 new tests.
 - `adk-tools::{exit_loop_tool, long_running_tool, get_user_choice_tool}`
   (Phase 8, C0420-C0422, DONE) — `exit_loop` (sets
   `escalate`+`skip_summarization` to break a loop-type agent),
