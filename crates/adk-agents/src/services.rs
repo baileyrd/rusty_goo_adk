@@ -53,9 +53,13 @@
 //! never raises it either (the docstring's warning is for a *persistent*
 //! backend detecting a concurrent write, which a simple in-memory map
 //! can't contend on). `GetSessionConfig` (`num_recent_events`/
-//! `after_timestamp` event trimming) isn't ported — `RunConfig.get_session_config`
-//! is already an opaque `Value` placeholder (its own disclosed scope cut),
-//! so `get_session` has nothing typed to apply yet.
+//! `after_timestamp` event trimming, C0207) is now real — see
+//! [`SessionService::get_session_with_config`] — but `RunConfig.get_session_config`
+//! is still an opaque `Value` placeholder (its own disclosed scope cut,
+//! C0875), so no call site in this crate or `adk-runners` threads a real
+//! `GetSessionConfig` through yet; the trait method exists and is tested
+//! ahead of its own caller, the same "widen once a real consumer needs
+//! the structure" pattern this port applies elsewhere.
 
 use adk_errors::already_exists::AlreadyExistsError;
 use adk_events::ui_widget::UiWidget;
@@ -144,6 +148,53 @@ pub struct SearchMemoryResponse {
     pub memories: Vec<MemoryEntry>,
 }
 
+/// `sessions.base_session_service.GetSessionConfig` (C0207) — bounds how
+/// much session history [`SessionService::get_session_with_config`]
+/// returns, without truncating what's actually persisted. A shared
+/// conformance contract every backend must honor identically — this port
+/// applies it generically in that method's own default body rather than
+/// per-backend, so every [`SessionService`] implementer gets it for free.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[rusty_serde(deny_unknown_fields)]
+pub struct GetSessionConfig {
+    /// `None`: no limit. `Some(0)` (or negative): no events returned.
+    /// `Some(n) if n > 0`: at most the `n` most recent events.
+    #[rusty_serde(default)]
+    pub num_recent_events: Option<i64>,
+    /// `None`, or `Some(0.0)` (falsy in the source's own Python truthiness
+    /// check — `if config.after_timestamp:` — replicated here rather than
+    /// treated as "any `Some` value"): no limit. Otherwise, only events
+    /// with `timestamp >= after_timestamp` are kept.
+    #[rusty_serde(default)]
+    pub after_timestamp: Option<f64>,
+}
+
+/// Applies [`GetSessionConfig`]'s trimming to `session.events` in place —
+/// `num_recent_events` first (tail-slice), then `after_timestamp`
+/// (drop everything older), matching the source's own application order.
+/// Both filters compose: a session can be trimmed to its most recent `N`
+/// events and then further cut to only those after a given time.
+fn apply_get_session_config(session: &mut Session, config: &GetSessionConfig) {
+    if let Some(num_recent_events) = config.num_recent_events {
+        if num_recent_events <= 0 {
+            session.events.clear();
+        } else {
+            let keep_from = session
+                .events
+                .len()
+                .saturating_sub(num_recent_events as usize);
+            session.events.drain(..keep_from);
+        }
+    }
+    if let Some(after_timestamp) = config.after_timestamp {
+        if after_timestamp != 0.0 {
+            session
+                .events
+                .retain(|event| event.timestamp >= after_timestamp);
+        }
+    }
+}
+
 /// Real (narrowed) port of `sessions.base_session_service.BaseSessionService`
 /// — see the module doc for why this one trait isn't a placeholder marker
 /// like its siblings, and what's deliberately cut.
@@ -168,6 +219,30 @@ pub trait SessionService: Send + Sync {
         user_id: &'a str,
         session_id: &'a str,
     ) -> BoxFuture<'a, Option<Session>>;
+
+    /// C0207: [`Self::get_session`], but additionally bounding the
+    /// returned session's `events` per `config` (see [`GetSessionConfig`]
+    /// and [`apply_get_session_config`]) — `None` behaves exactly like
+    /// `get_session`. The default implementation defers to
+    /// `get_session` and applies the trimming generically, since it's a
+    /// conformance contract every backend must honor identically; a
+    /// backend only needs to override this if it can apply the filter
+    /// more efficiently at its own storage layer.
+    fn get_session_with_config<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: &'a str,
+        session_id: &'a str,
+        config: Option<&'a GetSessionConfig>,
+    ) -> BoxFuture<'a, Option<Session>> {
+        Box::pin(async move {
+            let mut session = self.get_session(app_name, user_id, session_id).await?;
+            if let Some(config) = config {
+                apply_get_session_config(&mut session, config);
+            }
+            Some(session)
+        })
+    }
 
     /// Lists all sessions for a user (or, if `user_id` is `None`, every
     /// user under `app_name`) with their `events` cleared, matching the
@@ -1062,6 +1137,138 @@ mod tests {
             .unwrap();
         let session = service.get_session("app", "user", "s1").await.unwrap();
         assert_eq!(session.id, "s1");
+    }
+
+    // --- GetSessionConfig (C0207) ---
+
+    fn timestamped_event(timestamp: f64) -> Event {
+        let mut event = Event::new("inv-1", "user", adk_events::node_info::NodeInfo::new(""));
+        event.timestamp = timestamp;
+        event
+    }
+
+    async fn session_with_timestamped_events(
+        service: &InMemorySessionService,
+        timestamps: &[f64],
+    ) -> Session {
+        let mut session = service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+        for &ts in timestamps {
+            service
+                .append_event(&mut session, timestamped_event(ts))
+                .await;
+        }
+        session
+    }
+
+    #[rusty_tokio::test]
+    async fn get_session_with_config_behaves_like_get_session_without_a_config() {
+        let service = InMemorySessionService::new();
+        session_with_timestamped_events(&service, &[1.0, 2.0, 3.0]).await;
+
+        let session = service
+            .get_session_with_config("app", "user", "s1", None)
+            .await
+            .unwrap();
+        assert_eq!(session.events.len(), 3);
+    }
+
+    #[rusty_tokio::test]
+    async fn get_session_with_config_returns_none_when_missing() {
+        let service = InMemorySessionService::new();
+        assert!(service
+            .get_session_with_config("app", "user", "missing", Some(&GetSessionConfig::default()))
+            .await
+            .is_none());
+    }
+
+    #[rusty_tokio::test]
+    async fn get_session_with_config_num_recent_events_keeps_only_the_tail() {
+        let service = InMemorySessionService::new();
+        session_with_timestamped_events(&service, &[1.0, 2.0, 3.0, 4.0]).await;
+
+        let config = GetSessionConfig {
+            num_recent_events: Some(2),
+            after_timestamp: None,
+        };
+        let session = service
+            .get_session_with_config("app", "user", "s1", Some(&config))
+            .await
+            .unwrap();
+        let timestamps: Vec<f64> = session.events.iter().map(|e| e.timestamp).collect();
+        assert_eq!(timestamps, vec![3.0, 4.0]);
+    }
+
+    #[rusty_tokio::test]
+    async fn get_session_with_config_num_recent_events_zero_returns_no_events() {
+        let service = InMemorySessionService::new();
+        session_with_timestamped_events(&service, &[1.0, 2.0]).await;
+
+        let config = GetSessionConfig {
+            num_recent_events: Some(0),
+            after_timestamp: None,
+        };
+        let session = service
+            .get_session_with_config("app", "user", "s1", Some(&config))
+            .await
+            .unwrap();
+        assert!(session.events.is_empty());
+    }
+
+    #[rusty_tokio::test]
+    async fn get_session_with_config_after_timestamp_drops_older_events() {
+        let service = InMemorySessionService::new();
+        session_with_timestamped_events(&service, &[1.0, 2.0, 3.0]).await;
+
+        let config = GetSessionConfig {
+            num_recent_events: None,
+            after_timestamp: Some(2.0),
+        };
+        let session = service
+            .get_session_with_config("app", "user", "s1", Some(&config))
+            .await
+            .unwrap();
+        let timestamps: Vec<f64> = session.events.iter().map(|e| e.timestamp).collect();
+        assert_eq!(timestamps, vec![2.0, 3.0]);
+    }
+
+    #[rusty_tokio::test]
+    async fn get_session_with_config_after_timestamp_zero_is_a_noop() {
+        // Mirrors the source's own Python truthiness quirk: `if
+        // config.after_timestamp:` treats `0.0` the same as unset.
+        let service = InMemorySessionService::new();
+        session_with_timestamped_events(&service, &[1.0, 2.0]).await;
+
+        let config = GetSessionConfig {
+            num_recent_events: None,
+            after_timestamp: Some(0.0),
+        };
+        let session = service
+            .get_session_with_config("app", "user", "s1", Some(&config))
+            .await
+            .unwrap();
+        assert_eq!(session.events.len(), 2);
+    }
+
+    #[rusty_tokio::test]
+    async fn get_session_with_config_composes_both_filters() {
+        let service = InMemorySessionService::new();
+        session_with_timestamped_events(&service, &[1.0, 2.0, 3.0, 4.0, 5.0]).await;
+
+        // Last 3 of the 5 events are [3.0, 4.0, 5.0]; then only those
+        // >= 4.0 survive the second filter.
+        let config = GetSessionConfig {
+            num_recent_events: Some(3),
+            after_timestamp: Some(4.0),
+        };
+        let session = service
+            .get_session_with_config("app", "user", "s1", Some(&config))
+            .await
+            .unwrap();
+        let timestamps: Vec<f64> = session.events.iter().map(|e| e.timestamp).collect();
+        assert_eq!(timestamps, vec![4.0, 5.0]);
     }
 
     #[rusty_tokio::test]
