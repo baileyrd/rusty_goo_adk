@@ -22,6 +22,70 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: `EvalConfig` + the rest of the criterion types (C0611, C0612)
+**2026-08-24** · (link added once this PR is opened)
+
+Closes out `evaluation/eval_metrics.py`'s criterion-type hierarchy and
+ports `evaluation/eval_config.py` in full — the config surface a
+developer actually authors to run an eval (which metrics, what
+thresholds, custom metrics, live-mode timeout).
+
+- **Added:** `adk_eval::eval_metrics::{JudgeModelOptions,
+  LlmAsAJudgeCriterion, RubricsBasedCriterion, HallucinationsCriterion,
+  LlmBackedUserSimulatorCriterion}` (C0612, now complete) — the
+  remaining criterion subtypes, flattening the source's class
+  inheritance into each struct's own full field set (no Rust struct
+  inheritance), the same choice already made for `ToolTrajectoryCriterion`.
+  Realized these don't actually need the still-missing `LlmAsJudge`
+  harness to be useful, pure data models — they only *configure* an
+  LLM-judge metric, no LLM call happens inside any of them, the same
+  reasoning already established for `Rubric`/`RubricScore` (C0607).
+- **Added:** `adk_eval::eval_config::{EvalConfig, CustomMetricConfig,
+  LiveModelConfig, CodeConfig, get_evaluation_criteria_or_default,
+  get_eval_metrics_from_config}` (C0611) — `EvalConfig`'s full field
+  set plus both free functions the source declares alongside it.
+- **Adaptation, disclosed:** the source's legacy-default-injecting
+  `@model_validator(mode="before")` on `EvalConfig.user_simulator_config`
+  runs automatically on every construction including deserialization.
+  This port exposes it as an explicit `EvalConfig::normalize_user_simulator_config`
+  instead (the same "split validator that mutates" pattern already
+  used for `adk_tools::skills_models::Frontmatter::normalize_name`) —
+  call it once after deserializing a config that might predate the
+  `type` discriminator. Likewise `JudgeModelOptions.parallelism_limit`'s
+  `Field(ge=1)` becomes an explicit `JudgeModelOptions::validate()`
+  rather than an automatic construction-time check.
+- **Verification:** cross-checked `normalize_user_simulator_config`'s
+  four cases (missing `type`, explicit-`null` `type`, explicit
+  non-null `type`, no config at all) and `JudgeModelOptions`'s
+  defaults/`ge=1` rejection directly against the real pydantic
+  validator and model logic, run standalone (the full package import
+  chain pulls in `opentelemetry` and other transitive dependencies not
+  installed in this environment, so the validator/model logic was
+  reproduced verbatim from the source file rather than imported
+  through the whole `google.adk` package).
+- **Disclosed narrowing:** `EvalConfig.criteria`'s values stay opaque
+  `Value` (same choice already made for `EvalMetric::criterion`) and
+  become a `HashMap` rather than preserving the source dict's
+  insertion order — each metric evaluates independently, so this
+  doesn't change behavior, only the order of the returned
+  `Vec<EvalMetric>`. `EvalConfig.user_simulator_config` also stays
+  opaque `Value` — its real discriminated-union type
+  (`LlmBackedUserSimulatorConfig`/`LlmAudioUserSimulatorConfig`) depends
+  on C0628/C0630, both still `REQUIRED`. `CustomMetricConfig.code_config`'s
+  type is a narrow local `CodeConfig` (`{name: String}` only), not the
+  real `agents.common_configs.CodeConfig` — that type belongs to the
+  still-`REQUIRED`, unbuilt C0348 YAML config pipeline, and `adk-eval`
+  deliberately sits at the bottom of this workspace's crate graph and
+  can't depend on wherever C0348 eventually lands. A disclosed,
+  permanent, structurally-identical duplication, not an oversight to
+  reconcile later. `JudgeModelOptions.judge_model_config` (source:
+  `Optional[GenerateContentConfig]`) stays opaque `Value` for the same
+  crate-graph-position reason.
+- **New dependencies:** none.
+- 24 new tests (17 in `eval_config`, 7 in `eval_metrics`).
+
+---
+
 ## PR #TBD — `skills/`: `Frontmatter`/`Resources`/`Script`/`Skill` data models (C0393, C0394)
 **2026-08-24** · (link added once this PR is opened)
 

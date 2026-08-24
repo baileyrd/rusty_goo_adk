@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-eval::eval_config::{EvalConfig, CustomMetricConfig, LiveModelConfig,
+  CodeConfig}` (C0611 DONE) + `adk-eval::eval_metrics::{JudgeModelOptions,
+  LlmAsAJudgeCriterion, RubricsBasedCriterion, HallucinationsCriterion,
+  LlmBackedUserSimulatorCriterion}` (C0612 DONE, completing it) —
+  `eval_config.py`/the rest of `eval_metrics.py`'s criterion types.
+  `EvalConfig::normalize_user_simulator_config` ports the legacy-
+  default-injecting validator explicitly (missing/null `type` defaults
+  to `"llm_backed"`); cross-checked its four cases, plus
+  `JudgeModelOptions`'s defaults and `ge=1` rejection, directly against
+  the real pydantic validator/model logic run standalone. Every
+  criterion subtype flattens the source's class inheritance into its
+  own full field set — confirmed none of them need the still-missing
+  `LlmAsJudge` harness to be useful pure data models, same reasoning
+  already established for `Rubric`/`RubricScore`. Disclosed narrowing:
+  `EvalConfig.criteria`'s values and `user_simulator_config` stay
+  opaque `Value`; `CustomMetricConfig.code_config` is a narrow local
+  `CodeConfig` (`{name: String}`), not the real
+  `agents.common_configs.CodeConfig` (C0348, still unbuilt and
+  out of `adk-eval`'s crate-graph reach). No new dependencies. 24 new
+  tests (17 in `eval_config`, 7 in `eval_metrics`).
 - `adk-tools::skills_models::{Frontmatter, Script, Resources, Skill}`
   (C0393 DONE, C0394 DONE) — the `skills/models.py` data models:
   `Frontmatter`'s `name`/`description`/`license`/`compatibility`/
