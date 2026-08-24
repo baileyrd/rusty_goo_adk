@@ -60,6 +60,7 @@ use adk_agents::invocation_context::{InvocationContext, InvocationContextError};
 use adk_agents::llm_agent::{AgentMode, IncludeContents, LlmAgent};
 use adk_agents::readonly_context::ReadonlyContext;
 use adk_agents::run_config::RunConfig;
+use adk_agents::streaming_mode::StreamingMode;
 use adk_events::node_info::NodeInfo;
 use adk_events::Event;
 use adk_models::base_llm::{BaseLlm, BaseLlmError};
@@ -119,6 +120,54 @@ impl From<LlmFlowError> for AgentRunError {
     fn from(error: LlmFlowError) -> Self {
         Box::new(BoxedLlmFlowError(error.to_string()))
     }
+}
+
+const NO_CONTENT_ERROR_CODE: &str = "MODEL_RETURNED_NO_CONTENT";
+const NO_CONTENT_ERROR_MESSAGE: &str =
+    "The model returned no content (finish_reason=STOP with empty parts).";
+
+/// C0156: a non-streaming turn that finishes with STOP but has no
+/// content parts would otherwise be skipped by
+/// [`should_skip_empty_response`] and become a silent empty final
+/// response; surfaces it as an actionable error instead. Streaming
+/// (`StreamingMode::Sse`) is excluded because a terminal finish-only
+/// chunk legitimately follows content already streamed in earlier
+/// chunks. `finish_reason` compares against the literal `"STOP"` — both
+/// sides of this check are opaque-`Value`/placeholder types pending a
+/// real typed `FinishReason` (see [`finalize_model_response_event`]'s
+/// own doc for the same narrowing).
+fn apply_no_content_error(response: &mut LlmResponse, run_config: &RunConfig) {
+    let is_stop = response.finish_reason.as_ref().and_then(|v| v.as_str()) == Some("STOP");
+    let has_no_content = match &response.content {
+        None => true,
+        Some(content) => content.parts.is_empty(),
+    };
+    if !response.partial.unwrap_or(false)
+        && response.error_code.is_none()
+        && is_stop
+        && has_no_content
+        && run_config.streaming_mode != StreamingMode::Sse
+    {
+        response.error_code = Some(NO_CONTENT_ERROR_CODE.to_string());
+        response.error_message = Some(
+            response
+                .error_message
+                .clone()
+                .unwrap_or_else(|| NO_CONTENT_ERROR_MESSAGE.to_string()),
+        );
+    }
+}
+
+/// C0156: mirrors "skip the model response event if there is no content
+/// and no error code" — needed upstream for the code executor to
+/// trigger another loop (that consumer, C0158's function-call/tool-loop
+/// delegation, isn't built in this port; the skip check itself has no
+/// such dependency and applies regardless).
+fn should_skip_empty_response(response: &LlmResponse) -> bool {
+    response.content.is_none()
+        && response.error_code.is_none()
+        && !response.interrupted.unwrap_or(false)
+        && response.grounding_metadata.is_none()
 }
 
 /// C0157: `_finalize_model_response_event` — shallow-copies every
@@ -326,9 +375,13 @@ impl LlmFlow {
     }
 
     /// C0156 (partial): converts each `LlmResponse` into an `Event` via
-    /// [`finalize_model_response_event`]. No `MODEL_RETURNED_NO_CONTENT`
-    /// conversion, no empty-event skipping, no function-call delegation —
-    /// see the module doc.
+    /// [`finalize_model_response_event`] — first applying the
+    /// no-content-error conversion ([`apply_no_content_error`]) and the
+    /// empty-response skip ([`should_skip_empty_response`]), in that
+    /// order (a response the first rewrites into an error is never
+    /// skipped by the second, matching the source's own sequential
+    /// mutate-then-check). No function-call delegation — see the module
+    /// doc.
     pub fn postprocess(&self, ctx: &InvocationContext, responses: Vec<LlmResponse>) -> Vec<Event> {
         let agent_name = ctx
             .agent
@@ -336,9 +389,16 @@ impl LlmFlow {
             .map(|a| a.name().to_string())
             .unwrap_or_default();
         let node_path = ctx.node_path.clone().unwrap_or_default();
+        let default_run_config = RunConfig::default();
+        let run_config = ctx.run_config.as_ref().unwrap_or(&default_run_config);
+
         responses
             .into_iter()
-            .map(|response| {
+            .filter_map(|mut response| {
+                apply_no_content_error(&mut response, run_config);
+                if should_skip_empty_response(&response) {
+                    return None;
+                }
                 let mut event = Event::new(
                     ctx.invocation_id.clone(),
                     agent_name.clone(),
@@ -347,7 +407,7 @@ impl LlmFlow {
                 event.branch = ctx.branch.clone();
                 event.isolation_scope = ctx.isolation_scope.clone();
                 finalize_model_response_event(&mut event, &response);
-                event
+                Some(event)
             })
             .collect()
     }
@@ -536,6 +596,139 @@ mod tests {
 
         let request = flow.preprocess(&ctx).await.unwrap();
         assert_eq!(request.previous_interaction_id, None);
+    }
+
+    // --- postprocess: MODEL_RETURNED_NO_CONTENT + empty-event skip (C0156) ---
+
+    fn stop_response(content: Option<Content>) -> LlmResponse {
+        LlmResponse {
+            content,
+            finish_reason: Some(rusty_serde::value::Value::String("STOP".to_string())),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn apply_no_content_error_converts_a_non_streaming_stop_with_no_content() {
+        let mut response = stop_response(None);
+        apply_no_content_error(&mut response, &RunConfig::default());
+        assert_eq!(response.error_code.as_deref(), Some(NO_CONTENT_ERROR_CODE));
+        assert_eq!(
+            response.error_message.as_deref(),
+            Some(NO_CONTENT_ERROR_MESSAGE)
+        );
+    }
+
+    #[test]
+    fn apply_no_content_error_converts_stop_with_empty_parts_the_same_as_no_content() {
+        let mut response = stop_response(Some(Content::new("model", vec![])));
+        apply_no_content_error(&mut response, &RunConfig::default());
+        assert_eq!(response.error_code.as_deref(), Some(NO_CONTENT_ERROR_CODE));
+    }
+
+    #[test]
+    fn apply_no_content_error_preserves_an_existing_error_message() {
+        let mut response = stop_response(None);
+        response.error_message = Some("already set".to_string());
+        apply_no_content_error(&mut response, &RunConfig::default());
+        assert_eq!(response.error_message.as_deref(), Some("already set"));
+    }
+
+    #[test]
+    fn apply_no_content_error_is_excluded_for_sse_streaming() {
+        let mut response = stop_response(None);
+        let run_config = RunConfig {
+            streaming_mode: StreamingMode::Sse,
+            ..Default::default()
+        };
+        apply_no_content_error(&mut response, &run_config);
+        assert!(response.error_code.is_none());
+    }
+
+    #[test]
+    fn apply_no_content_error_leaves_a_partial_response_alone() {
+        let mut response = stop_response(None);
+        response.partial = Some(true);
+        apply_no_content_error(&mut response, &RunConfig::default());
+        assert!(response.error_code.is_none());
+    }
+
+    #[test]
+    fn apply_no_content_error_leaves_a_non_stop_finish_reason_alone() {
+        let mut response = LlmResponse {
+            finish_reason: Some(rusty_serde::value::Value::String("MAX_TOKENS".to_string())),
+            ..Default::default()
+        };
+        apply_no_content_error(&mut response, &RunConfig::default());
+        assert!(response.error_code.is_none());
+    }
+
+    #[test]
+    fn apply_no_content_error_leaves_content_bearing_responses_alone() {
+        let mut response = stop_response(Some(Content::user_text("hi")));
+        apply_no_content_error(&mut response, &RunConfig::default());
+        assert!(response.error_code.is_none());
+    }
+
+    #[test]
+    fn should_skip_empty_response_is_true_for_a_bare_default_response() {
+        assert!(should_skip_empty_response(&LlmResponse::default()));
+    }
+
+    #[test]
+    fn should_skip_empty_response_is_false_once_content_is_present() {
+        let response = LlmResponse {
+            content: Some(Content::user_text("hi")),
+            ..Default::default()
+        };
+        assert!(!should_skip_empty_response(&response));
+    }
+
+    #[test]
+    fn should_skip_empty_response_is_false_when_an_error_code_is_set() {
+        let response = LlmResponse {
+            error_code: Some("E1".to_string()),
+            ..Default::default()
+        };
+        assert!(!should_skip_empty_response(&response));
+    }
+
+    #[test]
+    fn should_skip_empty_response_is_false_when_interrupted() {
+        let response = LlmResponse {
+            interrupted: Some(true),
+            ..Default::default()
+        };
+        assert!(!should_skip_empty_response(&response));
+    }
+
+    #[test]
+    fn should_skip_empty_response_is_false_when_grounding_metadata_is_present() {
+        let response = LlmResponse {
+            grounding_metadata: Some(rusty_serde::value::Value::String("g".to_string())),
+            ..Default::default()
+        };
+        assert!(!should_skip_empty_response(&response));
+    }
+
+    #[test]
+    fn postprocess_skips_a_response_with_no_content_and_no_error() {
+        let flow = flow_with_response(LlmResponse::default());
+        let ctx = ctx_for("my_agent");
+        let events = flow.postprocess(&ctx, vec![LlmResponse::default()]);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn postprocess_yields_a_no_content_error_event_instead_of_skipping() {
+        // The no-content-error conversion runs before the skip check, so a
+        // STOP-with-no-content response becomes a visible error event
+        // rather than vanishing silently.
+        let flow = flow_with_response(LlmResponse::default());
+        let ctx = ctx_for("my_agent");
+        let events = flow.postprocess(&ctx, vec![stop_response(None)]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].error_code.as_deref(), Some(NO_CONTENT_ERROR_CODE));
     }
 
     // --- LlmFlow turn ---

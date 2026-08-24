@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-flows::llm_flow::{apply_no_content_error, should_skip_empty_response}`
+  (C0156 partial DONE) — the two remaining `_postprocess_async` guard
+  clauses: converting a non-partial, non-streaming STOP-with-no-content
+  response into a `MODEL_RETURNED_NO_CONTENT` error (excluded for SSE
+  streaming, where a terminal finish-only chunk legitimately follows
+  content already streamed earlier), and skipping the model-response
+  event entirely when a response carries no content, no error, no
+  interruption, and no grounding metadata. Applied in the source's own
+  sequential order — a response the first check rewrites into an error
+  is never skipped by the second. 14 new tests.
+- Manifest evidence closure for `Gemini::generate_content_async`'s
+  dual-mode streaming contract (C0102 DONE) — already correctly
+  implemented and, it turns out, already partly tested directly via
+  the `BaseLlm` trait method; added the one missing case (`stream=false`
+  success, "exactly one response, not partial"). 1 new test.
+### Added
 - `adk-flows::functions_media::{as_function_response_part, extract_media_from_entry,
   extract_multimodal_parts}` (C0195 DONE) — `functions.py`'s
   multimodal tool-result extraction, pulling media (an image, audio
