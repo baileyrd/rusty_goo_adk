@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `adk-features` crate:
+  `adk_features::feature_registry::{FeatureName, FeatureStage,
+  FeatureConfig, feature_config, is_feature_enabled,
+  override_feature_enabled, TemporaryFeatureOverride}` (Phase 12,
+  C0643-C0646/C0648-C0649) — the feature-flag registry ported from
+  `google.adk.features._feature_registry`. The three-tier
+  `is_feature_enabled` precedence (programmatic override → env var →
+  registry default), the `ADK_ENABLE_<NAME>`/`ADK_DISABLE_<NAME>`
+  convention, and the once-per-process non-stable-feature notice are
+  all ported and tested. `temporary_feature_override`'s
+  `@contextmanager` becomes an RAII guard (`TemporaryFeatureOverride`,
+  restore-on-`Drop`) — the standard Rust idiom for "run on scope exit
+  including unwind," matching the source's `try`/`finally` semantics.
+  The registry itself is a fixed, exhaustive `match` rather than a
+  mutable dict (nothing in this batch's scope calls the source's
+  decorator-driven dynamic registration), which makes the source's
+  "raises on an unregistered name" branches structurally unreachable
+  here — a compile-time strengthening, not a narrowing. Not this
+  batch: the `experimental`/`working_in_progress`/`stable` decorators
+  (C0647) — Rust has no runtime-decorator analog to gate an arbitrary
+  object behind a flag; left `REQUIRED`, undecided. 9 new tests.
 - `adk-agents::in_memory_artifact_service::InMemoryArtifactService`
   (Phase 6, C0265) — the first real `ArtifactService` implementation:
   path-keyed `Vec<ArtifactEntry>` storage (version = list length at

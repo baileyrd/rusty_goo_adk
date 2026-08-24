@@ -22,6 +22,42 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Feature-flag registry (`adk-features`)
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** a new `adk-features` crate —
+  `feature_registry::{FeatureName, FeatureStage, FeatureConfig,
+  feature_config, is_feature_enabled, override_feature_enabled,
+  TemporaryFeatureOverride}` (C0643-C0646/C0648-C0649), ported from
+  `google.adk.features._feature_registry`. The three-tier
+  `is_feature_enabled` precedence (programmatic override → `ADK_ENABLE_
+  <NAME>`/`ADK_DISABLE_<NAME>` env vars → registry default), and the
+  once-per-process non-stable-feature notice, all ported and tested.
+- **Adaptation:** `temporary_feature_override`'s `@contextmanager`
+  becomes an RAII guard (`TemporaryFeatureOverride`, restore-on-`Drop`)
+  — the standard Rust idiom for "run on scope exit including unwind,"
+  matching the source's `try`/`finally` semantics exactly.
+- **Compile-time strengthening, not a narrowing:** the registry is a
+  fixed, exhaustive `match` over every `FeatureName` variant rather
+  than a mutable dict (nothing in this batch's scope calls the
+  source's decorator-driven dynamic registration) — so there is no
+  `FeatureName` value this port can construct that lacks a registry
+  entry, making the source's "raises on an unregistered name" branches
+  structurally unreachable here.
+- **Disclosed:** the notice emitted when a non-stable feature turns on
+  uses `eprintln!` rather than `warnings.warn` — this workspace has no
+  logging/warning framework, following the same precedent
+  `adk_models::capabilities::is_enterprise_mode_enabled`'s own
+  deprecation notice already established. Member count: 38 counted
+  directly off the source file, not the 37 the manifest description
+  estimates — source is ground truth.
+- **Not this batch:** the `experimental`/`working_in_progress`/`stable`
+  decorators (C0647) — Rust has no runtime-decorator analog to gate an
+  arbitrary object behind a flag; left `REQUIRED`, undecided.
+- 9 new tests.
+
+---
+
 ## PR #TBD — `InMemoryArtifactService`
 **2026-08-24** · (link added once this PR is opened)
 
