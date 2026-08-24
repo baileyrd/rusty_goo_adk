@@ -22,6 +22,39 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 7 batch 2: `SequentialAgent`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_agents::sequential_agent::SequentialAgent` (C0335,
+  partial) — a `BaseAgent`-pluggable `AgentBehavior` running its
+  sub-agents in tree order. Ported faithfully: start-index resumption
+  (resumes from the tracked sub-agent, restarts from the beginning if
+  that sub-agent was removed from the tree since — silently, no
+  logging framework adopted), resumable-only agent-state marker events
+  (one before each fresh sub-agent, one final end-of-agent marker),
+  and pause-on-long-running-call (`should_pause_invocation`, already
+  built).
+- **Adaptation, disclosed at length in the module doc:** the source's
+  `Context.state` backing dict *is* `EventActions.state_delta` by
+  reference, so one sub-agent's state change is visible to the next
+  immediately. This port's `Context`/`State` copy instead of sharing
+  by reference (an already-disclosed departure) — without a fix, a
+  later sub-agent in the same `SequentialAgent` run would never see an
+  earlier one's state changes, breaking the entire point of a
+  sequential chain. Fixed by applying each produced event's
+  `state_delta` onto `ctx.session.state` directly as the loop
+  processes it, mirroring (at a smaller scope) what
+  `SessionService::append_event`'s state-merge already does at the
+  persistence layer — a sub-agent's own `BaseAgent::run_async` clones
+  `ctx.session` when it builds its working copy, so this update is
+  what the *next* sub-agent's clone actually sees.
+- **Not ported:** `_run_live_impl`'s `task_completed` tool/instruction
+  auto-injection (needs `canonical_tools`, C0092, still a `ToolUnion`
+  placeholder — `run_live_impl` here is a plain pass-through with no
+  injection); `SequentialAgentConfig`/YAML config loading (C0338,
+  needs the config-resolution pipeline C0348 discloses as unbuilt).
+- 5 new tests (`adk-agents`, 136 total). Full workspace gate green.
+
 ## PR #TBD — Start Phase 7 batch 1: a real `BasePlugin` + `PluginManager`
 **2026-08-24** · (link added once this PR is opened)
 
