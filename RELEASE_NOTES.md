@@ -22,6 +22,35 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 7 batch 4: `LoopAgent`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_agents::loop_agent::LoopAgent` (C0337, partial) — a
+  `BaseAgent`-pluggable `AgentBehavior`, structurally `SequentialAgent`
+  wrapped in an outer loop: restarts from the first sub-agent up to
+  `max_iterations` times (`None` runs indefinitely), stopping the
+  moment a sub-agent escalates. Resets every sub-agent's tracked state
+  between iterations via `ctx.reset_sub_agent_states` (already built
+  for a prior batch). Resumability mirrors `SequentialAgent`'s
+  (`LoopAgentState` additionally tracks `times_looped`, preserved even
+  when the tracked sub-agent name no longer exists in the tree — only
+  the resume index restarts at 0 in that case, matching the source).
+- **Adaptation:** reuses `SequentialAgent`'s own already-disclosed
+  state-delta-propagation fix verbatim — this port's `Context`/`State`
+  copy rather than share state by reference, so each produced event's
+  `state_delta` is applied onto `ctx.session.state` directly as the
+  loop processes it; without this, a sub-agent in iteration 2 would
+  never see state a sub-agent in iteration 1 set.
+- **Not ported:** `_run_live_impl` matches the source exactly (raises
+  `NotImplementedError` — never implemented upstream either);
+  `LoopAgentConfig`/`_parse_config`/YAML config loading (C0338, needs
+  the config-resolution pipeline C0348 discloses as unbuilt) —
+  construct a `LoopAgent` directly with `with_max_iterations` instead.
+- 7 new tests (`adk-agents`, 150 total). Full workspace gate green.
+- This completes the "deprecated-but-active" multi-agent trio
+  (`SequentialAgent`/`ParallelAgent`/`LoopAgent`) started in Phase 7
+  batches 2-3.
+
 ## PR #TBD — Phase 7 batch 3: `ParallelAgent`
 **2026-08-24** · (link added once this PR is opened)
 
