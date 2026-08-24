@@ -40,6 +40,7 @@ pub mod long_running_tool;
 pub mod memory_entry_utils;
 pub mod model_name_utils;
 pub mod preload_memory_tool;
+pub mod request_input_tool;
 pub mod set_model_response_tool;
 pub mod tool_confirmation;
 pub mod tool_context;

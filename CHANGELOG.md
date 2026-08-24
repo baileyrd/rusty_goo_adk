@@ -5,6 +5,17 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::request_input_tool::{request_input, request_input_tool,
+  REQUEST_INPUT_FUNCTION_CALL_NAME}` (Phase 8, C0492, partial) — a
+  `LongRunningFunctionTool` asking the user a free-text/structured
+  question (`message` + optional `response_schema`) and returning
+  `Null` to trigger the long-running-interrupt mechanism, matching
+  `_request_input_func` exactly. Forward-references
+  `REQUEST_INPUT_FUNCTION_CALL_NAME` ("adk_request_input") here since
+  `adk-flows::functions`'s own HITL wiring for that constant isn't
+  ported yet and `adk-tools` doesn't depend on `adk-flows`. Not
+  ported: the source's `logging.info` call (no logging framework
+  adopted yet). 6 new tests.
 - `adk-tools::{google_search_tool::GoogleSearchTool,
   google_maps_grounding_tool::GoogleMapsGroundingTool,
   enterprise_search_tool::EnterpriseWebSearchTool,

@@ -22,6 +22,31 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `request_input_tool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::request_input_tool::{request_input,
+  request_input_tool, REQUEST_INPUT_FUNCTION_CALL_NAME}` (C0492,
+  partial) — a `LongRunningFunctionTool` asking the user a question
+  (`message`, mandatory) with an optional `response_schema`, always
+  returning `Null` to trigger the long-running-interrupt mechanism —
+  ported from `_request_input_tool.py`'s `_request_input_func` and
+  `request_input` instance.
+- **Disclosed forward-reference:** `REQUEST_INPUT_FUNCTION_CALL_NAME`
+  ("adk_request_input") is defined in this new module rather than in
+  `adk-flows::functions` — its actual source location
+  (`flows/llm_flows/functions.py`) — because `adk-flows::functions`
+  (C0191/C0192, already ported) hasn't built the HITL request-input
+  wiring that constant belongs to yet, and `adk-tools` doesn't depend
+  on `adk-flows`. A follow-up batch wiring that piece should reuse
+  this constant's value rather than defining a second copy.
+- **Disclosed narrowing:** the source's `logging.info` call on each
+  invocation isn't ported — no logging framework is adopted by this
+  workspace yet (same disclosed omission as `preload_memory_tool.rs`).
+- 6 new tests.
+
+---
+
 ## PR #TBD — Built-in Gemini grounding tools
 **2026-08-24** · (link added once this PR is opened)
 
