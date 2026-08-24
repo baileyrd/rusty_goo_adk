@@ -17,11 +17,12 @@
 //!   Phase 7) — confirmed absent from this port. Every node/task-mode
 //!   code path (`_run_node_async`/`_run_node_live`, task-scope resolution,
 //!   resumability) is out of scope until that engine exists.
-//! - Live mode (`run_live`), `run_debug` — each needs its own supporting
-//!   infrastructure (live request queue wiring into `InvocationContext`,
-//!   etc.) beyond this batch's scope. `rewind_async` (C0891-C0894) is
-//!   now built too — see [`crate::rewind`]'s own module doc for its two
-//!   delta helpers.
+//! - Live mode (`run_live`) needs its own supporting infrastructure (live
+//!   request queue wiring into `InvocationContext`, etc.) beyond this
+//!   batch's scope. `rewind_async` (C0891-C0894) is now built too — see
+//!   [`crate::rewind`]'s own module doc for its two delta helpers.
+//!   `run_debug` (C0911-C0913) is now built too — see
+//!   [`Runner::run_debug`]'s own doc.
 //!
 //! What's left, and what this batch builds, is the "legacy" (plain
 //! `BaseAgent`, single always-non-resumable turn) execution path
@@ -110,18 +111,27 @@
 //! concrete `BaseAgent`, never a bare node, so there's no node-vs-agent
 //! narrowing check to perform.
 //!
+//! **`Runner::run_debug`** (C0911-C0913): a debugging/experimentation
+//! convenience — see [`Runner::run_debug`]/[`Runner::run_debug_with_config`]'s
+//! own docs for the unconditional-session-creation (C0912) and
+//! flat-event-collection (C0913) semantics, and their disclosed
+//! narrowings (no logging framework adopted, matching C0851-C0854 below;
+//! C0914's `run_config.get_session_config` forwarding is N/A — this
+//! port's `SessionService::get_session` has no config parameter).
+//!
 //! **Not ported this batch**: `_find_agent_to_run` (C0907-C0910, picks up
 //! a resumed multi-turn conversation's last-active agent — needs
 //! resumability, always false here); `_resolve_invocation_id` (C0855,
 //! same reason); `Runner.run()`'s sync thread-bridging wrapper
 //! (C0877-C0880, a local-testing convenience — this port's whole call
 //! surface is already async-native, so there's less need for it, and it
-//! can be added later without disturbing anything here); compaction
-//! (`_run_post_invocation_compaction`, C0871-C0872, needs
-//! `events_compaction_config` wiring, Phase 7); agent-origin inference
-//! and its warnings (C0851-C0854) — Rust has no runtime module-path
-//! reflection to inspect, and no logging framework is adopted to warn
-//! through even if it did.
+//! can be added later without disturbing anything here); the legacy
+//! resumable-path context-setup helpers (`_setup_context_for_new_invocation`/
+//! `_setup_context_for_resumed_invocation`/`_find_user_message_for_invocation`,
+//! C0915-C0917, entangled with resumability wiring `Runner` doesn't have
+//! yet); agent-origin inference and its warnings (C0851-C0854) — Rust
+//! has no runtime module-path reflection to inspect, and no logging
+//! framework is adopted to warn through even if it did.
 
 use std::sync::Arc;
 
@@ -139,6 +149,7 @@ use adk_agents::services::{
 use adk_agents::session::Session;
 use adk_errors::already_exists::AlreadyExistsError;
 use adk_errors::session_not_found::SessionNotFoundError;
+use adk_events::debug_output::print_event;
 use adk_events::node_info::NodeInfo;
 use adk_events::Event;
 use adk_genai::content::{Content, Part};
@@ -158,6 +169,47 @@ pub enum RunnerError {
     AgentRun(String),
     #[error("Invocation ID not found: {0}")]
     InvocationNotFound(String),
+}
+
+/// C0911: `run_debug`'s `user_messages: str | list[str]` parameter — a
+/// bare string normalizes to a one-element list, matching the source's
+/// `isinstance(user_messages, str)` check.
+pub enum DebugMessages {
+    Single(String),
+    Many(Vec<String>),
+}
+
+impl DebugMessages {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            DebugMessages::Single(message) => vec![message],
+            DebugMessages::Many(messages) => messages,
+        }
+    }
+}
+
+impl From<&str> for DebugMessages {
+    fn from(message: &str) -> Self {
+        DebugMessages::Single(message.to_string())
+    }
+}
+
+impl From<String> for DebugMessages {
+    fn from(message: String) -> Self {
+        DebugMessages::Single(message)
+    }
+}
+
+impl From<Vec<String>> for DebugMessages {
+    fn from(messages: Vec<String>) -> Self {
+        DebugMessages::Many(messages)
+    }
+}
+
+impl From<Vec<&str>> for DebugMessages {
+    fn from(messages: Vec<&str>) -> Self {
+        DebugMessages::Many(messages.into_iter().map(str::to_string).collect())
+    }
 }
 
 /// C0896: mirrors `_get_output_event`. If `modified` is `None`, the
@@ -767,6 +819,101 @@ impl Runner {
 
         Ok(())
     }
+
+    /// C0911-C0913: a debugging/experimentation convenience for quickly
+    /// exercising the wrapped agent without dealing with session
+    /// management, content formatting, or event streaming directly.
+    /// Defaults `user_id`/`session_id` to the literal `"debug_user_id"`/
+    /// `"debug_session_id"` (reusing the same defaults across calls
+    /// continues the same conversation — intentional, matching the
+    /// source's own documented behavior) and every other keyword
+    /// argument to the source's own defaults. See
+    /// [`Runner::run_debug_with_config`] for the full-control form.
+    pub async fn run_debug(
+        &self,
+        user_messages: impl Into<DebugMessages>,
+    ) -> Result<Vec<Event>, RunnerError> {
+        self.run_debug_with_config(
+            user_messages,
+            "debug_user_id",
+            "debug_session_id",
+            RunConfig::default(),
+            false,
+            false,
+        )
+        .await
+    }
+
+    /// [`Runner::run_debug`], accepting the full set of keyword
+    /// parameters the source exposes.
+    ///
+    /// **C0912**: session lookup here is *unconditional*
+    /// get-or-create — it looks the session up directly and creates it
+    /// if missing, regardless of [`Runner::with_auto_create_session`]
+    /// (unlike [`Runner::run_async`], which honors that flag and errors
+    /// instead of creating one). **Disclosed narrowing**: the source
+    /// also logs `"Created new session"`/`"Continue session"` via
+    /// Python's `logging` module at this point (unless `quiet`); this
+    /// port has no logging framework adopted anywhere (see the module
+    /// doc's C0851-C0854 note for the same posture), so those two log
+    /// lines have no destination here.
+    ///
+    /// **C0913**: drives [`Runner::run_async_with_config`] once per
+    /// message in `user_messages` (a bare string normalizes to one
+    /// message), wrapping each as a user [`Content`] text turn; unless
+    /// `quiet`, each produced event is printed via
+    /// [`adk_events::debug_output::print_event`] with `verbose` forwarded.
+    /// **Disclosed narrowing**: the source also logs `"User > %s"` for
+    /// each message before driving it — same no-logging-framework
+    /// narrowing as above. Returns the full flat list of events across
+    /// *all* messages, not just the last (C0913).
+    ///
+    /// **Disclosed narrowing (C0914)**: the source forwards
+    /// `run_config.get_session_config` into its initial `get_session`
+    /// call; this port's [`SessionService::get_session`] takes no config
+    /// parameter to forward it to (see `adk-agents::services`' own
+    /// disclosed scope cut) — N/A here for the same reason.
+    pub async fn run_debug_with_config(
+        &self,
+        user_messages: impl Into<DebugMessages>,
+        user_id: &str,
+        session_id: &str,
+        run_config: RunConfig,
+        quiet: bool,
+        verbose: bool,
+    ) -> Result<Vec<Event>, RunnerError> {
+        let session = match self
+            .session_service
+            .get_session(&self.app_name, user_id, session_id)
+            .await
+        {
+            Some(session) => session,
+            None => self
+                .session_service
+                .create_session(&self.app_name, user_id, None, Some(session_id.to_string()))
+                .await
+                .map_err(RunnerError::AlreadyExists)?,
+        };
+
+        let mut collected_events = Vec::new();
+        for message in user_messages.into().into_vec() {
+            let events = self
+                .run_async_with_config(
+                    user_id,
+                    &session.id,
+                    Content::user_text(message),
+                    run_config.clone(),
+                )
+                .await?;
+            for event in events {
+                if !quiet {
+                    print_event(&event, verbose);
+                }
+                collected_events.push(event);
+            }
+        }
+        Ok(collected_events)
+    }
 }
 
 #[cfg(test)]
@@ -858,6 +1005,89 @@ mod tests {
         assert_eq!(session.events.len(), 2);
         assert_eq!(session.events[0].author, "user");
         assert_eq!(session.events[1].author, "echo_agent");
+    }
+
+    #[rusty_tokio::test]
+    async fn run_debug_creates_the_debug_session_even_when_auto_create_session_is_off() {
+        // C0912: unconditional get-or-create, bypassing
+        // `with_auto_create_session` entirely.
+        let runner = runner(false);
+        let events = runner.run_debug("hi").await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].author, "echo_agent");
+
+        let session = runner
+            .session_service
+            .get_session("app", "debug_user_id", "debug_session_id")
+            .await
+            .unwrap();
+        assert_eq!(session.events.len(), 2);
+    }
+
+    #[rusty_tokio::test]
+    async fn run_debug_reuses_the_same_default_session_across_calls() {
+        let runner = runner(false);
+        runner.run_debug("first").await.unwrap();
+        runner.run_debug("second").await.unwrap();
+
+        let session = runner
+            .session_service
+            .get_session("app", "debug_user_id", "debug_session_id")
+            .await
+            .unwrap();
+        // 2 user events + 2 agent events across both calls, same session.
+        assert_eq!(session.events.len(), 4);
+    }
+
+    #[rusty_tokio::test]
+    async fn run_debug_normalizes_a_single_string_message_to_one_element() {
+        let runner = runner(false);
+        let events = runner.run_debug("only message").await.unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[rusty_tokio::test]
+    async fn run_debug_drives_every_message_and_collects_the_full_flat_event_list() {
+        let runner = runner(false);
+        let events = runner
+            .run_debug(vec!["first", "second", "third"])
+            .await
+            .unwrap();
+        // One echo_agent event per message, in order, across all messages —
+        // not just the last (C0913).
+        assert_eq!(events.len(), 3);
+        assert!(events.iter().all(|event| event.author == "echo_agent"));
+    }
+
+    #[rusty_tokio::test]
+    async fn run_debug_with_config_honors_custom_user_and_session_ids() {
+        let runner = runner(false);
+        runner
+            .run_debug_with_config("hi", "alice", "debug1", RunConfig::default(), false, false)
+            .await
+            .unwrap();
+
+        assert!(runner
+            .session_service
+            .get_session("app", "debug_user_id", "debug_session_id")
+            .await
+            .is_none());
+        let session = runner
+            .session_service
+            .get_session("app", "alice", "debug1")
+            .await
+            .unwrap();
+        assert_eq!(session.events.len(), 2);
+    }
+
+    #[rusty_tokio::test]
+    async fn run_debug_with_config_quiet_still_returns_events() {
+        let runner = runner(false);
+        let events = runner
+            .run_debug_with_config("hi", "user", "s1", RunConfig::default(), true, false)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
     }
 
     #[rusty_tokio::test]

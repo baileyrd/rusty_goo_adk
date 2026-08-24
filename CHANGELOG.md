@@ -5,6 +5,30 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-runners::Runner::{run_debug, run_debug_with_config}` (C0911/C0912/C0913
+  DONE, C0914 N/A) — a debugging/experimentation convenience ported from
+  `runners.py`'s `run_debug`, plus a new `DebugMessages` type normalizing a
+  bare string or a list of strings. `run_debug` matches the source's
+  documented defaults (`user_id="debug_user_id"`, `session_id=
+  "debug_session_id"`, reusing them across calls continues the same
+  session); `run_debug_with_config` is the full-control form, the same
+  split already established by `run_async`/`run_async_with_config` since
+  Rust has no keyword-argument defaults. Session lookup is unconditional
+  get-or-create, bypassing `Runner::with_auto_create_session` entirely
+  (C0912); drives `run_async_with_config` once per message and calls
+  `adk_events::debug_output::print_event` per event unless `quiet`,
+  returning the full flat event list across every message, not just the
+  last (C0913). Disclosed narrowing: the source's `logger.info(...)` calls
+  around session creation and each message have no destination in this
+  port (no logging framework adopted anywhere in this crate); C0914's
+  `run_config.get_session_config` forwarding is N/A — this port's
+  `SessionService::get_session` has no config parameter to forward one to.
+  6 new tests. Also corrected two stale manifest/doc notes touched by this
+  batch: C0924's evidence understated `Runner::close` (it already closes
+  both the plugin manager and the session service, not just the latter),
+  and C0925 (`__aenter__`/`__aexit__`) is now disclosed N/A — Rust has no
+  async-context-manager protocol and `Drop` can't run an async close.
+### Added
 - `adk-flows::apps_compaction::{run_compaction_for_token_threshold,
   run_compaction_for_sliding_window}` (C0293 DONE) — the two
   post-invocation compaction trigger entrypoints, ported from
