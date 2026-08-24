@@ -146,6 +146,55 @@ pub fn build_transfer_instructions(
     instructions
 }
 
+#[derive(Debug, rusty_err::Error)]
+pub enum GetAgentToRunError {
+    #[error("Agent {0} not found in the agent tree.")]
+    AgentNotFound(String),
+    #[error("Transfer to sibling agent {0} is disallowed.")]
+    SiblingTransferDisallowed(String),
+}
+
+/// `_get_agent_to_run`: resolves a `transfer_to_agent` target by name,
+/// searching the whole tree from the root down. `disallow_transfer_to_peers`
+/// is the current (transferring) agent's own flag — pass `false` for an
+/// agent with no corresponding `LlmAgent` config (the source's own
+/// `isinstance(agent, LlmAgent)` guard), matching [`get_transfer_targets`]'s
+/// own `llm_mode` convention.
+///
+/// **Adaptation, disclosed**: the source compares `agent_to_run.parent_agent
+/// == agent.parent_agent` by object identity (Pydantic model equality, which
+/// for `BaseAgent` instances is effectively "the same node"). This port's
+/// `BaseAgent` doesn't implement `PartialEq` (it wraps a type-erased
+/// `Box<dyn AgentBehavior>`, which can't derive one), so this compares
+/// parent agents by name instead — a reasonable proxy since sibling names
+/// are expected unique within one tree (`BaseAgent::build` already warns on
+/// duplicates).
+pub fn get_agent_to_run(
+    current_agent: &BaseAgent,
+    agent_name: &str,
+    disallow_transfer_to_peers: bool,
+) -> Result<BaseAgent, GetAgentToRunError> {
+    let root_agent = current_agent.root_agent();
+    let agent_to_run = root_agent
+        .find_agent(agent_name)
+        .ok_or_else(|| GetAgentToRunError::AgentNotFound(agent_name.to_string()))?;
+
+    let same_parent = match (agent_to_run.parent_agent(), current_agent.parent_agent()) {
+        (Some(a), Some(b)) => a.name() == b.name(),
+        (None, None) => true,
+        _ => false,
+    };
+    let is_disallowed_sibling_transfer =
+        disallow_transfer_to_peers && same_parent && agent_to_run.name() != current_agent.name();
+    if is_disallowed_sibling_transfer {
+        return Err(GetAgentToRunError::SiblingTransferDisallowed(
+            agent_name.to_string(),
+        ));
+    }
+
+    Ok(agent_to_run)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +382,67 @@ mod tests {
             true,
         );
         assert!(!instructions.contains("transfer to your parent agent"));
+    }
+
+    // --- get_agent_to_run ---
+
+    #[test]
+    fn finds_a_sub_agent_by_name_from_the_root() {
+        let sub_agent = agent("sub_agent", "d");
+        let main = agent_with_sub_agents("main", "d", vec![sub_agent]);
+        let found = get_agent_to_run(&main, "sub_agent", false).unwrap();
+        assert_eq!(found.name(), "sub_agent");
+    }
+
+    #[test]
+    fn finds_itself_by_name() {
+        let main = agent("main", "d");
+        let found = get_agent_to_run(&main, "main", false).unwrap();
+        assert_eq!(found.name(), "main");
+    }
+
+    #[test]
+    fn errors_when_the_named_agent_is_nowhere_in_the_tree() {
+        let main = agent("main", "d");
+        match get_agent_to_run(&main, "nonexistent", false) {
+            Err(GetAgentToRunError::AgentNotFound(name)) => assert_eq!(name, "nonexistent"),
+            _ => panic!("expected AgentNotFound"),
+        }
+    }
+
+    #[test]
+    fn allows_a_sibling_transfer_by_default() {
+        let agent_a = agent("agent_a", "d");
+        let agent_b = agent("agent_b", "d");
+        let _parent = agent_with_sub_agents("parent", "d", vec![agent_a.clone(), agent_b]);
+        let found = get_agent_to_run(&agent_a, "agent_b", false).unwrap();
+        assert_eq!(found.name(), "agent_b");
+    }
+
+    #[test]
+    fn disallows_a_sibling_transfer_when_the_flag_is_set() {
+        let agent_a = agent("agent_a", "d");
+        let agent_b = agent("agent_b", "d");
+        let _parent = agent_with_sub_agents("parent", "d", vec![agent_a.clone(), agent_b]);
+        match get_agent_to_run(&agent_a, "agent_b", true) {
+            Err(GetAgentToRunError::SiblingTransferDisallowed(name)) => assert_eq!(name, "agent_b"),
+            _ => panic!("expected SiblingTransferDisallowed"),
+        }
+    }
+
+    #[test]
+    fn a_transfer_to_a_child_is_never_treated_as_a_sibling_transfer() {
+        let child = agent("child", "d");
+        let main = agent_with_sub_agents("main", "d", vec![child]);
+        let found = get_agent_to_run(&main, "child", true).unwrap();
+        assert_eq!(found.name(), "child");
+    }
+
+    #[test]
+    fn transferring_to_oneself_is_never_disallowed_as_a_sibling_transfer() {
+        let agent_a = agent("agent_a", "d");
+        let _parent = agent_with_sub_agents("parent", "d", vec![agent_a.clone()]);
+        let found = get_agent_to_run(&agent_a, "agent_a", true).unwrap();
+        assert_eq!(found.name(), "agent_a");
     }
 }

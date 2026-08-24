@@ -458,6 +458,14 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     to its own still-`REQUIRED` manifest row. `LlmFlow` resolving its
     model once at construction is a real (if narrow) instance of the
     memoization cache `canonical_model.rs` disclosed as missing.
+  - `agent_transfer::get_agent_to_run` (C0159, DONE): resolves a
+    `transfer_to_agent` target by name from the tree root
+    (`root_agent()`/`find_agent()`), raising on an unknown target or a
+    disallowed sibling transfer. Adaptation: parent-agent identity is
+    compared by name rather than Pydantic-style object equality, since
+    `BaseAgent` (wrapping a type-erased `Box<dyn AgentBehavior>`) has no
+    `PartialEq` — sibling names are already expected unique within one
+    tree (`BaseAgent::build` warns on duplicates).
 ### Changed
 ### Fixed
 ### Security

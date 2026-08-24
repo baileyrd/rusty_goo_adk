@@ -22,6 +22,24 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 15: `_get_agent_to_run` — transfer target resolution
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::agent_transfer::get_agent_to_run` (C0159, DONE) —
+  resolves a `transfer_to_agent` target by name, searching the whole
+  agent tree from the root down (`root_agent()`/`find_agent()`, both
+  already real). Raises when the named agent isn't found anywhere in
+  the tree, and when the transferring agent has
+  `disallow_transfer_to_peers` set and the target is a sibling (shares
+  the same parent, isn't itself).
+- **Adaptation, disclosed:** the source compares `parent_agent` by
+  Pydantic model equality (effectively object identity); this port's
+  `BaseAgent` wraps a type-erased `Box<dyn AgentBehavior>` and so can't
+  derive `PartialEq`, so parent identity is compared by name instead —
+  `BaseAgent::build` already treats sibling name uniqueness as expected
+  within one tree, so this is a reasonable proxy.
+- 7 new tests. Full workspace gate green (172 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 14: `LlmFlow` — a real, working `AgentBehavior` for `LlmAgent`
 **2026-08-24** · (link added once this PR is opened)
 
