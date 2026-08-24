@@ -92,6 +92,26 @@
 //! deliberately left out of scope to widen this batch), which is why
 //! `auth_tool::AuthConfig` also grows `Serialize`/`Deserialize` derives.
 //! No new dependency.
+//!
+//! **`SaveFilesAsArtifactsPlugin` batch**: [`save_files_as_artifacts_plugin`]
+//! (`SaveFilesAsArtifactsPlugin`, C0367) — ported from `plugins
+//! /save_files_as_artifacts_plugin.py`. Saves `inline_data` parts in a
+//! user message as artifacts, replacing each with a placeholder (and,
+//! optionally, a `file_data` reference part for a model-accessible
+//! `canonical_uri`). Reads `MediaBlobStub`'s flattened `rest` map for
+//! `displayName`/`data` (the same pattern `file_artifact_service.rs`
+//! already established), whose `base64_decode` helper is promoted
+//! `pub(crate)` for reuse here rather than a third hand-rolled copy.
+//! Required fixing a real gap this plugin's own two-hook design
+//! surfaced: `adk-runners::runner::merge_context_state_into_session`
+//! (new) bridges a run-level plugin hook's state mutations back onto
+//! the session — this port's `Context` clones `InvocationContext`
+//! rather than sharing it by reference the way the source's raw
+//! `InvocationContext.session.state` dict does, so without this fix a
+//! mutation made in `on_user_message_callback` would never be visible
+//! to a later hook (`before_agent_callback`, in this plugin's case).
+//! Verified end-to-end in `adk-runners`'s own test suite. No new
+//! dependency.
 
 pub mod active_streaming_tool;
 pub mod agent_optimizer;
@@ -124,6 +144,7 @@ pub mod parallel_agent;
 pub mod readonly_context;
 pub mod run_config;
 pub mod sampler;
+pub mod save_files_as_artifacts_plugin;
 pub mod schema_version;
 pub mod sequential_agent;
 pub mod services;

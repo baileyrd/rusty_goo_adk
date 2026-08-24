@@ -22,6 +22,37 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `plugins/save_files_as_artifacts_plugin.py`: `SaveFilesAsArtifactsPlugin` (C0367)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the plugin that saves files embedded in a user message as artifacts —
+and, along the way, fixes a real gap in `Runner`'s plugin wiring that this
+plugin's own two-hook (`on_user_message_callback` → `before_agent_callback`)
+design surfaced.
+
+- **Added:** `adk_agents::save_files_as_artifacts_plugin::SaveFilesAsArtifactsPlugin`
+  (C0367 DONE) — the 20MB size cap, the `gs`/`https`/`http`-only
+  model-accessible-URI check for attaching a `file_data` reference part,
+  and the pending-delta-then-flush pattern all port in full.
+- **Fixed:** `adk_runners::runner::merge_context_state_into_session` (new) —
+  a run-level plugin hook's state mutations were previously invisible to
+  any other hook in the same turn, since this port's `Context` clones
+  `InvocationContext` rather than sharing it by reference the way the
+  source's raw `session.state` dict does. Applied after every run-level
+  hook call in `Runner::run_async_with_config`; verified end-to-end by a
+  new test proving this exact plugin's stash-then-flush pattern works
+  through `Runner`.
+- **Disclosed:** `MediaBlobStub.display_name`/`.data` are read out of its
+  flattened `rest` map (an already-established narrowing, not new here);
+  no per-part `try/except`-style fallback since `ArtifactService::save_artifact`
+  is infallible in this port (a pre-existing trait shape); the source's
+  `DeprecationWarning`/logging isn't reproduced (no logging framework
+  adopted, an already-established scope cut).
+- **Scope:** no new dependency. 10 new tests (9 in `adk-agents`, 1
+  end-to-end in `adk-runners`).
+
+---
+
 ## PR #TBD — `runners.py`: run-level plugin wiring (C0353, C0357, C0886, C0895-C0899)
 **2026-08-24** · (link added once this PR is opened)
 
