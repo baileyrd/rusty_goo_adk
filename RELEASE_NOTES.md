@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `apps/app.py`: `App` model (C0279, C0280)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the top-level `App` container — the entry point binding a root
+agent plus app-wide settings (plugins, event compaction, context
+caching, resumability).
+
+- **Added:** `adk_agents::app::{App, validate_app_name, AppError}`.
+  `App::new(name, root_agent)` validates the name and defaults every
+  other field empty/unset; `.with_plugin`/`.with_events_compaction_config`/
+  `.with_context_cache_config`/`.with_resumability_config` builders set
+  the rest, reusing the four already-DONE config/plugin types directly.
+- **Narrowed:** `root_agent` goes from the source's
+  `Union[BaseAgent, BaseNode, None]` to `BaseAgent`-only and becomes a
+  required constructor argument rather than an `Option` — the
+  `BaseNode`/workflow-graph engine (C0298-C0306) isn't built in this
+  port, and the source's own `_validate` model-validator already
+  rejects a `None` root_agent, so this enforces the same invariant at
+  the type level instead of at runtime.
+- **Disclosed:** `validate_app_name` is a new, distinct validator from
+  `base_agent::validate_name` — the source's app-name regex
+  (`^[a-zA-Z][a-zA-Z0-9_-]*$`) additionally permits hyphens, which
+  agent names don't.
+- **Scope:** deliberately not wired into `Runner`'s constructor this
+  batch (C0840-C0850) — that would change `Runner::new`'s already-shipped
+  signature; left for a follow-up batch once `App` exists and can be
+  reviewed on its own. No new dependency. 7 new tests.
+
+---
+
 ## PR #TBD — `runners.py`: `InMemoryRunner` (C0926)
 **2026-08-24** · (link added once this PR is opened)
 

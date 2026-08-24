@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::app::{App, validate_app_name, AppError}` (C0279/C0280
+  DONE) — the top-level container binding a root agent + app-wide
+  settings (`plugins`, `events_compaction_config`,
+  `context_cache_config`, `resumability_config`). `root_agent` narrows
+  from the source's `Union[BaseAgent, BaseNode, None]` to `BaseAgent`-only
+  and becomes a required constructor argument (the `BaseNode`/workflow
+  graph engine, C0298-C0306, isn't built in this port, and the source's
+  own `_validate` model-validator already rejects `None`).
+  `validate_app_name` is a new, distinct validator from
+  `base_agent::validate_name` — the app-name regex additionally permits
+  hyphens. Deliberately not wired into `Runner`'s constructor this
+  batch — a follow-up once `App` exists and can be reviewed on its own.
+  7 new tests. No new dependency.
+### Added
 - `adk-runners::Runner::in_memory` (C0926 DONE) — `InMemoryRunner`,
   narrowed from a `Runner` subclass to a constructor: pre-wires
   `InMemorySessionService`/`InMemoryArtifactService`/`InMemoryMemoryService`
