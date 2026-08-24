@@ -392,6 +392,7 @@ mod tests {
                     id: None,
                     name: Some("test_function".to_string()),
                     response: Some(response),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }],
@@ -503,6 +504,7 @@ mod tests {
                         id: None,
                         name: Some("f".to_string()),
                         response: None,
+                        ..Default::default()
                     }),
                     ..Default::default()
                 },

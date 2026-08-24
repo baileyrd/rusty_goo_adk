@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-flows::functions_media::{as_function_response_part, extract_media_from_entry,
+  extract_multimodal_parts}` (C0195 DONE) — `functions.py`'s
+  multimodal tool-result extraction, pulling media (an image, audio
+  clip, or document) out of a tool's returned dict/list/tuple (bounded
+  to one level of container nesting) before the rest of the result is
+  coerced to a plain JSON dict, wired into
+  `adk-flows::functions::build_function_response_content`. New schema:
+  `adk_genai::content::FunctionResponse` gained a `parts:
+  Option<Vec<FunctionResponsePart>>` field (additive; every existing
+  construction site updated to use `..Default::default()`);
+  `FunctionResponsePart` is a new type reusing `MediaBlobStub` for the
+  same `mime_type`-real/rest-opaque shape `Part::inline_data`/
+  `Part::file_data` already use. Disclosed adaptation: the source's
+  `isinstance(value, types.Part)` check has no direct equivalent since
+  this port's tools only ever return an already-JSON-shaped `Value` —
+  the check here is structural instead (round-trips through
+  `rusty_serde::json::from_value::<Part>` and carries a populated
+  `inline_data`/`file_data`), looser than the source's identity check
+  but the only representation available. 13 new tests.
+### Added
 - Manifest evidence closures for two `runners.py` module-level helpers
   already fully implemented and exercised, but previously undocumented
   as such: **C0833** (`_notify_run_error`, best-effort

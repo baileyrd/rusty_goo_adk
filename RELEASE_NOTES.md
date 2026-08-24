@@ -22,6 +22,49 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `functions.py`: multimodal tool-result extraction (C0195)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the piece of `functions.py` that lets a tool hand back an image,
+audio clip, or document instead of encoding it into text — a tool
+result is otherwise required to be JSON-serializable.
+
+- **Added:** `adk_flows::functions_media::{as_function_response_part,
+  extract_media_from_entry, extract_multimodal_parts}` — pulls media
+  out of a tool's returned dict/list/tuple, bounded to one level of
+  container nesting (`_MAX_MEDIA_CONTAINER_DEPTH`), matching the
+  source's exact recursion shape (a container found at that depth is
+  kept as-is rather than recursed into a second time) and its
+  "`remaining or {}`" empty-container coercion.
+- **Added:** `adk_genai::content::FunctionResponse::parts:
+  Option<Vec<FunctionResponsePart>>` — a new, additive field (every
+  existing construction site updated), and `FunctionResponsePart`
+  itself, a new type reusing `MediaBlobStub` for the same
+  `mime_type`-real/rest-opaque shape `Part::inline_data`/
+  `Part::file_data` already use.
+- **Wired:** `adk_flows::functions::build_function_response_content`
+  now extracts media before coercing the remainder to a dict, and
+  attaches it to the built `FunctionResponse::parts`.
+- **Disclosed adaptation:** the source's `_as_function_response_part`
+  checks `isinstance(value, types.Part)` — a real Python
+  object-identity check. This port's tools only ever return an
+  already-JSON-shaped `Value` (there's no way to embed a typed `Part`
+  object inside an arbitrary result tree), so the check here is
+  necessarily structural instead: a `Value::Map` that round-trips
+  through `rusty_serde::json::from_value::<Part>` (the same
+  opaque-payload round-trip convention `load_artifacts_tool.rs`
+  already uses) and carries a populated `inline_data`/`file_data`
+  counts as media. This is looser than the source's identity check — a
+  plain dict that happens to carry `inlineData`/`fileData`-shaped keys
+  would also match here — but it's the only representation a tool
+  constructing media in this port actually has to work with.
+- **Not ported:** computer-use image decoding
+  (`_try_decode_computer_use_image`) — needs `ComputerUseTool`, not
+  built in this port.
+- **Scope:** 13 new tests.
+
+---
+
 ## PR #TBD — `runners.py`: two module-level helper closures (C0833, C0836)
 **2026-08-24** · (link added once this PR is opened)
 

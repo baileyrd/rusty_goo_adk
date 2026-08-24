@@ -352,6 +352,7 @@ mod tests {
                         "resource_names".to_string(),
                         Value::Seq(vec![Value::String("doc.txt".to_string())]),
                     )])),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }],
@@ -382,6 +383,7 @@ mod tests {
                         "resource_names".to_string(),
                         Value::Seq(vec![Value::String("missing.txt".to_string())]),
                     )])),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }],

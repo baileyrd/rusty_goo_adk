@@ -300,6 +300,7 @@ mod tests {
                 id: Some("c1".to_string()),
                 name: Some("get_weather".to_string()),
                 response: None,
+                ..Default::default()
             }],
             ..Default::default()
         });
