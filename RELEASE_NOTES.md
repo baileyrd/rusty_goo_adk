@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `SetModelResponseTool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::set_model_response_tool::SetModelResponseTool`
+  (C0437, partial) — the internal output-schema workaround: lets the
+  model set its final structured response via a tool call when
+  `output_schema` is configured alongside other tools. Sets the
+  already-real `EventActions.set_model_response` field
+  `output_schema.rs`'s `get_structured_model_response` (C0178)
+  reads back.
+- **Fundamental adaptation (disclosed in the module doc):** the
+  source dynamically builds a Python function signature from
+  `output_schema` at runtime and validates the model's call args
+  against that schema via Pydantic. This port has neither Python's
+  runtime type introspection nor a Pydantic-equivalent JSON-schema
+  validator, so `output_schema` is taken as an already-opaque `Value`
+  used directly as the declaration's `parameters` — no dynamic
+  per-field signature synthesis, no `Field(description=...)`
+  re-application. `run_async` can't distinguish "regular object
+  schema" from "`list[BaseModel]`" from "raw non-object schema" the
+  way the source's `_is_basemodel`/`_is_list_of_basemodel` flags do;
+  it uses the same `items`/`response`-single-key convention the
+  source's own dynamic signature would produce for the non-object
+  cases instead — a reasonable but *not* type-verified stand-in. The
+  `ValidationError`-triggered retry-with-feedback path isn't ported —
+  there's no validation to fail, a real disclosed gap, not a silent
+  one.
+- **Unblocks:** the tool-existence half of C0171 (`TransferToAgentTool`
+  wiring) and C0178 (`SetModelResponseTool` wiring)'s own disclosed
+  gaps — both tools now exist; the remaining gap in each is purely
+  the request-processor wiring, which needs `InvocationContext.agent`
+  to resolve a concrete `LlmAgent`, the same blocker every other
+  Phase 4 processor already discloses.
+- 5 new tests.
+
 ## PR #TBD — `TransferToAgentTool`
 **2026-08-24** · (link added once this PR is opened)
 
