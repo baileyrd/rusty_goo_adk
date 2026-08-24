@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::load_mcp_resource_tool::{LoadMcpResourceTool,
+  McpResourceProvider}` (Phase 8, C0426, partial) — the full
+  list→instruction-inject→function-response-detect→per-resource-read→
+  append flow, reusing `load_artifacts_tool::maybe_base64_to_bytes`
+  (C0425) for the same decode-with-placeholder-fallback shape. No real
+  `McpToolset` exists yet (C0540-C0542, its own larger capability), so
+  this defines a minimal `McpResourceProvider` trait carrying just the
+  two operations this tool calls — the same placeholder-trait pattern
+  `adk-agents::services` already uses for `MemoryService`/
+  `ArtifactService`. Refined `maybe_base64_to_bytes` (shared with
+  C0425): a non-empty input with no recognizable base64 characters
+  now correctly reports a decode failure instead of silently
+  producing an empty byte vector. 7 new tests.
 - `adk-tools::load_web_page::{load_web_page, LoadWebPageTool}` (Phase
   8, C0427, partial) — fetches a URL and extracts its text, with the
   source's SSRF-hardening core ported in full: URL/host/port
