@@ -22,6 +22,66 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: `EvalSet`/`EvalCase` data model + rubrics/app-details/results (C0606, C0607, C0609, C0610, C0635)
+**2026-08-24** · (link added once this PR is opened)
+
+Closes the "second-tier" data-model layer under `evaluation/`: everything
+`EvalSet`/`EvalCase` need to actually represent an eval fixture and its
+results on disk, once C0605/C0608's core landed. Also closes a disclosed
+gap from the first `evaluation/` PR: `Invocation.rubrics`/`.app_details`
+now carry the real `Rubric`/`AppDetails` types instead of opaque `Value`.
+
+- **Added:** `eval_case::EvalCase`/`SessionInput`/`SessionState`/
+  `StaticConversation`. `EvalCase`'s `conversation`-XOR-
+  `conversation_scenario` constraint (the source's `@model_validator`)
+  is exposed as `EvalCase::validate()` rather than enforced automatically
+  on deserialization — disclosed in the module doc, matching this
+  codebase's existing `ServiceAccount`-style pattern (plainly
+  deserializable fields, explicit validation on construction) rather
+  than baking a Python-style post-init hook into `Deserialize`.
+- **Added:** `conversation_scenarios::ConversationScenario`/
+  `ConversationScenarios`/`ConversationGenerationConfig`.
+- **Added:** `eval_set::EvalSet`.
+- **Added:** `eval_rubrics::Rubric`/`RubricContent`/`RubricScore`.
+  `RubricContent.text_property` has no default in the source
+  (`Field(description=...)`, no `default=`), so — like pydantic — it's
+  required at construction even though its value may be `null`.
+- **Added:** `app_details::AgentDetails`/`AppDetails`, including both
+  methods (`get_developer_instructions`/`get_tools_by_agent_name`).
+- **Added:** `eval_result::EvalCaseResult`/`EvalSetResult`, including
+  both explicitly-deprecated back-compat fields.
+- **Added:** `constants::{MISSING_EVAL_DEPENDENCIES_MESSAGE,
+  DEFAULT_LIVE_TIMEOUT_SECONDS, eval_constants}`.
+- **Disclosed adaptation:** `Rubric`'s source `type` field is
+  `rubric_type` at the Rust level (`r#type` as a field name produces
+  unparsable proc-macro token streams under this codebase's derive
+  macro) — `#[rusty_serde(rename = "type")]` keeps the wire shape
+  unchanged.
+- **Disclosed narrowing:** `ConversationScenario.user_persona` stays
+  opaque `Value` — its real type and the source's string-id-to-persona
+  registry resolution belong to the persona system, C0632, still
+  `REQUIRED`; neither `Evaluator` built so far reads it.
+- **Disclosed narrowing:** `EvalCaseResult.session_details` stays opaque
+  `Value` — its real type (`adk_agents::session::Session`) already
+  exists in this workspace, but `adk-eval` deliberately stays at the
+  bottom of the crate graph (only `adk-genai` + `rusty_serde`); pulling
+  in `adk-agents`'s own dependency tree for one unread passthrough field
+  would invert that design intentionally.
+- **Disclosed narrowing:** `EvalCase`/`SessionInput`'s source
+  `extra="allow"` config (vs. the base `EvalBaseModel`'s `extra="forbid"`)
+  narrows to "an unrecognized field no longer rejects the payload" — this
+  port has no catch-all side channel preserving the extra field the way
+  pydantic does.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-eval +21 new tests; zero regressions elsewhere)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `evaluation/`: `RougeEvaluator` (C0590) — hand-ported Porter stemmer + Unicode-aware ROUGE-1 tokenizer
 **2026-08-24** · (link added once this PR is opened)
 

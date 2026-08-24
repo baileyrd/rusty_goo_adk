@@ -25,17 +25,29 @@
 //! `Interval`/`MetricValueInfo`/`MetricInfo`/`MetricInfoProvider` are
 //! metric-catalog metadata types with no consumer yet either.
 //!
-//! **C0606/C0607/C0610, not ported — opaque placeholders**:
-//! `Invocation.rubrics`/`.app_details` (their real types,
-//! `eval_rubrics.Rubric` and `app_details.AppDetails`, are each their own
-//! still-`REQUIRED` manifest row) and `Evaluator::evaluate_invocations`'s
-//! `conversation_scenario` parameter (`eval_case.ConversationScenario`,
-//! C0606) stay opaque `Value` placeholders — the same "widen once a real
-//! consumer needs the structure, not before" convention used throughout
-//! this port. `TrajectoryEvaluator` itself never reads any of the three
-//! (the source explicitly `del`s `conversation_scenario`, "not supported
-//! for per-invocation evaluation"), so none of this batch's own logic is
-//! narrowed by leaving them opaque.
+//! **Second batch**: [`eval_rubrics`] (`Rubric`/`RubricContent`/
+//! `RubricScore`, C0607), [`app_details`] (`AgentDetails`/`AppDetails`,
+//! C0610), [`conversation_scenarios`] (`ConversationScenario`/
+//! `ConversationGenerationConfig`, C0606), [`eval_set`] (`EvalSet`, the
+//! rest of C0607), [`eval_result`] (`EvalCaseResult`/`EvalSetResult`,
+//! C0609), and [`constants`] (misc eval constants, C0635) — plus
+//! [`eval_case`] grows `SessionInput`/`SessionState`/`EvalCase` (closing
+//! out C0606) and `Invocation.rubrics`/`.app_details` widen from opaque
+//! `Value` to the now-real [`eval_rubrics::Rubric`]/
+//! [`app_details::AppDetails`] types, closing that first batch's
+//! disclosed gap.
+//!
+//! **Still opaque, disclosed**: [`conversation_scenarios::ConversationScenario::user_persona`]
+//! (real type + registry resolution belongs to the persona system, its
+//! own still-`REQUIRED` row C0632) and [`eval_result::EvalCaseResult::session_details`]
+//! (real type `adk_agents::session::Session` already exists, but pulling
+//! `adk-agents` into this crate's dependency graph for one unread
+//! passthrough field would invert `adk-eval`'s deliberate bottom-of-the-
+//! graph position — see that module's own doc). `Evaluator::evaluate_invocations`'s
+//! `conversation_scenario` parameter also stays opaque `Value` —
+//! `TrajectoryEvaluator`/`RougeEvaluator` (the only `Evaluator`s built so
+//! far) never read any of these, matching the source's own `del
+//! conversation_scenario, "not supported for per-invocation evaluation"`.
 //!
 //! **`EvalStatus`, wire format disclosed**: the source's `EvalStatus` is
 //! a plain (non-`str`) `Enum` with int values (`PASSED = 1`, ...); under
@@ -59,8 +71,14 @@
 //! field, so the same guarantee holds automatically rather than needing
 //! `PrivateAttr`'s runtime enforcement.
 
+pub mod app_details;
+pub mod constants;
+pub mod conversation_scenarios;
 pub mod eval_case;
 pub mod eval_metrics;
+pub mod eval_result;
+pub mod eval_rubrics;
+pub mod eval_set;
 pub mod evaluator;
 pub mod final_response_match_v1;
 mod porter_stemmer;

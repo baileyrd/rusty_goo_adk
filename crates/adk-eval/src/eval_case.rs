@@ -1,11 +1,18 @@
 //! Capability C0605: `Invocation`/`IntermediateData`/`InvocationEvents`
-//! and their accessor helpers, ported from `google.adk.evaluation.eval_case`.
-//! See the crate root doc for what's deliberately left as an opaque
-//! placeholder in this batch.
+//! and their accessor helpers; C0606 (`EvalCase`'s `conversation` XOR
+//! `conversation_scenario` half); part of C0611 (`SessionInput`) — all
+//! ported from `google.adk.evaluation.eval_case`. See the crate root doc
+//! for what's deliberately left as an opaque placeholder in this batch.
+
+use std::collections::HashMap;
 
 use adk_genai::content::{Content, FunctionCall, FunctionResponse, Part};
 use rusty_serde::value::Value;
 use rusty_serde::{Deserialize, Serialize};
+
+use crate::app_details::AppDetails;
+use crate::conversation_scenarios::ConversationScenario;
+use crate::eval_rubrics::Rubric;
 
 /// C0605: `eval_case.IntermediateData` — the legacy container for
 /// intermediate data an agent generates en route to a final answer.
@@ -73,12 +80,10 @@ pub struct Invocation {
     pub intermediate_data: Option<Value>,
     #[rusty_serde(default)]
     pub creation_timestamp: f64,
-    /// `eval_rubrics.Rubric` — its own still-`REQUIRED` row, C0607.
     #[rusty_serde(default)]
-    pub rubrics: Option<Value>,
-    /// `app_details.AppDetails` — its own still-`REQUIRED` row, C0610.
+    pub rubrics: Option<Vec<Rubric>>,
     #[rusty_serde(default)]
-    pub app_details: Option<Value>,
+    pub app_details: Option<AppDetails>,
 }
 
 impl Invocation {
@@ -149,6 +154,78 @@ pub fn get_all_tool_calls_with_responses(
             (call, response)
         })
         .collect()
+}
+
+/// `eval_case.SessionState`.
+pub type SessionState = HashMap<String, Value>;
+
+/// `eval_case.SessionInput` — values that help initialize a `Session`.
+///
+/// **Disclosed narrowing**: the source's `model_config = ConfigDict(extra="allow")`
+/// keeps any unrecognized inbound field accessible on the model; this
+/// port has no `deny_unknown_fields` (so an unrecognized field no longer
+/// rejects the payload, matching "allow" rather than the base
+/// `EvalBaseModel`'s "forbid") but, unlike pydantic, doesn't capture the
+/// extra field anywhere — it's silently dropped rather than preserved.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct SessionInput {
+    pub app_name: String,
+    pub user_id: String,
+    #[rusty_serde(default)]
+    pub session_id: Option<String>,
+    #[rusty_serde(default)]
+    pub state: SessionState,
+}
+
+/// `eval_case.StaticConversation` — a conversation where the user's
+/// queries for each invocation are already specified.
+pub type StaticConversation = Vec<Invocation>;
+
+/// C0606: `eval_case.EvalCase` — an eval case.
+///
+/// **Adaptation**: the source's `@model_validator(mode="after")`
+/// (`ensure_conversation_xor_conversation_scenario`) runs automatically on
+/// every construction, including deserialization. This port keeps
+/// [`EvalCase`]'s fields plainly `pub`/deserializable (matching this
+/// codebase's established pattern, e.g. `auth_credential::ServiceAccount`)
+/// and exposes the same check as [`EvalCase::validate`] — deserializing an
+/// invalid payload succeeds structurally; call `validate()` to enforce the
+/// XOR the way the source enforces it automatically.
+///
+/// See [`SessionInput`]'s doc for the same `extra="allow"` narrowing this
+/// struct also inherits from the source.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct EvalCase {
+    pub eval_id: String,
+    #[rusty_serde(default)]
+    pub conversation: Option<StaticConversation>,
+    #[rusty_serde(default)]
+    pub conversation_scenario: Option<ConversationScenario>,
+    #[rusty_serde(default)]
+    pub session_input: Option<SessionInput>,
+    #[rusty_serde(default)]
+    pub creation_timestamp: f64,
+    #[rusty_serde(default)]
+    pub rubrics: Option<Vec<Rubric>>,
+    #[rusty_serde(default)]
+    pub final_session_state: SessionState,
+}
+
+impl EvalCase {
+    /// `EvalCase.ensure_conversation_xor_conversation_scenario` — exactly
+    /// one of `conversation`/`conversation_scenario` must be set.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.conversation.is_none() == self.conversation_scenario.is_none() {
+            return Err(
+                "Exactly one of conversation and conversation_scenario must be provided in an \
+                 EvalCase."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -287,5 +364,105 @@ mod tests {
             invocation.intermediate_data_type(),
             Some(IntermediateDataType::Events(_))
         ));
+    }
+
+    fn invocation_for_eval_case() -> Invocation {
+        Invocation {
+            invocation_id: "inv-1".to_string(),
+            user_content: Content::user_text("hi"),
+            final_response: None,
+            intermediate_data: None,
+            creation_timestamp: 0.0,
+            rubrics: None,
+            app_details: None,
+        }
+    }
+
+    #[test]
+    fn eval_case_validate_accepts_conversation_only() {
+        let eval_case = EvalCase {
+            eval_id: "case-1".to_string(),
+            conversation: Some(vec![invocation_for_eval_case()]),
+            ..Default::default()
+        };
+        assert!(eval_case.validate().is_ok());
+    }
+
+    #[test]
+    fn eval_case_validate_accepts_conversation_scenario_only() {
+        let eval_case = EvalCase {
+            eval_id: "case-1".to_string(),
+            conversation_scenario: Some(ConversationScenario::new("hi", "plan")),
+            ..Default::default()
+        };
+        assert!(eval_case.validate().is_ok());
+    }
+
+    #[test]
+    fn eval_case_validate_rejects_neither() {
+        let eval_case = EvalCase {
+            eval_id: "case-1".to_string(),
+            ..Default::default()
+        };
+        assert!(eval_case.validate().is_err());
+    }
+
+    #[test]
+    fn eval_case_validate_rejects_both() {
+        let eval_case = EvalCase {
+            eval_id: "case-1".to_string(),
+            conversation: Some(vec![invocation_for_eval_case()]),
+            conversation_scenario: Some(ConversationScenario::new("hi", "plan")),
+            ..Default::default()
+        };
+        assert!(eval_case.validate().is_err());
+    }
+
+    #[test]
+    fn eval_case_round_trips_through_json_with_camel_case() {
+        let eval_case = EvalCase {
+            eval_id: "case-1".to_string(),
+            conversation: Some(vec![invocation_for_eval_case()]),
+            conversation_scenario: None,
+            session_input: Some(SessionInput {
+                app_name: "app".to_string(),
+                user_id: "user-1".to_string(),
+                session_id: None,
+                state: SessionState::new(),
+            }),
+            creation_timestamp: 0.0,
+            rubrics: None,
+            final_session_state: SessionState::new(),
+        };
+        let json = rusty_serde::json::to_string(&eval_case).unwrap();
+        assert!(json.contains("\"evalId\""));
+        assert!(json.contains("\"sessionInput\""));
+        assert!(json.contains("\"finalSessionState\""));
+        let back: EvalCase = rusty_serde::json::from_str(&json).unwrap();
+        assert_eq!(eval_case, back);
+    }
+
+    #[test]
+    fn eval_case_deserialize_tolerates_unknown_fields() {
+        let json = r#"{"evalId":"case-1","somethingNew":42}"#;
+        let eval_case: EvalCase = rusty_serde::json::from_str(json).unwrap();
+        assert_eq!(eval_case.eval_id, "case-1");
+    }
+
+    #[test]
+    fn session_input_round_trips_through_json_with_camel_case() {
+        let mut state = SessionState::new();
+        state.insert("today".to_string(), Value::String("2026-08-24".to_string()));
+        let session_input = SessionInput {
+            app_name: "app".to_string(),
+            user_id: "user-1".to_string(),
+            session_id: Some("fixed-session".to_string()),
+            state,
+        };
+        let json = rusty_serde::json::to_string(&session_input).unwrap();
+        assert!(json.contains("\"appName\""));
+        assert!(json.contains("\"sessionId\""));
+        let back: SessionInput = rusty_serde::json::from_str(&json).unwrap();
+        assert_eq!(session_input, back);
     }
 }

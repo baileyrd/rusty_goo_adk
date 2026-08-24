@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-eval` data-model batch (C0606, C0607, C0609, C0610, C0635) —
+  `eval_case::EvalCase`/`SessionInput`/`SessionState` (`conversation` XOR
+  `conversation_scenario`, enforced via `EvalCase::validate()` rather
+  than automatically on deserialization, disclosed in the module doc),
+  `conversation_scenarios::ConversationScenario`/
+  `ConversationGenerationConfig`, `eval_set::EvalSet`,
+  `eval_rubrics::Rubric`/`RubricContent`/`RubricScore`,
+  `app_details::AgentDetails`/`AppDetails`,
+  `eval_result::EvalCaseResult`/`EvalSetResult`, and
+  `constants::{MISSING_EVAL_DEPENDENCIES_MESSAGE,
+  DEFAULT_LIVE_TIMEOUT_SECONDS, eval_constants}`. Closes the disclosed
+  gap from the first `adk-eval` batch: `Invocation.rubrics`/
+  `.app_details` now use the real `Rubric`/`AppDetails` types instead of
+  opaque `Value`. Disclosed narrowings: `ConversationScenario.user_persona`
+  (real type + registry resolution is the persona system, C0632, still
+  `REQUIRED`) and `EvalCaseResult.session_details` (real type
+  `adk_agents::session::Session` exists but pulling `adk-agents` into
+  `adk-eval`'s dependency graph for one unread passthrough field would
+  invert its deliberate bottom-of-the-graph position) both stay opaque
+  `Value`. 21 new tests.
 - `adk-eval::final_response_match_v1::RougeEvaluator` (C0590) — the
   `response_match_score` metric, ROUGE-1 F-measure between an agent's
   final response and a golden/expected response, using a hand-ported
