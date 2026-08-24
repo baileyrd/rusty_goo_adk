@@ -22,6 +22,38 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `apps/llm_event_summarizer.py`: `LlmEventSummarizer` (C0286, C0287)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the LLM-based summarizer for sliding-window event compaction.
+
+- **Added:** `adk_tools::llm_event_summarizer::LlmEventSummarizer` —
+  implements `adk-agents`'s `BaseEventsSummarizer` trait (C0285).
+  Formats a conversation history (text, thoughts — skipping ones
+  emitted by a prior compaction event so its reasoning doesn't leak
+  into the next summary, tool calls/responses truncated at 2000
+  chars), drives one non-streaming LLM call, and returns a new `Event`
+  carrying an `EventCompaction` action, forcing `role='model'` on the
+  summary content and `author='user'` on the synthesized event.
+- **Disclosed placement:** lands in `adk-tools`, not `adk-agents`
+  (where `BaseEventsSummarizer` itself lives) — this type needs a real
+  `adk-models::BaseLlm`, and `adk-models` already depends on
+  `adk-agents`, so `adk-agents` adding `adk-models` as a dependency
+  would be a crate-graph cycle. `adk-tools` already depends on all
+  three crates needed. Same supporting-crate placement
+  `forwarding_artifact_service.rs` (C0489, prior PR) already used.
+- **Disclosed adaptation:** `args`/`response` formatting uses
+  `rusty_serde::json::to_string` instead of Python's `str()` — the
+  same divergence `adk-events::debug_output` (C0933) already
+  established for the same two fields.
+- **Corrected:** `app_configs.rs`'s module doc previously claimed the
+  compaction machinery was "still LLM-blocked" — only the *trigger*
+  logic deciding when to compact (`apps/compaction.py`, C0288/C0289)
+  is still unbuilt; the summarizer itself is done.
+- **Scope:** no new dependency. 10 new tests.
+
+---
+
 ## PR #TBD — `tools/_forwarding_artifact_service.py`: `ForwardingArtifactService` (C0489 partial)
 **2026-08-24** · (link added once this PR is opened)
 

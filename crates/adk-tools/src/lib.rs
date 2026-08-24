@@ -129,6 +129,22 @@
 //! artifact-delta bookkeeping is deferred to a merge after the run
 //! completes — the same idiom `agent_tool.rs` already uses for state
 //! deltas). No new dependency.
+//!
+//! **`LlmEventSummarizer` batch**: [`llm_event_summarizer`]
+//! (`LlmEventSummarizer`, C0286/C0287) — ported from
+//! `apps/llm_event_summarizer.py`, implementing `adk-agents`'s
+//! `BaseEventsSummarizer` trait (C0285, DONE there since it has no
+//! `adk-models` dependency of its own). Lands here rather than in
+//! `adk-agents` because this type needs a real `adk_models::BaseLlm`,
+//! and `adk-models` already depends on `adk-agents` — the same
+//! supporting-crate placement `forwarding_artifact_service.rs` (C0489)
+//! already used. Formats a conversation history (including thoughts and
+//! tool calls, skipping thoughts on a prior compaction event), drives
+//! one non-streaming LLM call, and wraps the result into an `Event`
+//! carrying an `EventCompaction` action. `args`/`response` formatting
+//! reuses the same disclosed compact-JSON-instead-of-`str()` divergence
+//! `adk-events::debug_output` (C0933) already established. No new
+//! dependency.
 
 pub mod agent_tool;
 pub mod append_tools;
@@ -155,6 +171,7 @@ pub mod gemini_schema_util;
 pub mod get_user_choice_tool;
 pub mod google_maps_grounding_tool;
 pub mod google_search_tool;
+pub mod llm_event_summarizer;
 pub mod load_artifacts_tool;
 pub mod load_mcp_resource_tool;
 pub mod load_memory_tool;
