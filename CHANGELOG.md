@@ -5,6 +5,31 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::base_environment::{BaseEnvironment, ExecutionResult,
+  EnvironmentError}` (C0948 DONE — a genuine inventory gap: `environment/`
+  had no manifest row at all, despite 4 existing rows already referencing
+  it) + `adk-tools::local_environment::LocalEnvironment` (C0949 DONE) +
+  `adk-tools::environment_toolset::EnvironmentToolset` (C0440 DONE) +
+  `adk-tools::{execute_tool::ExecuteTool, read_file_tool::ReadFileTool,
+  edit_file_tool::EditFileTool, write_file_tool::WriteFileTool}` (C0441-
+  C0444 DONE). 34 new tests. No new dependency (`regex`/`rusty_tokio`
+  already workspace dependencies of `adk-tools`). Notable adaptations,
+  disclosed in each module's own doc: `BaseEnvironment::is_initialized`
+  is a required trait method (Rust traits carry no data, unlike the
+  source's class-level attribute every subclass inherits for free);
+  `initialize()` returns `Result` even in the trivial default case, since
+  a real implementor's IO can fail where the source lets an exception
+  propagate uncaught; `write_file(content: str | bytes)` collapses to
+  `&[u8]` without losing behavior (the source's str branch already
+  disables newline translation, so both branches produce identical
+  bytes); `LocalEnvironment`'s path resolution is lexical
+  (`os.path.normpath`-style), not `Path.resolve()`-based, reusing the
+  "path safety by construction, not by canonicalize" pattern already
+  established in `file_artifact_service.rs` (C0268-C0269); a timed-out
+  command carries no partial stdout/stderr, the same disclosed gap
+  already established in `bash_tool.rs` (C0418); `EnvironmentToolset`'s
+  uncaught initialize-failure becomes a panic rather than widening the
+  already-shipped, infallible `BaseToolset` trait (C0403).
 - `adk-eval::evaluation_generator::{collect_events_by_invocation_id,
   convert_events_to_eval_invocations}` (C0623 DONE) +
   `adk-eval::agent_evaluator::{load_json, find_config_for_test_file,

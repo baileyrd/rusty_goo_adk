@@ -19,18 +19,40 @@
 //! ([`append_tools::append_tools`]), taking `&mut LlmRequest` directly —
 //! the same "processor as a free function, not a method" pattern
 //! `adk-flows` uses throughout.
+//!
+//! **Environment batch**: [`base_environment`] (`BaseEnvironment`/
+//! `ExecutionResult`, C0948 — a genuine inventory gap discovered this
+//! batch, `environment/` having no manifest row at all despite four
+//! existing rows already referencing it), [`local_environment`]
+//! (`LocalEnvironment`, C0949), [`environment_toolset`]
+//! (`EnvironmentToolset`, C0440), and [`execute_tool`]/[`read_file_tool`]/
+//! [`edit_file_tool`]/[`write_file_tool`] (`Execute`/`ReadFile`/
+//! `EditFile`/`WriteFile`, C0441-C0444). None need GCP, an LLM-invocation
+//! path, or a new dependency — `regex` and `rusty_tokio` are both already
+//! workspace dependencies of this crate. See `base_environment`'s and
+//! `local_environment`'s own module docs for the interior-mutability and
+//! lexical-path-resolution adaptations (the latter reusing the "path
+//! safety by construction, not by canonicalize" pattern
+//! `file_artifact_service.rs`, C0268-C0269, already established), and
+//! `environment_toolset`'s for why an uncaught initialize-failure
+//! translates to a panic rather than widening the already-shipped
+//! `BaseToolset` trait's infallible signature.
 
 pub mod agent_tool;
 pub mod append_tools;
 pub mod base_code_executor;
+pub mod base_environment;
 pub mod base_tool;
 pub mod base_toolset;
 pub mod bash_tool;
 pub mod built_in_code_executor;
 pub mod code_execution_utils;
 pub mod code_executor_context;
+pub mod edit_file_tool;
 pub mod enterprise_search_tool;
+pub mod environment_toolset;
 pub mod example_tool;
+pub mod execute_tool;
 pub mod exit_loop_tool;
 pub mod function_tool;
 pub mod gemini_schema_util;
@@ -41,11 +63,13 @@ pub mod load_artifacts_tool;
 pub mod load_mcp_resource_tool;
 pub mod load_memory_tool;
 pub mod load_web_page;
+pub mod local_environment;
 pub mod long_running_tool;
 pub mod mcp_conversion_utils;
 pub mod memory_entry_utils;
 pub mod model_name_utils;
 pub mod preload_memory_tool;
+pub mod read_file_tool;
 pub mod remote_mcp_server;
 pub mod request_input_tool;
 pub mod set_model_response_tool;
@@ -56,3 +80,4 @@ pub mod tool_context;
 pub mod transfer_to_agent_tool;
 pub mod unsafe_local_code_executor;
 pub mod url_context_tool;
+pub mod write_file_tool;
