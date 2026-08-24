@@ -135,8 +135,6 @@ pub struct SearchMemoryResponse {
     pub memories: Vec<MemoryEntry>,
 }
 
-const TEMP_STATE_PREFIX: &str = "temp:";
-
 /// Real (narrowed) port of `sessions.base_session_service.BaseSessionService`
 /// — see the module doc for why this one trait isn't a placeholder marker
 /// like its siblings, and what's deliberately cut.
@@ -198,14 +196,14 @@ fn apply_session_event(session: &mut Session, mut event: Event) -> Event {
         return event;
     }
     for (key, value) in event.actions.state_delta.iter() {
-        if key.starts_with(TEMP_STATE_PREFIX) {
+        if key.starts_with(crate::state::State::TEMP_PREFIX) {
             session.state.insert(key.clone(), value.clone());
         }
     }
     event
         .actions
         .state_delta
-        .retain(|key, _| !key.starts_with(TEMP_STATE_PREFIX));
+        .retain(|key, _| !key.starts_with(crate::state::State::TEMP_PREFIX));
     for (key, value) in event.actions.state_delta.iter() {
         session.state.insert(key.clone(), value.clone());
     }

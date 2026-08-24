@@ -22,6 +22,44 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Session-state utilities (`_session_util`)
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_agents::session_util::{decode_model,
+  extract_state_delta, make_json_safe_state,
+  extract_json_safe_state_delta}` (C0209, partial) plus
+  `State::{APP_PREFIX, USER_PREFIX, TEMP_PREFIX}` (completing C0205's
+  manifest evidence — the dict-with-pending-delta wrapper itself was
+  already ported in an earlier Phase 2 forward-pull batch, just never
+  linked back to its row).
+- Reconciles `services.rs`'s own pre-existing private
+  `TEMP_STATE_PREFIX` duplicate constant to reference `State::TEMP_PREFIX`
+  as the single source of truth.
+- **Ported exactly:** `extract_state_delta`/`extract_json_safe_state_delta`
+  (app/user/session prefix split, `temp:` keys dropped).
+- **Disclosed near-no-op:** `make_json_safe_state` is effectively an
+  identity function here — this port's state is already
+  `BTreeMap<String, Value>`, and `Value` can only ever hold
+  JSON-representable variants by construction, so there is no value
+  this port's state can hold that could fail the source's coercion.
+  The function still exists so `extract_json_safe_state_delta` composes
+  the same way and a future persistent backend has the named call site
+  ready.
+- **Disclosed narrowing:** `decode_model` collapses the source's two
+  distinct failure modes (a primitive non-dict value → `None`; a
+  malformed-but-dict-shaped value → a raised `ValidationError`) to a
+  uniform `None` — a caller here can't distinguish the two the way the
+  source's exception-vs-`None` split does.
+- **Disclosed, ahead of its own caller:** nothing in this port's
+  `SessionService`/`InMemorySessionService` routes
+  `extract_state_delta`'s "app"/"user" output to any real cross-session
+  shared storage yet (`Session`/`State` have no such architecture) —
+  this utility is real and tested, ahead of the architecture that
+  would consume it, the same situation `remote_mcp_server.rs` disclosed.
+- 8 new tests.
+
+---
+
 ## PR #TBD — Feature-flag registry (`adk-features`)
 **2026-08-24** · (link added once this PR is opened)
 
