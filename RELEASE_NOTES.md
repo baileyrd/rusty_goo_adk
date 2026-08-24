@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Built-in Gemini grounding tools
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::{google_search_tool::GoogleSearchTool,
+  google_maps_grounding_tool::GoogleMapsGroundingTool,
+  enterprise_search_tool::EnterpriseWebSearchTool,
+  url_context_tool::UrlContextTool}` (C0428/C0430/C0431/C0432,
+  partial) — the four built-in Gemini grounding tools, each a thin
+  `BaseTool` whose `process_llm_request` checks whether the request
+  targets a Gemini model (or has the model-ID check disabled) and, if
+  so, appends a built-in-tool marker object (e.g. `{"googleSearch":
+  {}}`) to `llm_request.config.tools`. Adds two new shared helpers:
+  `adk_tools::append_tools::append_built_in_tool_marker` and
+  `adk_tools::model_name_utils::{is_gemini_model_id_check_disabled,
+  is_managed_agent}`.
+- **Disclosed narrowing, shared by all four:** `BaseTool::process_llm_request`
+  returns `BoxFuture<'a, ()>` with no `Result` to propagate through —
+  the same structural gap disclosed for every other built-in-tool
+  port in this workspace. An unsupported model here simply doesn't
+  get its marker appended, rather than the source's hard `ValueError`.
+- **Disclosed narrowing:** `is_managed_agent()` always returns `false`
+  — this port's `LlmRequest` has no `_is_managed_agent` field to check.
+- **Disclosed narrowing:** `GoogleSearchTool.bypass_multi_tools_limit`
+  is stored for API-shape parity but nothing in this port enforces
+  the "Gemini restricts `google_search` to sole-tool use" limitation
+  it would bypass — that enforcement is deferred with the rest of the
+  still-unresolved C0171 request-processor-wiring gap.
+- **Matched, not narrowed:** `EnterpriseWebSearchTool` and
+  `GoogleMapsGroundingTool` never check `_is_managed_agent` in the
+  source either — this port matches that omission exactly rather than
+  adding a check the source itself doesn't have.
+- 12 new tests.
+
+---
+
 ## PR #TBD — `LoadMcpResourceTool`
 **2026-08-24** · (link added once this PR is opened)
 

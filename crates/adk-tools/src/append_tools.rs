@@ -101,6 +101,21 @@ pub fn merge_declarations(
     shadowed_names
 }
 
+/// Appends a built-in-tool marker entry (e.g. `{"googleSearch": {}}`) to
+/// `llm_request.config.tools` — the shape every built-in Gemini grounding
+/// tool (`GoogleSearchTool`/`UrlContextTool`/`EnterpriseWebSearchTool`/
+/// `GoogleMapsGroundingTool`, C0428/C0430-C0432) appends instead of a
+/// `functionDeclarations` entry.
+pub fn append_built_in_tool_marker(llm_request: &mut LlmRequest, key: &str) {
+    if !matches!(llm_request.config.tools, Some(Value::Seq(_))) {
+        llm_request.config.tools = Some(Value::Seq(Vec::new()));
+    }
+    let Some(Value::Seq(entries)) = &mut llm_request.config.tools else {
+        unreachable!("just ensured config.tools is Some(Value::Seq(_))");
+    };
+    entries.push(Value::Map(vec![(key.to_string(), Value::Map(Vec::new()))]));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
