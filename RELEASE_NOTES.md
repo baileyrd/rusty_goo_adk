@@ -22,6 +22,37 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `skills/`: `format_skills_as_xml` (C0400) — first landing in the skills/ area
+**2026-08-24** · (link added once this PR is opened)
+
+Small, self-contained follow-on flagged during the previous PR's own
+review. First landing in the `skills/` capability area — everything
+else there (`Frontmatter`/`Skill` models, disk/GCS loading, zip-bomb
+defense, `SkillToolset`) stays `REQUIRED`; this one function doesn't
+depend on any of it.
+
+- **Added:** `skills_prompt::format_skills_as_xml` — renders an
+  `<available_skills>` XML block for LLM instructions, HTML-escaped.
+  Ported exactly: the empty-list sentinel, the per-skill `<name>`/
+  `<description>` block shape, and `html.escape`'s default
+  `quote=True` character-escaping table — cross-checked against real
+  Python `html.escape` output for `<script>`/`&`/`"`/`'`.
+- **Disclosed narrowing:** the source's `list[Union[Frontmatter,
+  Skill]]` parameter narrows to a minimal local `SkillSummary{name,
+  description}` struct — this function only ever reads those two
+  fields off either shape, and both real models are their own
+  still-`REQUIRED` rows (C0393/C0394). Widen once a real caller needs
+  to pass one directly.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-tools +4 new tests; zero regressions elsewhere)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `tools/`: OpenAPI↔Gemini-Schema and MCP schema conversion (C0489 partial, C0455 partial)
 **2026-08-24** · (link added once this PR is opened)
 

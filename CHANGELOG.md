@@ -5,6 +5,15 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::skills_prompt::format_skills_as_xml` (C0400) — renders
+  skills into an `<available_skills>` XML block for LLM instructions,
+  HTML-escaped (`html.escape`'s default `quote=True` behavior ported
+  exactly, cross-checked against real Python output). First landing in
+  the `skills/` capability area — the full `Frontmatter`/`Skill` models
+  (C0393/C0394) and disk-loading (C0396, needs a YAML crate decision)
+  stay `REQUIRED`; this function only reads `name`/`description`, so it
+  narrows to a minimal local `SkillSummary` struct instead of depending
+  on either unbuilt model.
 - `adk-tools::gemini_schema_util` (C0489 partial) — OpenAPI/JSON-Schema →
   Gemini-Schema conversion (`to_snake_case`, `dereference_schema` with
   circular-`$ref` guarding, `sanitize_schema_type`,
