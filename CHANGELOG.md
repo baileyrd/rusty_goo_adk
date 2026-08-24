@@ -5,6 +5,14 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::loop_agent::LoopAgent` (Phase 7 batch 4, C0337, partial)
+  — structurally `SequentialAgent` wrapped in an outer loop that
+  restarts from the first sub-agent up to `max_iterations` times (or
+  forever if unset), stopping on escalate; resets sub-agent states
+  between iterations via `ctx.reset_sub_agent_states` (already built).
+  Reuses `SequentialAgent`'s own state-delta-propagation fix verbatim
+  so a sub-agent in iteration 2 sees state a sub-agent in iteration 1
+  set. 7 new tests.
 - `adk-agents::parallel_agent::ParallelAgent` (Phase 7 batch 3, C0336,
   partial) — runs its sub-agents with genuine concurrency
   (`rusty_tokio::spawn`, one task per sub-agent), each in its own
