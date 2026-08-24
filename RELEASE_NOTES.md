@@ -22,6 +22,47 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `code_executors/`: `BuiltInCodeExecutor` + `CodeExecutorContext` (C0384, C0390)
+**2026-08-24** · (link added once this PR is opened)
+
+Continues the `code_executors/` area started in the previous PR.
+`UnsafeLocalCodeExecutor` (C0385) is left for its own batch;
+`ContainerCodeExecutor`/`GkeCodeExecutor`/cloud executors still need a
+new SDK dependency decision.
+
+- **Added:** `adk-tools::built_in_code_executor::BuiltInCodeExecutor`
+  (C0384) — `process_llm_request` reuses `append_built_in_tool_marker`
+  (`"codeExecution"` wire key) and preserves the raise-for-unsupported-
+  model behavior, since `BuiltInCodeExecutor` isn't a `BaseTool` and so
+  isn't bound by that trait's usual error-dropping signature narrowing.
+- **Disclosed adaptation:** the source's `execute_code` override
+  actually returns `None` at runtime despite its own declared non-
+  `Optional` return type (the source's own `# type: ignore[empty-body]`
+  acknowledges the mismatch). This port keeps `BaseCodeExecutor::execute_code`'s
+  trait contract honestly non-`Option` (matching what every other
+  executor truly returns) and uses `CodeExecutionResult::default()` as
+  the closest-fitting sentinel here instead.
+- **Added:** `adk-tools::code_executor_context::CodeExecutorContext`
+  (C0390) — every method ported exactly, including the real
+  distinction between the nested, flush-on-`get_state_delta` context
+  sub-dict (execution id/processed file names) and the already-live
+  root session-state keys (input files/error counts/results).
+- **Disclosed adaptation:** `File.content` round-trips as base64 text
+  (reusing `code_execution_utils`'s codec) rather than the source's raw
+  `bytes` in a plain dict, since this port's state has no raw-bytes
+  `Value` variant — the encoding round-trips exactly, no data loss.
+- Adds `adk-platform` as a new direct dependency of `adk-tools`
+  (already vetted workspace-wide, new usage site only).
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-tools +10 new tests, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — Start `code_executors/`: `CodeExecutionUtils` + `BaseCodeExecutor` (C0383, C0391)
 **2026-08-24** · (link added once this PR is opened)
 

@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::built_in_code_executor::BuiltInCodeExecutor` (C0384) and
+  `adk-tools::code_executor_context::CodeExecutorContext` (C0390),
+  ported from `google.adk.code_executors.{built_in_code_executor,
+  code_executor_context}`. `BuiltInCodeExecutor::process_llm_request`
+  reuses `append_built_in_tool_marker` (`"codeExecution"` wire key,
+  same helper `GoogleSearchTool`/etc. use) and preserves the raise-for-
+  unsupported-model behavior, since it isn't a `BaseTool` and so isn't
+  bound by that trait's usual error-dropping signature narrowing.
+  `CodeExecutorContext` preserves the source's real distinction between
+  its nested, flush-on-`get_state_delta` context sub-dict and the
+  already-live root session-state keys; `File.content` round-trips as
+  base64 text (this port's state has no raw-bytes `Value` variant).
+  Adds `adk-platform` as a new direct dependency of `adk-tools`
+  (already vetted workspace-wide, new usage site only).
 - `adk-tools::code_execution_utils::{File, CodeExecutionInput,
   CodeExecutionResult, get_encoded_file_content,
   extract_code_and_truncate_content, build_executable_code_part,

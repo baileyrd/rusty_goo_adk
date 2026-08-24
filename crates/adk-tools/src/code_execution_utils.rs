@@ -75,7 +75,7 @@ pub struct CodeExecutionResult {
 const BASE64_ALPHABET: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-fn base64_encode(bytes: &[u8]) -> String {
+pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0];
@@ -114,7 +114,7 @@ fn base64_decode_value(c: u8) -> Option<u8> {
 /// check — the source's own un-validated `b64decode` is more lenient
 /// about stray characters, a disclosed, low-severity divergence for
 /// input containing them).
-fn base64_decode_strict(data: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn base64_decode_strict(data: &[u8]) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut buffer = 0u32;
     let mut bits = 0u32;
