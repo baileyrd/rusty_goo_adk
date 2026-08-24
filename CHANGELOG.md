@@ -440,6 +440,24 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
     `find_matching_function_call`). **Not** ported:
     `build_auth_request_event`/`generate_auth_event`/
     `generate_request_confirmation_event` — need `AuthConfig` (Phase 9).
+  - `llm_flow` module (C0144, C0146, C0148-C0150, C0153, C0156, partial;
+    C0157 DONE): `LlmFlow`, the first concrete `AgentBehavior` this port
+    builds for an `LlmAgent` — a real, working (if narrowed) turn:
+    `preprocess` (`basic`→`identity`→`instructions`→contents→
+    `context_cache`, in order) → `call_model` (`BaseLlm::generate_content_async`,
+    resolved once at construction rather than per-call) → `postprocess`
+    (`finalize_model_response_event`, C0157 now DONE — a full,
+    field-by-field faithful `LlmResponse`→`Event` shallow-copy). Verified
+    end-to-end: `BaseAgent::run_async` driving a real `BaseAgent` wired
+    with `LlmFlow` against a fake `BaseLlm`, no stubs on the
+    `AgentBehavior` seam itself. **Scope, disclosed:** no multi-step
+    tool-call loop, no `interactions_processor`/`preserve_function_call_ids`
+    wiring (undetectable through the type-erased `Arc<dyn BaseLlm>`), no
+    telemetry spans or before/after-model callback dispatch, no live mode
+    (`run_live_impl` returns a clear "not implemented" error) — each maps
+    to its own still-`REQUIRED` manifest row. `LlmFlow` resolving its
+    model once at construction is a real (if narrow) instance of the
+    memoization cache `canonical_model.rs` disclosed as missing.
 ### Changed
 ### Fixed
 ### Security
