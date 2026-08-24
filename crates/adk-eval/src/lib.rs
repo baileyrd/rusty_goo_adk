@@ -50,6 +50,21 @@
 //! far) never read any of these, matching the source's own `del
 //! conversation_scenario, "not supported for per-invocation evaluation"`.
 //!
+//! **Sixth batch**: [`base_eval_service`] (`BaseEvalService`/
+//! `EvaluateConfig`/`InferenceConfig`/`InferenceRequest`/
+//! `InferenceResult`/`EvaluateRequest`, C0616), [`custom_metric_evaluator`]
+//! (`CustomMetricEvaluator`, C0599), and [`metric_evaluator_registry`]
+//! (`MetricEvaluatorRegistry`, C0603 — partial, registers only
+//! `TrajectoryEvaluator` among the 13 standard evaluators; the rest land
+//! alongside their own still-`REQUIRED` rows). None need GCP or an
+//! LLM-invocation path. Two registry-shaped adaptations, disclosed in
+//! their own module docs: `custom_metric_evaluator`'s dynamic
+//! `importlib` import becomes an explicit registration API (same
+//! "class → registered closure keyed by a string" pattern as
+//! `user_simulator`'s config→simulator registry); `metric_evaluator_registry`'s
+//! `DEFAULT_METRIC_EVALUATOR_REGISTRY` mutable singleton becomes a
+//! lazily-initialized, mutex-guarded static.
+//!
 //! **Fifth batch — user-simulator core + persona system**:
 //! [`user_simulator`] (`UserSimulator`/`BaseUserSimulatorConfig`/
 //! `NextUserMessage`/`Status` + the config→simulator registry, C0626),
@@ -124,8 +139,10 @@
 
 pub mod app_details;
 pub mod audio_utils;
+pub mod base_eval_service;
 pub mod constants;
 pub mod conversation_scenarios;
+pub mod custom_metric_evaluator;
 pub mod eval_case;
 pub mod eval_config;
 pub mod eval_metrics;
@@ -141,6 +158,7 @@ pub mod final_response_match_v1;
 pub mod in_memory_eval_sets_manager;
 pub mod local_eval_set_results_manager;
 pub mod local_eval_sets_manager;
+pub mod metric_evaluator_registry;
 pub mod metric_info_providers;
 pub mod path_validation;
 mod porter_stemmer;

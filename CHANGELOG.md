@@ -5,6 +5,33 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-eval::base_eval_service::{BaseEvalService, EvaluateConfig,
+  InferenceConfig, InferenceRequest, InferenceStatus, InferenceResult,
+  EvaluateRequest}` (C0616 DONE) + `adk-eval::custom_metric_evaluator::{
+  CustomMetricEvaluator, register_custom_metric_function}` (C0599 DONE) +
+  `adk-eval::metric_evaluator_registry::{MetricEvaluatorRegistry,
+  default_registry, register_custom_metrics_from_config}` (C0603
+  partial — registers only `TrajectoryEvaluator` among the 13 standard
+  evaluators; the other 12 stay `REQUIRED` under their own rows, blocked
+  on GCP or the still-deferred `LlmAsJudge` harness). Cross-verified
+  `InferenceConfig`'s defaults/camelCase wire form directly against a
+  real pydantic model built from the source. Notable adaptations,
+  disclosed at length in each module's doc: `BaseEvalService`'s
+  async-generator methods become `Vec`-returning (no async story yet in
+  this crate); `custom_metric_evaluator`'s `importlib`-based dynamic
+  dispatch becomes an explicit registration API keyed by the same
+  dotted-path string, same pattern as `user_simulator`'s registry;
+  `MetricEvaluatorRegistry`'s stored `type[Evaluator]` +
+  `issubclass`-based construction dispatch becomes a tagged factory
+  closure decided once at registration; its
+  `DEFAULT_METRIC_EVALUATOR_REGISTRY` mutable singleton becomes a
+  lazily-initialized mutex-guarded static, with
+  `register_custom_metrics_from_config` always taking an explicit
+  `&mut MetricEvaluatorRegistry` rather than defaulting to it. Also adds
+  a manifest row, C0947, for `evaluation/llm_as_judge_utils.py` — a
+  genuine inventory gap discovered while scoping this batch (the source
+  file existed with no manifest row at all); not implemented this
+  batch. No new dependencies. 17 new tests.
 - `adk-eval::user_simulator::{UserSimulator, BaseUserSimulatorConfig,
   NextUserMessage, Status, register_user_simulator,
   create_user_simulator}` (C0626 DONE) +
