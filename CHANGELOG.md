@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::gemini_schema_util` (C0489 partial) — OpenAPI/JSON-Schema →
+  Gemini-Schema conversion (`to_snake_case`, `dereference_schema` with
+  circular-`$ref` guarding, `sanitize_schema_type`,
+  `sanitize_schema_formats_for_gemini`, `to_gemini_schema`), operating on
+  `Value` throughout. End-to-end cross-checked against the real
+  `google.adk.tools._gemini_schema_util` source (imported and run
+  directly from the checked-out `google/adk-python` repo) over 11
+  fixtures spanning `$ref`/`$defs` resolution, circular refs, nullable
+  type lists, `oneOf`→`anyOf` widening, camelCase key conversion, and
+  per-type format allow-listing. Disclosed scope boundary: the source's
+  final step delegates to the third-party `google-genai` SDK's own
+  ~380-line `Schema.from_json_schema` (outside `google/adk-python`'s own
+  source tree); this port stops at `_gemini_schema_util.py`'s own
+  boundary and returns `Value` (this workspace's existing Gemini-schema
+  representation) rather than replicating the SDK-internal step too.
+- `adk-tools::mcp_conversion_utils` (C0455 partial) —
+  `adk_to_mcp_tool_type`/`gemini_to_json_schema`, ported from
+  `mcp_tool/conversion_utils.py`, backed by a narrowed local `McpTool`
+  struct rather than a real `mcp` crate dependency (this port has none).
+  `session_context.py`'s `SessionContext` (real async `mcp.ClientSession`
+  pooling) stays `REQUIRED`. 30 new tests across both modules.
 - `adk-eval` local persistence batch (C0613/C0615 partial, C0614 DONE) —
   `eval_sets_manager::EvalSetsManager` trait + shared `EvalManagerError`,
   `eval_sets_manager_utils`/`eval_set_results_manager_utils` support

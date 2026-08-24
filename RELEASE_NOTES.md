@@ -22,6 +22,59 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/`: OpenAPI↔Gemini-Schema and MCP schema conversion (C0489 partial, C0455 partial)
+**2026-08-24** · (link added once this PR is opened)
+
+New capability area for this session: `tools/`'s schema-conversion
+infrastructure backing `McpToolset` and OpenAPI-defined function tools.
+Both directions are pure tree transforms over `Value` — no `mcp` crate,
+no `google-genai` SDK dependency.
+
+- **Added:** `gemini_schema_util::to_gemini_schema` (and its pieces —
+  `to_snake_case`, `dereference_schema`, `sanitize_schema_type`,
+  `sanitize_schema_formats_for_gemini`) — OpenAPI v3.1/JSON-Schema →
+  Gemini-schema conversion: `$ref`/`$defs`/`definitions` dereferencing
+  with circular-ref guarding, camelCase→snake_case wire-key conversion,
+  Gemini-supported-field sanitization, `oneOf`→`anyOf` widening with
+  accumulation across both keywords, nullable-type-list collapsing, and
+  per-type `format` allow-listing (`int32`/`int64` for numeric types,
+  `date-time`/`enum` for string).
+- **Verification:** end-to-end cross-checked against the real
+  `google.adk.tools._gemini_schema_util` source — imported directly
+  from the checked-out `google/adk-python` repo and run locally, not
+  reconstructed from memory — over 11 fixtures covering every branch
+  above, including the trickier case where the top-level schema is
+  itself a `$ref` sibling to `$defs`. All match structurally.
+- **Disclosed scope boundary:** the source's `_to_gemini_schema` ends by
+  calling `google.genai.types.Schema.from_json_schema(...)` — a ~380-line
+  method belonging to the third-party `google-genai` SDK, not
+  `google.adk` itself, which re-derefs `$ref`s a second time and applies
+  its own stricter per-JSON-Schema-type field allow-list. This lives
+  outside `google/adk-python`'s own source tree (the boundary this
+  migration ports), and this workspace has no typed Gemini `Schema`
+  struct to begin with — `FunctionDeclaration.parameters` is already
+  just `Value`. This port covers everything `_gemini_schema_util.py`
+  itself does and stops there; the returned `Value` may retain a few
+  fields the real SDK step would additionally prune.
+- **Added:** `mcp_conversion_utils::{adk_to_mcp_tool_type,
+  gemini_to_json_schema}`, ported from `mcp_tool/conversion_utils.py`.
+  `gemini_to_json_schema` is the reverse mapping (Gemini schema → JSON
+  Schema), a self-contained per-type field mapping with no SDK-internal
+  dependency. `adk_to_mcp_tool_type` is backed by a narrowed local
+  `McpTool{name, description, input_schema}` struct rather than the real
+  `mcp.types.Tool` — this port has no `mcp` crate dependency anywhere.
+  `session_context.py`'s `SessionContext` (real async `mcp.ClientSession`
+  pooling) stays `REQUIRED`.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-tools +30 new tests; zero regressions elsewhere)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `evaluation/`: local `EvalSetsManager`/`EvalSetResultsManager` persistence (C0613/C0615 partial, C0614)
 **2026-08-24** · (link added once this PR is opened)
 
