@@ -62,4 +62,7 @@
 pub mod eval_case;
 pub mod eval_metrics;
 pub mod evaluator;
+pub mod final_response_match_v1;
+mod porter_stemmer;
+pub mod rouge;
 pub mod trajectory_evaluator;
