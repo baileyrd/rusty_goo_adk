@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- Manifest evidence closures for two `runners.py` module-level helpers
+  already fully implemented and exercised, but previously undocumented
+  as such: **C0833** (`_notify_run_error`, best-effort
+  `on_run_error_callback` notification) — already wired at
+  `Runner::run_async_with_config`'s one unhandled-agent-error path via
+  `PluginManager::run_on_run_error_callback`; the source's
+  "logs+suppresses callback exceptions" behavior is N/A by construction
+  here, since this port's plugin callback trait methods return `()`, not
+  `Result` — nothing to catch or suppress. **C0836**
+  (`_apply_run_config_custom_metadata`) — already implemented as
+  `apply_run_config_custom_metadata`; added 3 new direct unit tests
+  (previously only exercised indirectly through `run_async` tests).
+### Added
 - `adk-runners::Runner::run` (C0877/C0878/C0879/C0880 DONE) — a
   synchronous wrapper around `run_async_with_config`, ported from
   `runners.py`'s local-testing/convenience-only `Runner.run(...)`.

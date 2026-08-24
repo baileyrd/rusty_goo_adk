@@ -2129,4 +2129,73 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, RunnerError::SessionNotFound(_)));
     }
+
+    // C0836: `apply_run_config_custom_metadata` — exercised indirectly by
+    // several `run_async` tests above, but tested directly here for the
+    // three cases the manifest evidence cites by name.
+
+    #[test]
+    fn apply_run_config_custom_metadata_merges_config_metadata_onto_a_bare_event() {
+        let mut event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        let run_config = RunConfig {
+            custom_metadata: Some(
+                [(
+                    "source".to_string(),
+                    Value::String("run_config".to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+
+        apply_run_config_custom_metadata(&mut event, &run_config);
+
+        assert_eq!(
+            event.custom_metadata.unwrap().get("source"),
+            Some(&Value::String("run_config".to_string()))
+        );
+    }
+
+    #[test]
+    fn apply_run_config_custom_metadata_prefers_the_events_own_keys_on_conflict() {
+        let mut event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        event.custom_metadata = Some(
+            [("source".to_string(), Value::String("event".to_string()))]
+                .into_iter()
+                .collect(),
+        );
+        let run_config = RunConfig {
+            custom_metadata: Some(
+                [(
+                    "source".to_string(),
+                    Value::String("run_config".to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+
+        apply_run_config_custom_metadata(&mut event, &run_config);
+
+        assert_eq!(
+            event.custom_metadata.unwrap().get("source"),
+            Some(&Value::String("event".to_string()))
+        );
+    }
+
+    #[test]
+    fn apply_run_config_custom_metadata_is_a_noop_without_config_metadata() {
+        let mut event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        apply_run_config_custom_metadata(&mut event, &RunConfig::default());
+        assert!(event.custom_metadata.is_none());
+
+        let run_config = RunConfig {
+            custom_metadata: Some(std::collections::BTreeMap::new()),
+            ..Default::default()
+        };
+        apply_run_config_custom_metadata(&mut event, &run_config);
+        assert!(event.custom_metadata.is_none());
+    }
 }
