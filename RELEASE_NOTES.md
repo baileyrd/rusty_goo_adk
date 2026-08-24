@@ -22,6 +22,40 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — OAuth2/mTLS utility functions
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_agents::oauth2_util::{normalize_oauth_scopes,
+  OAuthScopes, is_non_mtls_googleapis_endpoint,
+  effective_googleapis_endpoint, use_client_cert_effective,
+  update_credential_with_tokens}` (C0509/C0531 partial/C0532) — three
+  small, self-contained OAuth2/mTLS helpers that build on the already-
+  real `AuthCredential`/`OAuth2Auth` without needing `authlib` or
+  `google-auth`: `_normalize_oauth_scopes` (dict-or-list scopes → a
+  flat list, C0509, DONE), the pure env-var/URL-string half of Google
+  token-endpoint mTLS routing (C0531, partial), and
+  `update_credential_with_tokens` (C0532, DONE).
+- **No new dependency:** URL-host inspection/rewriting for the mTLS
+  routing piece is done with plain string operations, not a URL-
+  parsing crate — the same "hand-roll a small self-contained algorithm"
+  precedent as `bash_tool.rs`'s `shlex_split`.
+- **Disclosed, C0531 scoped to its portable half:** the real
+  client-certificate loading/mounting (`configure_session_for_mtls`,
+  `MtlsClientCerts`, `get_api_endpoint`'s cert-availability check)
+  needs `google.auth.transport.mtls` — no such crate is a workspace
+  dependency, so it's unported. `use_client_cert_effective` always
+  takes the source's `ImportError` env-var-fallback branch, since
+  `google.auth`'s own `mtls.should_use_client_cert()` probe isn't
+  available here — this port can report "the env var says use a cert"
+  but never "a cert is actually available". Because the real cert step
+  is unported, the full call-site gating (rewrite the token endpoint
+  only once a certificate is actually mounted) isn't wired up
+  anywhere yet — left with `create_oauth2_session` (C0530), still
+  fully `REQUIRED`.
+- 17 new tests.
+
+---
+
 ## PR #TBD — Auth credential camelCase wire format
 **2026-08-24** · (link added once this PR is opened)
 

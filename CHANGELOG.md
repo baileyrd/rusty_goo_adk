@@ -5,6 +5,21 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::oauth2_util::{normalize_oauth_scopes, OAuthScopes,
+  is_non_mtls_googleapis_endpoint, effective_googleapis_endpoint,
+  use_client_cert_effective, update_credential_with_tokens}` (Phase 9,
+  C0509/C0531 partial/C0532) — `_normalize_oauth_scopes` (dict-or-list
+  scopes → a flat list), the pure env-var/URL-string half of the
+  mTLS-endpoint-routing logic (`.googleapis.com` → `.mtls.googleapis.com`
+  rewriting, hand-rolled hostname extraction, no new dependency added),
+  and `update_credential_with_tokens` (copies token fields from an
+  opaque token map into `OAuth2Auth`). Disclosed: the real
+  client-certificate loading/mounting half of mTLS routing
+  (`configure_session_for_mtls`/`MtlsClientCerts`) needs
+  `google.auth.transport.mtls`, not a workspace dependency — unported;
+  `use_client_cert_effective` always takes the source's env-var-fallback
+  branch since `google.auth`'s cert-availability probe isn't available.
+  17 new tests.
 - `adk-agents::auth_credential` camelCase wire format (Phase 9,
   C0501, partial) — `#[rusty_serde(rename_all = "camelCase")]` on
   `HttpCredentials`/`HttpAuth`/`OAuth2Auth`/`ServiceAccount`/

@@ -18,6 +18,7 @@ pub mod invocation_context;
 pub mod live_request;
 pub mod llm_agent;
 pub mod loop_agent;
+pub mod oauth2_util;
 pub mod parallel_agent;
 pub mod readonly_context;
 pub mod run_config;
