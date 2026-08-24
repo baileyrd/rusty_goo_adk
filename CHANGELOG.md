@@ -5,6 +5,18 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-flows::planners` (Phase 4, C0200-C0203, DONE) — `BasePlanner`
+  trait, `BuiltInPlanner` (thinking-config passthrough, both hooks
+  no-ops), and `PlanReActPlanner` (prompted Plan-Re-Act: 5-tag NL
+  instruction injection, and tagged-response splitting into
+  thought/answer/tool-call parts). All 8 of the source's own
+  `test_plan_re_act_planner.py` tests ported 1:1, including the
+  leading-parallel-function-call regression test, plus 2 new edge
+  cases. Not yet wired into a real `BaseLlmRequestProcessor`/
+  `BaseLlmResponseProcessor` for `_nl_planning` (C0176/C0179) — same
+  "needs `InvocationContext.agent` to resolve a concrete `LlmAgent`"
+  blocker already disclosed by every other Phase 4 processor. 13 new
+  tests.
 - `adk-flows::functions` (Phase 4, C0191/C0192, partial) — the
   `functions.py` execution core: `get_tool` resolves a `FunctionCall`
   against a `ToolsDict`, `execute_single_function_call` runs a tool via

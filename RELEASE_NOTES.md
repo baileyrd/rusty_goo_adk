@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4: Planners (`BasePlanner`, `BuiltInPlanner`, `PlanReActPlanner`)
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::planners` (C0200-C0203, DONE). `BasePlanner` is
+  the trait every planner implements (`build_planning_instruction`,
+  `process_planning_response`). `BuiltInPlanner` wraps a model's native
+  thinking features — both hooks are no-ops, and
+  `apply_thinking_config` sets `LlmRequest.config.thinking_config`
+  (an opaque `Value` placeholder, matching the field it writes into).
+  `PlanReActPlanner` is the model-agnostic prompted Plan-Re-Act
+  planner: `build_planning_instruction` returns a byte-for-byte port
+  of the source's 5-tag NL instruction
+  (`PLANNING`/`REPLANNING`/`REASONING`/`ACTION`/`FINAL_ANSWER`), and
+  `process_planning_response` splits a tagged model response back into
+  thought/answer/tool-call parts — stopping at the first (group of)
+  function calls, splitting text on the final-answer tag into a
+  thought-prefixed reasoning block plus a clean answer suffix, and
+  stripping/marking leading-tagged text as a thought part otherwise.
+- **Test parity:** all 8 tests from the source's own
+  `tests/unittests/planners/test_plan_re_act_planner.py` ported 1:1,
+  including the leading-parallel-function-call regression test (the
+  source's own comment notes an earlier `> 0` index-guard bug that
+  silently dropped every function call after the first when index 0
+  itself was the first call) — this port uses `Option<usize>` instead
+  of a `-1` sentinel, which structurally can't reproduce that bug.
+  Plus 2 new edge-case tests (empty response list, an empty-named
+  function call). 13 new tests total.
+- **Known limitation:** `BasePlanner` isn't yet wired into a real
+  `BaseLlmRequestProcessor`/`BaseLlmResponseProcessor` for
+  `_nl_planning` (C0176/C0179) — that needs
+  `InvocationContext.agent` to resolve a concrete `LlmAgent`'s
+  configured planner, the same blocker every other Phase 4 processor
+  (`basic`, `identity`, `instructions`, `context_cache_processor`, ...)
+  already discloses.
+
 ## PR #TBD — Phase 4: `functions.py` execution core
 **2026-08-24** · (link added once this PR is opened)
 
