@@ -13,3 +13,9 @@ adk-genai = { path = "../adk-genai" }
 rusty_serde = { workspace = true }
 rusty_tokio = { workspace = true }
 rusty_err = { workspace = true }
+# `InMemoryMemoryService`'s keyword-search tokenization
+# (`in_memory_memory_service.rs`, C0249) needs Unicode-aware `\w+`
+# matching, the same way `load_web_page.rs` already uses this crate in
+# `adk-tools` -- a new usage site of an already-vetted workspace
+# dependency, not a new sovereignty decision.
+regex = { workspace = true }
