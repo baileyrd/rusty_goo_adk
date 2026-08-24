@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::{google_search_tool::GoogleSearchTool,
+  google_maps_grounding_tool::GoogleMapsGroundingTool,
+  enterprise_search_tool::EnterpriseWebSearchTool,
+  url_context_tool::UrlContextTool}` (Phase 8, C0428/C0430/C0431/
+  C0432, partial) — the four built-in Gemini grounding tools: each
+  checks whether the request targets a Gemini model (or has the
+  model-ID check disabled) and, if so, appends a built-in-tool marker
+  (e.g. `{"googleSearch": {}}`) to `llm_request.config.tools` via a
+  new shared `append_tools::append_built_in_tool_marker` helper. Also
+  adds `adk-tools::model_name_utils::{is_gemini_model_id_check_disabled,
+  is_managed_agent}`. Disclosed narrowings, shared across all four:
+  `process_llm_request` has no `Result` path, so an unsupported model
+  silently skips the marker instead of the source's `ValueError`;
+  `is_managed_agent()` always returns `false` (no such field on this
+  port's `LlmRequest`); `GoogleSearchTool.bypass_multi_tools_limit` is
+  stored but unenforced (no multi-tool-limit check exists yet).
+  `EnterpriseWebSearchTool`/`GoogleMapsGroundingTool` match the
+  source's own omission of an `_is_managed_agent` check for those two
+  tools exactly. 12 new tests.
 - `adk-tools::load_mcp_resource_tool::{LoadMcpResourceTool,
   McpResourceProvider}` (Phase 8, C0426, partial) — the full
   list→instruction-inject→function-response-detect→per-resource-read→
