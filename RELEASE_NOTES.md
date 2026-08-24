@@ -22,6 +22,37 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `apps/compaction.py`: summarizer init + safe-window logic (C0290, C0291, C0292)
+**2026-08-24** · (link added once this PR is opened)
+
+Continues the `apps_compaction.rs` file from the prior PR, porting the
+rest of the module's pure logic.
+
+- **Added:** `adk_flows::apps_compaction::ensure_compaction_summarizer`
+  — resolves an `EventsCompactionConfig`'s summarizer: the existing
+  one if set, otherwise a new `LlmEventSummarizer` built from the
+  agent's already-resolved canonical model (`LlmFlow::model`). The
+  `isinstance(agent, LlmAgent)` check reuses the `agent.as_any()
+  .downcast_ref::<LlmFlow>()` pattern `instructions.rs` already
+  established.
+- **Added:** `adk_flows::apps_compaction::{events_to_compact_for_token_threshold,
+  longest_self_contained_prefix, safe_token_compaction_split_index}` —
+  the token-threshold compaction candidate selection, the
+  open-obligation-tracking safe-prefix logic, and the
+  orphan-avoiding retention split, all ported in full.
+- **Disclosed adaptation:** the source mutates `config.summarizer` in
+  place; this port's `EventsCompactionConfig` has no interior
+  mutability, so `ensure_compaction_summarizer` resolves and returns
+  instead — in-place caching (if wanted) is left to whatever wires
+  C0293.
+- **Scope:** C0293 (the two `Runner`-facing trigger entrypoints) needs
+  real `App`/`Runner` wiring and a `BaseSessionService::append_event`
+  call — a genuinely larger, separate batch, deliberately left for
+  later.
+- **Scope:** no new dependency. 14 new tests.
+
+---
+
 ## PR #TBD — `apps/compaction.py`: dedup + token estimation (C0288 partial, C0289)
 **2026-08-24** · (link added once this PR is opened)
 

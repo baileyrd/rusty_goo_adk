@@ -6,20 +6,35 @@
 //! (deciding which raw events to filter out of a request's contents,
 //! not which sliding-window range to summarize next).
 //!
-//! **Scope, this batch**: only the pure, self-contained pieces — C0288's
-//! dedup logic (`_valid_compactions`/`_is_compaction_subsumed`/
-//! `_latest_compaction_event`) and C0289's token-count estimation
+//! **Scope, batch 1 (C0288 partial/C0289)**: the pure dedup logic
+//! (`_valid_compactions`/`_is_compaction_subsumed`/
+//! `_latest_compaction_event`) and token-count estimation
 //! (`_estimate_prompt_token_count`/`_latest_prompt_token_count`). C0288's
 //! OTel-traced summarization wrapper (`_summarize_events_with_trace`)
 //! needs span/tracer machinery this port hasn't adopted (see
 //! `adk-agents::telemetry_context`'s own disclosed scope) — nothing here
-//! wraps the summarizer call in a span. Deliberately left for a
-//! follow-up batch: C0290 (`_ensure_compaction_summarizer`), C0291
-//! (`_events_to_compact_for_token_threshold`/
-//! `_longest_self_contained_prefix`), C0292
-//! (`_safe_token_compaction_split_index`), and C0293 (the two
+//! wraps the summarizer call in a span.
+//!
+//! **Scope, batch 2 (C0290/C0291/C0292)**: `_ensure_compaction_summarizer`
+//! (C0290), `_events_to_compact_for_token_threshold`/
+//! `_longest_self_contained_prefix` (C0291), and
+//! `_safe_token_compaction_split_index` (C0292). `agent.canonical_model`
+//! maps to [`crate::llm_flow::LlmFlow::model`] — already resolved once
+//! at construction (the established memoization this crate's own
+//! `LlmFlow`/`canonical_model.rs` disclose) — reached via the same
+//! `agent.as_any().downcast_ref::<LlmFlow>()` pattern
+//! `instructions.rs`'s `resolve_root_global_instruction` already
+//! established for recovering a concrete `LlmAgent`-backed behavior
+//! from a type-erased `BaseAgent`. Disclosed: the source mutates
+//! `config.summarizer` in place; this port's `EventsCompactionConfig`
+//! has no interior mutability, so [`ensure_compaction_summarizer`]
+//! resolves and returns instead, leaving in-place caching (if wanted)
+//! to whatever wires C0293.
+//!
+//! Deliberately left for a follow-up batch: C0293 (the two
 //! `Runner`-facing trigger entrypoints, which need `App`/`Runner`
-//! wiring this batch doesn't touch).
+//! wiring and a `BaseSessionService::append_event` call — a genuinely
+//! larger, separate batch).
 //!
 //! **Adaptation, disclosed**: the source's `_count_chars_in_content`
 //! `json.dumps`s a function call's `args`/a function response's
@@ -28,8 +43,15 @@
 //! (always JSON-serializable), so only the `json.dumps` path applies —
 //! there's no failure case to fall back from.
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use adk_agents::app_configs::{BaseEventsSummarizer, EventsCompactionConfig};
+use adk_agents::base_agent::BaseAgent;
+use adk_events::node_info::NodeInfo;
 use adk_events::Event;
 use adk_genai::content::Content;
+use adk_tools::llm_event_summarizer::LlmEventSummarizer;
 use rusty_serde::value::Value;
 
 use crate::contents::{get_contents, ContentsError};
@@ -131,6 +153,181 @@ pub fn latest_compaction_event(events: &[Event]) -> Option<&Event> {
         }
     }
     latest.map(|index| &events[index])
+}
+
+/// `_latest_compaction_end_timestamp` — the end timestamp of the most
+/// recent (non-subsumed) compaction event, or `0.0` if there isn't one.
+/// Needed by [`events_to_compact_for_token_threshold`] (C0291); not its
+/// own manifest row (a small helper built directly on
+/// [`latest_compaction_event`], C0288, already DONE).
+fn latest_compaction_end_timestamp(events: &[Event]) -> f64 {
+    latest_compaction_event(events)
+        .and_then(|event| event.actions.compaction.as_ref())
+        .map(|compaction| compaction.end_timestamp)
+        .unwrap_or(0.0)
+}
+
+#[derive(Debug, rusty_err::Error)]
+pub enum EnsureCompactionSummarizerError {
+    #[error("No LlmAgent model available for event compaction summarizer.")]
+    NotAnLlmAgent,
+}
+
+/// C0290: `_ensure_compaction_summarizer` — resolves an
+/// `EventsCompactionConfig`'s summarizer: the existing one if already
+/// set, otherwise a new `LlmEventSummarizer` built from `agent`'s
+/// already-resolved canonical model. See the module doc for the
+/// disclosed resolve-and-return adaptation (no in-place mutation).
+pub fn ensure_compaction_summarizer(
+    config: &EventsCompactionConfig,
+    agent: &BaseAgent,
+) -> Result<Arc<dyn BaseEventsSummarizer>, EnsureCompactionSummarizerError> {
+    if let Some(summarizer) = &config.summarizer {
+        return Ok(summarizer.clone());
+    }
+    let llm_flow = agent
+        .as_any()
+        .downcast_ref::<crate::llm_flow::LlmFlow>()
+        .ok_or(EnsureCompactionSummarizerError::NotAnLlmAgent)?;
+    Ok(Arc::new(LlmEventSummarizer::new(llm_flow.model.clone())))
+}
+
+/// `_event_function_call_ids` — the ids of function calls carried by an
+/// event.
+fn event_function_call_ids(event: &Event) -> HashSet<String> {
+    event
+        .get_function_calls()
+        .into_iter()
+        .filter_map(|call| call.id.clone())
+        .collect()
+}
+
+/// `_event_function_response_ids` — the ids of function responses
+/// carried by an event.
+fn event_function_response_ids(event: &Event) -> HashSet<String> {
+    event
+        .get_function_responses()
+        .into_iter()
+        .filter_map(|response| response.id.clone())
+        .collect()
+}
+
+/// C0291: `_longest_self_contained_prefix` — the longest prefix of
+/// `events` safe to compact. A single left-to-right pass tracks "open"
+/// obligations keyed by call id: a function call, a requested tool
+/// confirmation, or a requested auth config opens one; a function
+/// response with the same id closes it. Responses are applied before
+/// opens within each event so a response only closes an obligation
+/// opened by an earlier event. The prefix is safe to summarize only at
+/// points where no obligation is open, so the longest prefix ending at
+/// such a balanced point is returned (empty if the window never reaches
+/// a balanced point).
+pub fn longest_self_contained_prefix(events: &[Event]) -> Vec<Event> {
+    let mut open_ids: HashSet<String> = HashSet::new();
+    let mut safe_length = 0;
+    for (index, event) in events.iter().enumerate() {
+        for id in event_function_response_ids(event) {
+            open_ids.remove(&id);
+        }
+        open_ids.extend(event_function_call_ids(event));
+        open_ids.extend(event.actions.requested_tool_confirmations.keys().cloned());
+        open_ids.extend(event.actions.requested_auth_configs.keys().cloned());
+        if open_ids.is_empty() {
+            safe_length = index + 1;
+        }
+    }
+    events[..safe_length].to_vec()
+}
+
+/// C0292: `_safe_token_compaction_split_index` — a split index that
+/// avoids orphaning retained tool responses. Retained events (the tail
+/// of `candidate_events`) may contain function responses; if their
+/// matching function call events would fall in the compacted prefix,
+/// contents assembly can fail — so the split shifts earlier so matching
+/// call/response pairs stay together. Iterates backwards once,
+/// maintaining a running set of unmatched response ids; the latest
+/// valid split point where no unmatched responses remain is returned.
+pub fn safe_token_compaction_split_index(
+    candidate_events: &[Event],
+    event_retention_size: i64,
+) -> usize {
+    let initial_split = candidate_events.len() as i64 - event_retention_size;
+    if initial_split <= 0 {
+        return 0;
+    }
+    let initial_split = initial_split as usize;
+
+    let mut unmatched_response_ids: HashSet<String> = HashSet::new();
+    let mut best_split = 0;
+
+    for i in (0..candidate_events.len()).rev() {
+        let event = &candidate_events[i];
+        unmatched_response_ids.extend(event_function_response_ids(event));
+        for call_id in event_function_call_ids(event) {
+            unmatched_response_ids.remove(&call_id);
+        }
+        if unmatched_response_ids.is_empty() && i <= initial_split {
+            best_split = i;
+            break;
+        }
+    }
+    best_split
+}
+
+/// C0291: `_events_to_compact_for_token_threshold` — collects
+/// token-threshold compaction candidates: events since the last
+/// compaction, safely split to retain `event_retention_size` trailing
+/// events (via [`safe_token_compaction_split_index`]) and trimmed to
+/// the longest self-contained prefix (via
+/// [`longest_self_contained_prefix`]). If a previous compaction exists,
+/// its summary is prepended as a synthetic leading event so the next
+/// summary can supersede it.
+pub fn events_to_compact_for_token_threshold(
+    events: &[Event],
+    event_retention_size: i64,
+) -> Vec<Event> {
+    let latest_compaction = latest_compaction_event(events).cloned();
+    let last_compacted_end_timestamp = latest_compaction_end_timestamp(events);
+
+    let candidate_events: Vec<Event> = events
+        .iter()
+        .filter(|event| {
+            event.actions.compaction.is_none() && event.timestamp > last_compacted_end_timestamp
+        })
+        .cloned()
+        .collect();
+
+    if candidate_events.len() as i64 <= event_retention_size {
+        return Vec::new();
+    }
+
+    let events_to_compact = if event_retention_size == 0 {
+        candidate_events
+    } else {
+        let split_index =
+            safe_token_compaction_split_index(&candidate_events, event_retention_size);
+        candidate_events[..split_index].to_vec()
+    };
+
+    let events_to_compact = longest_self_contained_prefix(&events_to_compact);
+    if events_to_compact.is_empty() {
+        return Vec::new();
+    }
+
+    if let Some(compaction) = latest_compaction
+        .as_ref()
+        .and_then(|e| e.actions.compaction.as_ref())
+    {
+        let mut seed_event = Event::new(Event::new_id(), "model", NodeInfo::new(""));
+        seed_event.timestamp = compaction.start_timestamp;
+        seed_event.content = Some(compaction.compacted_content.clone());
+        seed_event.branch = latest_compaction.as_ref().and_then(|e| e.branch.clone());
+        let mut result = vec![seed_event];
+        result.extend(events_to_compact);
+        return result;
+    }
+
+    events_to_compact
 }
 
 /// C0289: `_estimate_prompt_token_count` — an approximate prompt token
@@ -340,6 +537,219 @@ mod tests {
         assert_eq!(
             latest_prompt_token_count(&[older, newer], None, "").unwrap(),
             Some(20)
+        );
+    }
+
+    // --- ensure_compaction_summarizer ---
+
+    fn llm_flow_agent() -> BaseAgent {
+        let llm_agent = adk_agents::llm_agent::LlmAgent::new(
+            adk_agents::llm_agent::ModelRef::Name("gemini-2.0-flash".to_string()),
+        );
+        let llm_flow = crate::llm_flow::LlmFlow::with_model(
+            llm_agent,
+            Arc::new(adk_models::gemini::Gemini::new("gemini-2.0-flash")),
+        );
+        BaseAgent::new("root", llm_flow).unwrap()
+    }
+
+    #[test]
+    fn ensure_compaction_summarizer_returns_the_existing_summarizer_unchanged() {
+        struct StubSummarizer;
+        impl BaseEventsSummarizer for StubSummarizer {
+            fn maybe_summarize_events<'a>(
+                &'a self,
+                _events: &'a [Event],
+            ) -> adk_agents::services::BoxFuture<'a, Option<Event>> {
+                Box::pin(async { None })
+            }
+        }
+        let config = EventsCompactionConfig {
+            summarizer: Some(Arc::new(StubSummarizer)),
+            compaction_interval: Some(1),
+            overlap_size: Some(0),
+            ..Default::default()
+        };
+        let agent = llm_flow_agent();
+        assert!(ensure_compaction_summarizer(&config, &agent).is_ok());
+    }
+
+    #[test]
+    fn ensure_compaction_summarizer_builds_one_from_the_agents_canonical_model() {
+        let config = EventsCompactionConfig::default();
+        let agent = llm_flow_agent();
+        assert!(ensure_compaction_summarizer(&config, &agent).is_ok());
+    }
+
+    #[test]
+    fn ensure_compaction_summarizer_errors_when_the_agent_isnt_llm_backed() {
+        let config = EventsCompactionConfig::default();
+        let agent = BaseAgent::new("root", adk_agents::base_agent::NoopBehavior).unwrap();
+        match ensure_compaction_summarizer(&config, &agent) {
+            Err(EnsureCompactionSummarizerError::NotAnLlmAgent) => {}
+            Ok(_) => panic!("expected a NotAnLlmAgent error"),
+        }
+    }
+
+    // --- longest_self_contained_prefix ---
+
+    fn call_event(index: usize, call_id: &str) -> Event {
+        let mut event = Event::new(format!("inv-{index}"), "model", NodeInfo::new(""));
+        event.content = Some(Content::new(
+            "model",
+            vec![Part::function_call(FunctionCall {
+                id: Some(call_id.to_string()),
+                name: Some("get_weather".to_string()),
+                ..Default::default()
+            })],
+        ));
+        event
+    }
+
+    fn response_event(index: usize, call_id: &str) -> Event {
+        let mut event = Event::new(format!("inv-{index}"), "user", NodeInfo::new(""));
+        event.content = Some(Content::new(
+            "user",
+            vec![Part::function_response(FunctionResponse {
+                id: Some(call_id.to_string()),
+                name: Some("get_weather".to_string()),
+                ..Default::default()
+            })],
+        ));
+        event
+    }
+
+    #[test]
+    fn longest_self_contained_prefix_keeps_a_fully_matched_call_and_response() {
+        let events = vec![call_event(0, "c1"), response_event(1, "c1")];
+        let prefix = longest_self_contained_prefix(&events);
+        assert_eq!(prefix.len(), 2);
+    }
+
+    #[test]
+    fn longest_self_contained_prefix_drops_a_trailing_unmatched_call() {
+        let events = vec![
+            call_event(0, "c1"),
+            response_event(1, "c1"),
+            call_event(2, "c2"),
+        ];
+        let prefix = longest_self_contained_prefix(&events);
+        assert_eq!(prefix.len(), 2);
+    }
+
+    #[test]
+    fn longest_self_contained_prefix_is_empty_when_never_balanced() {
+        let events = vec![call_event(0, "c1")];
+        assert!(longest_self_contained_prefix(&events).is_empty());
+    }
+
+    #[test]
+    fn longest_self_contained_prefix_treats_a_requested_tool_confirmation_as_open() {
+        let mut event = Event::new("inv-1", "model", NodeInfo::new(""));
+        event.actions.requested_tool_confirmations = [("fc-1".to_string(), Value::Bool(true))]
+            .into_iter()
+            .collect();
+        assert!(longest_self_contained_prefix(&[event]).is_empty());
+    }
+
+    // --- safe_token_compaction_split_index ---
+
+    #[test]
+    fn safe_token_compaction_split_index_is_zero_when_retention_covers_everything() {
+        let events = vec![text_event("user", "a"), text_event("user", "b")];
+        assert_eq!(safe_token_compaction_split_index(&events, 5), 0);
+    }
+
+    #[test]
+    fn safe_token_compaction_split_index_uses_the_initial_split_with_no_dangling_response() {
+        let events: Vec<Event> = (0..5)
+            .map(|i| text_event("user", &format!("e{i}")))
+            .collect();
+        // len=5, retention=2 -> initial split at 3.
+        assert_eq!(safe_token_compaction_split_index(&events, 2), 3);
+    }
+
+    #[test]
+    fn safe_token_compaction_split_index_shifts_earlier_to_keep_a_call_with_its_response() {
+        // Retained tail (retention=2) would be [response(c1), text] --
+        // the matching call is just before it, so the split must shift
+        // earlier to keep call+response together.
+        let events = vec![
+            text_event("user", "e0"),
+            call_event(1, "c1"),
+            response_event(2, "c1"),
+            text_event("user", "e3"),
+        ];
+        let split = safe_token_compaction_split_index(&events, 2);
+        // The response at index 2 must not be orphaned from its call at
+        // index 1, so the split must land at or before index 1.
+        assert!(split <= 1);
+    }
+
+    // --- events_to_compact_for_token_threshold ---
+
+    #[test]
+    fn events_to_compact_for_token_threshold_is_empty_when_too_few_candidates() {
+        let events = vec![text_event("user", "a"), text_event("user", "b")];
+        assert!(events_to_compact_for_token_threshold(&events, 5).is_empty());
+    }
+
+    #[test]
+    fn events_to_compact_for_token_threshold_takes_all_candidates_with_zero_retention() {
+        let events = vec![text_event("user", "a"), text_event("user", "b")];
+        let compacted = events_to_compact_for_token_threshold(&events, 0);
+        assert_eq!(compacted.len(), 2);
+    }
+
+    #[test]
+    fn events_to_compact_for_token_threshold_seeds_with_the_prior_compaction_summary() {
+        let mut events = vec![event_with_compaction(0, 0.0, 1.0)];
+        for i in 1..5 {
+            let mut event = text_event("user", &format!("e{i}"));
+            event.timestamp = i as f64;
+            events.push(event);
+        }
+        let compacted = events_to_compact_for_token_threshold(&events, 0);
+        // First event is the synthetic seed carrying the prior
+        // compaction's summary content, authored 'model'.
+        assert_eq!(compacted[0].author, "model");
+        assert_eq!(
+            compacted[0].content.as_ref().unwrap().parts[0]
+                .text
+                .as_deref(),
+            Some("summary")
+        );
+    }
+
+    #[test]
+    fn events_to_compact_for_token_threshold_only_considers_events_after_the_last_compaction() {
+        let mut compaction_event = event_with_compaction(0, 0.0, 5.0);
+        compaction_event.timestamp = 5.0;
+        let mut before = text_event("user", "before");
+        before.timestamp = 1.0;
+        let mut after1 = text_event("user", "after1");
+        after1.timestamp = 6.0;
+        let mut after2 = text_event("user", "after2");
+        after2.timestamp = 7.0;
+
+        let events = vec![before, compaction_event, after1, after2];
+        let compacted = events_to_compact_for_token_threshold(&events, 0);
+        // The existing compaction's summary is seeded onto the front,
+        // plus the two candidate events after its end_timestamp (5.0);
+        // `before` (ts=1.0) is excluded as a candidate.
+        assert_eq!(compacted.len(), 3);
+        assert_eq!(compacted[0].author, "model");
+        assert_eq!(
+            compacted[1].content.as_ref().unwrap().parts[0]
+                .text
+                .as_deref(),
+            Some("after1")
+        );
+        assert_eq!(
+            compacted[2].content.as_ref().unwrap().parts[0]
+                .text
+                .as_deref(),
+            Some("after2")
         );
     }
 }
