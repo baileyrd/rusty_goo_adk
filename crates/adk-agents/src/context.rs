@@ -61,6 +61,7 @@ pub struct Context {
     route: Option<Value>,
     interrupt_ids: HashSet<String>,
     event_author: String,
+    tool_confirmation: Option<Value>,
 }
 
 impl Context {
@@ -77,6 +78,7 @@ impl Context {
             event_author: String::new(),
             event_actions: EventActions::default(),
             invocation_context,
+            tool_confirmation: None,
         }
     }
 
@@ -99,6 +101,21 @@ impl Context {
 
     pub fn set_function_call_id(&mut self, value: Option<String>) {
         self.function_call_id = value;
+    }
+
+    /// The tool confirmation of the current tool call, if the inbound
+    /// function response carried one. Stays a plain (opaque) `Value` here
+    /// rather than a typed `ToolConfirmation` — that type lives in
+    /// `adk-tools` (Phase 8), which depends on `adk-agents`, not the
+    /// other way around, so this crate can't hold it as a typed field
+    /// without a cycle. `adk_tools::function_tool::FunctionTool` narrows
+    /// it via `ToolConfirmation`'s own (de)serialization.
+    pub fn tool_confirmation(&self) -> Option<&Value> {
+        self.tool_confirmation.as_ref()
+    }
+
+    pub fn set_tool_confirmation(&mut self, value: Option<Value>) {
+        self.tool_confirmation = value;
     }
 
     /// C0052: internal mechanism — do not use directly outside the

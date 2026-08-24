@@ -22,6 +22,49 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 8 batch 3: `FunctionTool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::function_tool::FunctionTool` (C0404, partial;
+  C0405, done) — wraps a Rust closure as a `BaseTool`.
+  - **Fundamental adaptation, disclosed at length in the module doc:**
+    the source wraps an arbitrary Python callable and uses runtime
+    reflection (`inspect.signature`, `get_type_hints`) to detect a
+    context parameter, build a cached `FunctionDeclaration` from the
+    signature, coerce raw JSON args into Pydantic model types, and
+    compute mandatory parameters. None of this exists in Rust —
+    functions have no runtime-inspectable signatures. So
+    `FunctionTool::new` takes an already-built `FunctionDeclaration`
+    and an explicit `required_args` list; the wrapped closure always
+    takes `(&BTreeMap<String, Value>, &mut ToolContext)` (no context-
+    parameter detection needed, since the signature is fixed rather
+    than discovered); there's no generic argument-coercion layer (the
+    closure body converts its own args via `rusty_serde::json::from_value`
+    as needed); there's no sync/async runner distinction (every
+    closure here is already async by construction).
+  - The `require_confirmation` gate (`RequireConfirmation::Bool` or
+    `::Predicate`) is fully ported: missing-mandatory-arg pre-check
+    returns a `{"error": ...}` value (not a Rust error); a required-
+    but-unanswered confirmation calls `request_confirmation`, sets
+    `actions.skip_summarization`, and returns the "please
+    approve/reject" error; an answered-but-rejected confirmation
+    returns "this tool call is rejected"; a confirmed one runs the
+    closure.
+  - **Adds** `tool_confirmation`/`set_tool_confirmation` to
+    `adk-agents::context::Context` — needed for the gate above. Kept
+    as an opaque `Value`, not the real `ToolConfirmation` type, since
+    `adk-tools` (which owns `ToolConfirmation`) depends on
+    `adk-agents`, not the reverse; `FunctionTool` narrows it via
+    `ToolConfirmation`'s own (de)serialization.
+- **Not ported:** `input_stream` injection (live/bidirectional-
+  streaming tools — needs `active_streaming_tools` wiring `adk-agents`
+  doesn't consume yet); `_detect_error_in_response` (telemetry, Phase
+  12).
+- 6 new tests (`adk-tools`, 30 total), 0 new tests needed in
+  `adk-agents` beyond the existing `Context` coverage (the new field
+  is exercised transitively by `function_tool`'s own tests). Full
+  workspace gate green.
+
 ## PR #TBD — Phase 8 batch 2: `BaseToolset`
 **2026-08-24** · (link added once this PR is opened)
 
