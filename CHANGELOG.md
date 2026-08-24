@@ -5,6 +5,23 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::artifact_util::{ParsedArtifactUri, parse_artifact_uri,
+  get_artifact_uri, is_artifact_ref, validate_artifact_reference_scope,
+  validate_path_segment}` (Phase 6, C0262/C0263/C0264) — the canonical
+  `artifact://apps/{app}/users/{user}/[sessions/{sid}/]artifacts/{filename}/versions/{v}`
+  URI scheme (parse/construct, round-trip tested), the cross-tenant
+  artifact-reference-escape security boundary, and the path-segment
+  validator every artifact backend needs for its app/user/session
+  identifiers (rejects empty/null-byte/absolute/drive-qualified/
+  traversal segments). Pure string/regex logic, no I/O, building on
+  the already-real `InputValidationError`. Adapted: `is_artifact_ref`
+  reads `"fileUri"` out of `Part.file_data`'s opaque flattened `rest`
+  map (this port's `MediaBlobStub` has no typed `file_uri` field),
+  the same pattern `load_artifacts_tool.rs` already uses for
+  `inline_data.rest.get("data")`. Not built: `InMemoryArtifactService`
+  (C0265) doesn't exist yet, so nothing produces a real artifact-backed
+  `Part` in a live turn yet — this utility is real and tested, ahead
+  of its own only caller. 17 new tests.
 - `adk-agents::in_memory_memory_service::{InMemoryMemoryService,
   format_timestamp, UNKNOWN_SESSION_ID}` (Phase 6, C0244/C0245 partial/
   C0247/C0248/C0249) — the first real `MemoryService` implementation:
