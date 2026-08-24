@@ -5,6 +5,23 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-flows::functions` (Phase 4, C0191/C0192, partial) — the
+  `functions.py` execution core: `get_tool` resolves a `FunctionCall`
+  against a `ToolsDict`, `execute_single_function_call` runs a tool via
+  `BaseTool::run_async` and builds its response `Event`, and
+  `execute_function_calls` dispatches many calls concurrently (one
+  `rusty_tokio::spawn` task per call, matching the precedent already
+  established by `ParallelAgent`), filters by ID, and merges the
+  results via the already-built
+  `functions_utils::merge_parallel_function_response_events`. Adds a
+  new `adk-flows` → `adk-tools` dependency edge. Disclosed omissions
+  (module doc has the full list): tool-level before/after/on-error
+  callback dispatch (same crate-graph constraint that already excludes
+  tool hooks from `BasePlugin`), auth-request/tool-confirmation-request
+  event synthesis (needs Phase 9's `AuthConfig`), the long-running
+  `_defers_response` empty-response skip (a real design gap —
+  `BaseTool::run_async`'s `Result<Value, ToolError>` can't express "no
+  response yet"), and OTel tracing (Phase 12). 7 new tests.
 - `adk-agents::loop_agent::LoopAgent` (Phase 7 batch 4, C0337, partial)
   — structurally `SequentialAgent` wrapped in an outer loop that
   restarts from the first sub-agent up to `max_iterations` times (or

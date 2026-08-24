@@ -22,6 +22,43 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4: `functions.py` execution core
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::functions` (C0191/C0192, partial) — the
+  `functions.py` execution core. `get_tool` resolves a `FunctionCall`
+  against a `ToolsDict`; `create_tool_context` builds a `ToolContext`
+  carrying the function-call ID and an optional serialized
+  `ToolConfirmation`; `execute_single_function_call` runs a tool via
+  `BaseTool::run_async` and builds its response `Event`;
+  `execute_function_calls` dispatches many calls concurrently (one
+  `rusty_tokio::spawn` task per call, the same pattern already
+  established by `ParallelAgent`), filters by ID, and merges results
+  via the already-built `functions_utils::merge_parallel_function_response_events`.
+  Adds a new `adk-flows` → `adk-tools` dependency edge (verified
+  non-circular). 7 new tests.
+- **Known limitations (disclosed in the module doc):** no tool-level
+  before/after/on-error callback dispatch — the `PluginManager` half is
+  excluded by the same crate-graph constraint already disclosed for
+  `BasePlugin` (`adk-tools` already depends on `adk-agents`, so
+  `adk-agents` can't depend back for `BaseTool`), and the
+  `LlmAgent.canonical_*_tool_callbacks` half isn't built; no
+  auth-request/tool-confirmation-request event synthesis (needs Phase
+  9's `AuthConfig`); no long-running/`_defers_response` empty-response
+  skip — a genuine design gap, since `BaseTool::run_async`'s
+  `Result<Value, ToolError>` contract has no way to signal "no response
+  yet" distinct from a real value; no multimodal-part
+  extraction/computer-use image decoding/`AgentTool`
+  skip-summarization special case (those types don't exist in this
+  port); no `response_scheduling` forwarding (`FunctionResponse`
+  doesn't model that field); no OTel tracing (Phase 12); no defensive
+  args deep-copy (unneeded — args already arrive as an owned clone
+  under Rust's ownership model); no explicit cancel-and-await-siblings
+  on one call's failure (`execute_function_calls`'s `handle.await` loop
+  propagates the first error but doesn't cancel remaining in-flight
+  tasks — the same limitation `ParallelAgent`'s own module doc already
+  discloses).
+
 ## PR #TBD — Phase 7 batch 4: `LoopAgent`
 **2026-08-24** · (link added once this PR is opened)
 
