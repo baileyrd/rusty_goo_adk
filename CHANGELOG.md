@@ -5,6 +5,18 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::sequential_agent::SequentialAgent` (Phase 7 batch 2,
+  C0335, partial) — a `BaseAgent`-pluggable `AgentBehavior` running its
+  sub-agents in order, with resumability (start-index resumption,
+  agent-state markers, restart-from-beginning if a tracked sub-agent
+  was removed, pause-on-long-running-call). Adaptation, disclosed at
+  length in the module doc: this port's `Context`/`State` copy rather
+  than share-by-reference, so `run_async_impl` explicitly applies each
+  produced event's `state_delta` onto `ctx.session.state` as it
+  processes it — otherwise a later sub-agent would never see an
+  earlier one's state changes, breaking the entire point of a
+  sequential chain. Live mode's `task_completed` tool auto-injection is
+  deferred (needs `canonical_tools`, still a placeholder). 5 new tests.
 - Starts Phase 7 (`plugins/`): `adk-agents::services::BasePlugin` — a
   real plugin trait replacing the old hardcoded-`None` `PluginManager`
   stub. Agent-level hooks (`before_agent_callback`/`after_agent_callback`,

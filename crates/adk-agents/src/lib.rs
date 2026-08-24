@@ -18,6 +18,7 @@ pub mod live_request;
 pub mod llm_agent;
 pub mod readonly_context;
 pub mod run_config;
+pub mod sequential_agent;
 pub mod services;
 pub mod session;
 pub mod state;
