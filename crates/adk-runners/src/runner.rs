@@ -3,12 +3,15 @@
 //!
 //! **Scoping**: `runners.py` is 2609 lines / 94 capability rows, and most
 //! of it depends on infrastructure this port doesn't have yet:
-//! - An `App` type (`apps.app.App`, Phase 7) — `Runner.__init__`'s
-//!   app/agent/node mutual-exclusivity contract, `App.model_construct`
-//!   wrapping, and `app.root_agent`/`app.plugins` resolution (C0840-C0850)
-//!   are all N/A here: this port's `Runner` only ever wraps a concrete
-//!   [`BaseAgent`] directly, so there's no app/agent/node union to
-//!   validate against.
+//! - `Runner.__init__`'s `app`/`agent`/`node` mutual-exclusivity contract
+//!   and `App.model_construct` wrapping stay N/A: this port's `Runner`
+//!   only ever wraps a concrete [`BaseAgent`] directly (`Runner::new`),
+//!   so there's no app/agent/node union to validate against. An [`App`]
+//!   type does exist now (`adk-agents::app`, C0279/C0280), so
+//!   `app.root_agent`/`app.plugins`/`app.context_cache_config`/
+//!   `app.resumability_config` resolution (C0846/C0849) is real, wired
+//!   as an additive second constructor, [`Runner::from_app`], rather
+//!   than a change to `Runner::new`'s already-shipped signature.
 //! - The workflow/node/task-delegation engine (`BaseNode`,
 //!   `Context.run_node`, `DynamicNodeScheduler`, task-scope tracking,
 //!   Phase 7) — confirmed absent from this port. Every node/task-mode
@@ -92,6 +95,20 @@
 //! doc for the narrowing (a constructor, not a subclass) and the
 //! `app_name` default.
 //!
+//! **`Runner::from_app`** (C0846/C0849): builds a `Runner` from a
+//! resolved [`App`], deriving `context_cache_config`/
+//! `resumability_config`/`plugins` from it rather than accepting them as
+//! direct constructor arguments — additive, doesn't touch `Runner::new`'s
+//! already-shipped signature. C0847's `_enforce_app_name_alignment`/
+//! `_warn_uncached_agent_transfer` calls, and C0850's deprecated
+//! `_validate_runner_params` back-compat wrapper, both depend on
+//! `_infer_agent_origin` (C0851, already-disclosed N/A below — no Rust
+//! module-path reflection) or on logging machinery not adopted in this
+//! port, so neither has anything to port yet; C0848
+//! (`_require_root_agent`) is also N/A — `Runner::agent` is always a
+//! concrete `BaseAgent`, never a bare node, so there's no node-vs-agent
+//! narrowing check to perform.
+//!
 //! **Not ported this batch**: `_find_agent_to_run` (C0907-C0910, picks up
 //! a resumed multi-turn conversation's last-active agent — needs
 //! resumability, always false here); `_resolve_invocation_id` (C0855,
@@ -107,8 +124,11 @@
 
 use std::sync::Arc;
 
+use adk_agents::app::App;
+use adk_agents::app_configs::ResumabilityConfig;
 use adk_agents::base_agent::BaseAgent;
 use adk_agents::context::Context;
+use adk_agents::context_cache_config::ContextCacheConfig;
 use adk_agents::invocation_context::InvocationContextBuilder;
 use adk_agents::run_config::RunConfig;
 use adk_agents::services::{
@@ -236,6 +256,15 @@ pub struct Runner {
     /// C0845: the single switch controlling whether `run_async` creates
     /// a missing session or reports it as not found.
     auto_create_session: bool,
+    /// C0846: derived from an [`App`] via [`Runner::from_app`] — never a
+    /// direct constructor argument (`Runner::new` always leaves this
+    /// `None`), matching the source exactly. Not yet read anywhere else
+    /// in this port (compaction, C0871/C0872, isn't built).
+    context_cache_config: Option<ContextCacheConfig>,
+    /// C0846: same sourcing rule as `context_cache_config` above. Not yet
+    /// read anywhere else in this port (resumable-run support isn't
+    /// built).
+    resumability_config: Option<ResumabilityConfig>,
 }
 
 impl Runner {
@@ -257,7 +286,36 @@ impl Runner {
             plugin_manager: PluginManager::new(),
             plugin_close_timeout: 5.0,
             auto_create_session: false,
+            context_cache_config: None,
+            resumability_config: None,
         }
+    }
+
+    /// C0846/C0849: the single normalization path from a resolved [`App`]
+    /// to a `Runner` — the source's `_resolve_app` plus the constructor's
+    /// `app.*`-extraction block, narrowed to the one shape this port's
+    /// `App`/`Runner` pair can represent (no `app`/`agent`/`node` union;
+    /// `App::root_agent` is a required, never-absent field — see both
+    /// types' own module docs — so the source's "raises ValueError if
+    /// app.root_agent is None" check has nothing to guard here).
+    /// `app_name` defaults to `app.name`; pass `Some(..)` to override it,
+    /// matching the source's `app_name or app.name`. `app.plugins` folds
+    /// into the registered plugin set via [`Runner::with_plugin`], so a
+    /// duplicate plugin name surfaces the same [`PluginManagerError`] it
+    /// would through that method directly.
+    pub fn from_app(
+        app: App,
+        app_name_override: Option<String>,
+        session_service: Arc<dyn SessionService + Send + Sync>,
+    ) -> Result<Self, PluginManagerError> {
+        let app_name = app_name_override.unwrap_or(app.name);
+        let mut runner = Self::new(app_name, app.root_agent, session_service);
+        runner.context_cache_config = app.context_cache_config;
+        runner.resumability_config = app.resumability_config;
+        for plugin in app.plugins {
+            runner = runner.with_plugin(plugin)?;
+        }
+        Ok(runner)
     }
 
     /// C0926: `InMemoryRunner` — a `Runner` pre-wired with in-memory
@@ -340,6 +398,18 @@ impl Runner {
     /// `close()` call by, once toolset collection (C0922/C0923) is wired.
     pub fn plugin_close_timeout(&self) -> f64 {
         self.plugin_close_timeout
+    }
+
+    /// C0846: set only via [`Runner::from_app`]; always `None` after
+    /// [`Runner::new`]/[`Runner::in_memory`].
+    pub fn context_cache_config(&self) -> Option<&ContextCacheConfig> {
+        self.context_cache_config.as_ref()
+    }
+
+    /// C0846: set only via [`Runner::from_app`]; always `None` after
+    /// [`Runner::new`]/[`Runner::in_memory`].
+    pub fn resumability_config(&self) -> Option<&ResumabilityConfig> {
+        self.resumability_config.as_ref()
     }
 
     /// C0873 (narrowed — no `GetSessionConfig`, see `adk-agents::services`'
@@ -699,6 +769,107 @@ mod tests {
         // the source's own constructor, which doesn't either) — so the
         // session must be created first, same as any other `Runner`.
         let runner = Runner::in_memory(agent).with_auto_create_session(true);
+
+        let events = runner
+            .run_async("user", "s1", Content::user_text("hi"))
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].author, "echo_agent");
+    }
+
+    struct StubPlugin {
+        stub_name: &'static str,
+    }
+
+    impl adk_agents::services::BasePlugin for StubPlugin {
+        fn name(&self) -> &str {
+            self.stub_name
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn from_app_folds_the_apps_plugins_into_the_registered_set() {
+        let agent = BaseAgent::new("echo_agent", EchoBehavior).unwrap();
+        let plugin = Arc::new(RecordingPlugin::new("p1"));
+        let app = App::new("my-app", agent)
+            .unwrap()
+            .with_plugin(plugin.clone());
+
+        let runner = Runner::from_app(app, None, Arc::new(InMemorySessionService::new()))
+            .unwrap()
+            .with_auto_create_session(true);
+        runner
+            .run_async("user", "s1", Content::user_text("hi"))
+            .await
+            .unwrap();
+
+        assert!(plugin.calls.lock().unwrap().contains(&"on_user_message"));
+    }
+
+    #[test]
+    fn from_app_surfaces_a_duplicate_plugin_name_error() {
+        let agent = BaseAgent::new("echo_agent", EchoBehavior).unwrap();
+        let app = App::new("my-app", agent)
+            .unwrap()
+            .with_plugin(Arc::new(StubPlugin { stub_name: "p1" }))
+            .with_plugin(Arc::new(StubPlugin { stub_name: "p1" }));
+
+        match Runner::from_app(app, None, Arc::new(InMemorySessionService::new())) {
+            Err(PluginManagerError::DuplicateName(name)) => assert_eq!(name, "p1"),
+            Ok(_) => panic!("expected a DuplicateName error"),
+        }
+    }
+
+    #[test]
+    fn from_app_derives_app_name_and_configs_from_the_app() {
+        let agent = BaseAgent::new("echo_agent", EchoBehavior).unwrap();
+        let app = App::new("my-app", agent)
+            .unwrap()
+            .with_context_cache_config(ContextCacheConfig::default())
+            .with_resumability_config(ResumabilityConfig::new(true));
+
+        let runner = Runner::from_app(app, None, Arc::new(InMemorySessionService::new())).unwrap();
+
+        assert_eq!(runner.app_name(), "my-app");
+        assert_eq!(runner.agent().name(), "echo_agent");
+        assert!(runner.context_cache_config().is_some());
+        assert!(runner.resumability_config().unwrap().is_resumable);
+    }
+
+    #[test]
+    fn from_app_honors_an_app_name_override() {
+        let agent = BaseAgent::new("echo_agent", EchoBehavior).unwrap();
+        let app = App::new("my-app", agent).unwrap();
+
+        let runner = Runner::from_app(
+            app,
+            Some("override-name".to_string()),
+            Arc::new(InMemorySessionService::new()),
+        )
+        .unwrap();
+
+        assert_eq!(runner.app_name(), "override-name");
+    }
+
+    #[test]
+    fn from_app_leaves_configs_unset_when_the_app_has_none() {
+        let agent = BaseAgent::new("echo_agent", EchoBehavior).unwrap();
+        let app = App::new("my-app", agent).unwrap();
+
+        let runner = Runner::from_app(app, None, Arc::new(InMemorySessionService::new())).unwrap();
+
+        assert!(runner.context_cache_config().is_none());
+        assert!(runner.resumability_config().is_none());
+    }
+
+    #[rusty_tokio::test]
+    async fn from_app_drives_a_turn_like_any_other_runner() {
+        let agent = BaseAgent::new("echo_agent", EchoBehavior).unwrap();
+        let app = App::new("my-app", agent).unwrap();
+        let runner = Runner::from_app(app, None, Arc::new(InMemorySessionService::new()))
+            .unwrap()
+            .with_auto_create_session(true);
 
         let events = runner
             .run_async("user", "s1", Content::user_text("hi"))

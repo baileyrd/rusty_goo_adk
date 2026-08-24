@@ -22,6 +22,39 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `runners.py`: `Runner::from_app` (C0846, C0847, C0848, C0849, C0850)
+**2026-08-24** · (link added once this PR is opened)
+
+Wires the `App` model shipped last PR into `Runner`, additively.
+
+- **Added:** `adk_runners::Runner::from_app(app, app_name_override,
+  session_service) -> Result<Runner, PluginManagerError>` — the single
+  normalization path from a resolved `App` to a `Runner`. Derives
+  `context_cache_config`/`resumability_config` from the app (never
+  accepted as direct constructor arguments, matching the source) and
+  folds `app.plugins` into the registered plugin set via the existing
+  `Runner::with_plugin`, so a duplicate plugin name surfaces the same
+  error it would through that method directly. `app_name` defaults to
+  `app.name`; the override parameter matches the source's `app_name or
+  app.name`.
+- **Scope:** `Runner::new`'s already-shipped signature is untouched —
+  this is a second, additive constructor, not a breaking change to the
+  first.
+- **Closed as N/A:** C0847 (`_enforce_app_name_alignment`/
+  `_warn_uncached_agent_transfer`) and C0850 (the deprecated
+  `_validate_runner_params` back-compat wrapper) both depend on
+  `_infer_agent_origin` (C0851, already N/A — no Rust module-path
+  reflection) or on logging machinery not adopted in this port; C0848
+  (`_require_root_agent`) is N/A because `Runner::agent` is always a
+  concrete `BaseAgent` here, never a bare node.
+- **Corrected:** `runner.rs`'s own module doc previously claimed the
+  `App`-dependent rows were N/A "no `App` type exists here" — `App`
+  landed last PR (C0279/C0280); the doc now reflects that only the
+  agent-origin-reflection/back-compat pieces stay N/A.
+- **Scope:** no new dependency. 6 new tests.
+
+---
+
 ## PR #TBD — `apps/app.py`: `App` model (C0279, C0280)
 **2026-08-24** · (link added once this PR is opened)
 
