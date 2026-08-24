@@ -10,6 +10,11 @@ adk-platform = { path = "../adk-platform" }
 adk-errors = { path = "../adk-errors" }
 adk-events = { path = "../adk-events" }
 adk-genai = { path = "../adk-genai" }
+# `app_configs` (C0283/C0284) needs `legacy_feature_decorator::warn_experimental`
+# to wire the source's bare `@experimental` decorator (C0797, landed but
+# unwired until now). Zero-dependency leaf crate; no cycle (adk-features
+# depends on nothing).
+adk-features = { path = "../adk-features" }
 rusty_serde = { workspace = true }
 rusty_tokio = { workspace = true }
 rusty_err = { workspace = true }

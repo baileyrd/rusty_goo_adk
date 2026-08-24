@@ -22,6 +22,45 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `apps/_configs.py`: `ResumabilityConfig`/`EventsCompactionConfig`/`BaseEventsSummarizer` (C0283, C0284, C0285)
+**2026-08-24** · (link added once this PR is opened)
+
+Closes a real `InvocationContext` placeholder gap: `resumability_config`
+was a narrowed stub and `events_compaction_config` an opaque `Value` —
+both now hold the source's real config types.
+
+- **Added:** `adk_agents::app_configs::{ResumabilityConfig,
+  EventsCompactionConfig, EventsCompactionConfigError,
+  BaseEventsSummarizer}` (C0283/C0284/C0285 DONE).
+- **Ported:** `EventsCompactionConfig`'s full validator — both-or-neither
+  per trigger pair, at-least-one-trigger-mode, plus the `Field(gt=0)`/
+  `Field(ge=0)` constraints pydantic enforces ahead of it.
+- **Wired:** `adk_features::legacy_feature_decorator::warn_experimental`
+  (C0797's guard function, landed but unwired previously) — its first
+  real call site, firing from `ResumabilityConfig::new` and
+  `EventsCompactionConfig::validate`.
+- **Updated:** `InvocationContext::resumability_config`/
+  `::events_compaction_config` field types, plus every test call site in
+  `loop_agent.rs`/`parallel_agent.rs`/`sequential_agent.rs` that
+  constructed the old stub.
+- **Disclosed narrowing:** `summarizer: Optional[BaseEventsSummarizer]`
+  (an arbitrary, non-pydantic field in the source) becomes
+  `Option<Arc<dyn BaseEventsSummarizer>>`; `EventsCompactionConfig` has no
+  `Serialize`/`Deserialize` derive at all (a trait object has no wire
+  representation), with `Debug`/`Clone` implemented by hand. Nothing
+  reads into the compaction machinery's fields yet — the actual
+  compaction trigger logic (`LlmEventSummarizer`, C0286/C0287) is
+  LLM-blocked and still unported.
+- **Also fixed:** an intermittent test race in
+  `adk_tools::environment_simulation_config`'s tests (`TemporaryFeatureOverride`
+  mutating process-wide state across parallel test threads), serialized
+  with a local `TEST_LOCK` mutex.
+- **Scope:** one new dependency (`adk-features` for `adk-agents` — an
+  existing zero-dependency internal crate, new usage site, no cycle). 18
+  new tests.
+
+---
+
 ## PR #TBD — `tools/environment_simulation/`: config models + injection-only engine (C0486, C0487 partial, C0488 partial)
 **2026-08-24** · (link added once this PR is opened)
 

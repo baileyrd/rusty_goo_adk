@@ -11,12 +11,16 @@
 //! struct is deferred. C0066 is left `REQUIRED`, not `DONE`, for this
 //! reason — flagged, not silently dropped.
 //!
-//! **Adaptation**: `resumability_config`/`events_compaction_config` are
-//! `apps._configs` types (Phase 7). `events_compaction_config` is an opaque
-//! placeholder (nothing in this batch reads its fields); `resumability_config`
-//! is narrowed to just the one boolean field (`is_resumable`) this batch's
-//! logic (`populate_invocation_agent_states`) actually needs — see
-//! [`ResumabilityConfigStub`]'s doc.
+//! **`resumability_config`/`events_compaction_config`, now real types**:
+//! both are `apps._configs` types (Phase 7), ported in full in
+//! [`crate::app_configs`] (C0283-C0285) — `resumability_config` was a
+//! narrowed `ResumabilityConfigStub` and `events_compaction_config` an
+//! opaque `Value` placeholder until then; nothing in this crate reads
+//! into `EventsCompactionConfig`'s fields yet (the compaction machinery
+//! itself, `LlmEventSummarizer`/the actual compaction trigger logic in
+//! the runner/flow layer, is still unported and LLM-blocked — C0286/C0287),
+//! but both fields now hold the source's real config shape rather than a
+//! stand-in.
 //!
 //! **C0071 now complete**: `get_events`/`should_pause_invocation`/
 //! `find_matching_function_call`/`stamp_event_branch_context` all needed
@@ -39,6 +43,7 @@ use std::sync::{Arc, Mutex};
 use adk_events::Event;
 use rusty_serde::value::Value;
 
+use crate::app_configs::{EventsCompactionConfig, ResumabilityConfig};
 use crate::base_agent::BaseAgent;
 use crate::context_cache_config::ContextCacheConfig;
 use crate::run_config::RunConfig;
@@ -47,13 +52,6 @@ use crate::services::{
     SessionService,
 };
 use crate::session::Session;
-
-/// Narrowed placeholder for `apps._configs.ResumabilityConfig` (Phase 7) —
-/// see the module doc.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct ResumabilityConfigStub {
-    pub is_resumable: bool,
-}
 
 #[derive(Debug, rusty_err::Error)]
 pub enum InvocationContextError {
@@ -114,8 +112,8 @@ pub struct InvocationContext {
     pub end_invocation: bool,
 
     pub run_config: Option<RunConfig>,
-    pub resumability_config: Option<ResumabilityConfigStub>,
-    pub events_compaction_config: Option<Value>,
+    pub resumability_config: Option<ResumabilityConfig>,
+    pub events_compaction_config: Option<EventsCompactionConfig>,
     pub token_compaction_checked: bool,
 
     pub plugin_manager: PluginManager,
@@ -610,7 +608,7 @@ mod tests {
         event.actions.agent_state = Some(one_field_state());
         session.events.push(event);
         let mut ic = InvocationContextBuilder::new("inv-1", session).build();
-        ic.resumability_config = Some(ResumabilityConfigStub { is_resumable: true });
+        ic.resumability_config = Some(ResumabilityConfig { is_resumable: true });
         ic.populate_invocation_agent_states();
         assert_eq!(ic.agent_states.get("planner"), Some(&one_field_state()));
         assert_eq!(ic.end_of_agents.get("planner"), Some(&false));

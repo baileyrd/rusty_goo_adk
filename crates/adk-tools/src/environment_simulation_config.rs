@@ -257,6 +257,13 @@ impl From<FeatureNotEnabledError> for EnvironmentSimulationConfigError {
 mod tests {
     use super::*;
     use adk_features::feature_registry::TemporaryFeatureOverride;
+    use std::sync::Mutex as StdMutex;
+
+    // `TemporaryFeatureOverride` mutates process-wide state
+    // (`adk_features::feature_registry`'s override map); serialize every
+    // test in this module that touches `FeatureName::EnvironmentSimulation`
+    // so they don't race each other under the default parallel test runner.
+    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     fn error_config() -> InjectionConfig {
         InjectionConfig {
@@ -334,6 +341,7 @@ mod tests {
 
     #[test]
     fn environment_simulation_config_rejects_empty_tool_simulation_configs() {
+        let _lock = TEST_LOCK.lock().unwrap();
         let _guard = TemporaryFeatureOverride::new(FeatureName::EnvironmentSimulation, true);
         let config = EnvironmentSimulationConfig::default();
         assert!(config.validate().is_err());
@@ -341,6 +349,7 @@ mod tests {
 
     #[test]
     fn environment_simulation_config_rejects_duplicate_tool_names() {
+        let _lock = TEST_LOCK.lock().unwrap();
         let _guard = TemporaryFeatureOverride::new(FeatureName::EnvironmentSimulation, true);
         let tool_sim = ToolSimulationConfig {
             tool_name: "dup".to_string(),
@@ -359,6 +368,7 @@ mod tests {
 
     #[test]
     fn environment_simulation_config_rejects_disabled_feature() {
+        let _lock = TEST_LOCK.lock().unwrap();
         let _guard = TemporaryFeatureOverride::new(FeatureName::EnvironmentSimulation, false);
         let config = EnvironmentSimulationConfig {
             tool_simulation_configs: vec![ToolSimulationConfig {
@@ -376,6 +386,7 @@ mod tests {
 
     #[test]
     fn environment_simulation_config_accepts_a_valid_config() {
+        let _lock = TEST_LOCK.lock().unwrap();
         let _guard = TemporaryFeatureOverride::new(FeatureName::EnvironmentSimulation, true);
         let config = EnvironmentSimulationConfig {
             tool_simulation_configs: vec![ToolSimulationConfig {

@@ -305,7 +305,7 @@ mod tests {
 
         let mut ctx = parent_ctx();
         ctx.resumability_config =
-            Some(crate::invocation_context::ResumabilityConfigStub { is_resumable: true });
+            Some(crate::app_configs::ResumabilityConfig { is_resumable: true });
         ctx.agent = Some(seq.clone());
 
         let events = SequentialAgent.run_async_impl(&mut ctx).await.unwrap();
@@ -338,7 +338,7 @@ mod tests {
 
         let mut ctx = parent_ctx();
         ctx.resumability_config =
-            Some(crate::invocation_context::ResumabilityConfigStub { is_resumable: true });
+            Some(crate::app_configs::ResumabilityConfig { is_resumable: true });
         ctx.agent = Some(seq.clone());
         ctx.set_agent_state(
             "sequential",
