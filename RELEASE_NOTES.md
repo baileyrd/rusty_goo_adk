@@ -22,6 +22,47 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `InMemoryArtifactService`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_agents::in_memory_artifact_service::InMemoryArtifactService`
+  (C0265) — the first real `ArtifactService` implementation: path-keyed
+  `Vec<ArtifactEntry>` storage (version = list length at save time,
+  monotonic per path), the `"user:"`-namespace vs. session-scoped path
+  split, MIME-type detection (inline data/text/file-reference branches,
+  including the artifact-reference-URI resolve-and-validate-scope
+  recursion via `artifact_util`, C0262-C0264 — its first real caller),
+  the empty-artifact sentinel checks on load, and the `memory://`
+  canonical URI scheme.
+- **Also:** widens `adk_agents::services::ArtifactVersion` from a
+  `Value` placeholder to a real struct (same "widen from placeholder"
+  precedent as `AuthCredential`/`MemoryEntry`) and extends
+  `ArtifactService` with `delete_artifact`/`list_versions`/
+  `list_artifact_versions` to match the source's full abstract
+  interface — the pre-existing `FakeArtifactService` test double in
+  `context.rs` updated to match.
+- **Disclosed, predating this batch:** the trait's `session_id` is a
+  required `&str` on every method, not the source's `Optional[str]` —
+  so the source's "no session in play" branches have no representable
+  path through this trait signature; `list_artifact_keys` always
+  returns the combined session+user listing. `artifact`/return values
+  stay opaque `Value` at the trait boundary rather than a typed
+  `Part`; this service deserializes/reserializes internally, the same
+  pattern `ExampleTool`/`PreloadMemoryTool`/`LoadArtifactsTool` use.
+- **Disclosed:** version lookup only supports `None` (latest) or a
+  non-negative index, not the source's Python-list negative indexing —
+  unreachable in practice since `save_artifact` only ever returns
+  non-negative version numbers.
+- **Disclosed:** where the source raises `InputValidationError`/
+  `ValueError` (invalid path segment, unsupported artifact type,
+  invalid/out-of-scope artifact reference), this port panics — the
+  closest Rust analog to an uncaught exception through this trait's
+  non-`Result` methods, the same pattern
+  `InMemoryMemoryService::add_memory` already disclosed.
+- 12 new tests.
+
+---
+
 ## PR #TBD — `artifact_util` (artifact URI scheme + path safety)
 **2026-08-24** · (link added once this PR is opened)
 

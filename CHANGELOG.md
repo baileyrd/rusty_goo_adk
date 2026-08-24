@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::in_memory_artifact_service::InMemoryArtifactService`
+  (Phase 6, C0265) — the first real `ArtifactService` implementation:
+  path-keyed `Vec<ArtifactEntry>` storage (version = list length at
+  save time, monotonic per path), the `"user:"`-namespace vs.
+  session-scoped path split, MIME-type detection including the
+  artifact-reference-URI resolve-and-validate-scope recursion via
+  `artifact_util` (C0262-C0264, its first real caller), empty-artifact
+  sentinel checks on load, and the `memory://` canonical URI scheme.
+  Widens `adk_agents::services::ArtifactVersion` from a `Value`
+  placeholder to a real struct and extends `ArtifactService` with
+  `delete_artifact`/`list_versions`/`list_artifact_versions` to match
+  the source's full abstract interface. Disclosed, predating this
+  batch: the trait's `session_id` is a required `&str` everywhere (not
+  `Optional[str]`), so `list_artifact_keys` always returns the
+  combined session+user listing; `artifact`/return values stay opaque
+  `Value` at the trait boundary, deserialized/reserialized internally.
+  Where the source raises `InputValidationError`/`ValueError`, this
+  port panics — the closest analog to an uncaught exception through
+  this trait's non-`Result` methods. 12 new tests.
 - `adk-agents::artifact_util::{ParsedArtifactUri, parse_artifact_uri,
   get_artifact_uri, is_artifact_ref, validate_artifact_reference_scope,
   validate_path_segment}` (Phase 6, C0262/C0263/C0264) — the canonical
