@@ -119,6 +119,22 @@
 //! C0914's `run_config.get_session_config` forwarding is N/A — this
 //! port's `SessionService::get_session` has no config parameter).
 //!
+//! **Invocation-context factory** (C0918/C0919): [`InvocationContextBuilder`]
+//! (`adk-agents`) already plays the role of the source's
+//! `_create_invocation_context`/`_new_invocation_context` — a plain
+//! builder rather than an overridable factory method, since this port has
+//! no subclassing to override (C0918: `_create_invocation_context`'s only
+//! purpose is being an override point). [`Runner::run_async_with_config`]
+//! now also patches `context_cache_config`/`resumability_config`/
+//! `events_compaction_config` onto the built context (previously missing
+//! — these lived on `Runner` but never reached the `InvocationContext`
+//! the agent/callbacks actually saw). **Disclosed narrowing**: the
+//! source's `support_cfc` (Compositional Function Calling) branch —
+//! validating the resolved model name and force-installing a
+//! `BuiltInCodeExecutor` on the agent — has nothing to port onto yet:
+//! `LlmAgent.code_executor` is still an opaque `Value` placeholder
+//! (C0088), the same architecture-investment blocker as C0092/C0429.
+//!
 //! **Not ported this batch**: `_find_agent_to_run` (C0907-C0910, picks up
 //! a resumed multi-turn conversation's last-active agent — needs
 //! resumability, always false here); `_resolve_invocation_id` (C0855,
@@ -602,6 +618,14 @@ impl Runner {
         invocation_context.artifact_service = self.artifact_service.clone();
         invocation_context.memory_service = self.memory_service.clone();
         invocation_context.credential_service = self.credential_service.clone();
+        // C0918/C0919: `_new_invocation_context` also wires
+        // `context_cache_config`/`events_compaction_config`/
+        // `resumability_config` onto the context it assembles —
+        // previously missing here, so the agent/callbacks never saw
+        // them even though `Runner` already held all three.
+        invocation_context.context_cache_config = self.context_cache_config.clone();
+        invocation_context.resumability_config = self.resumability_config;
+        invocation_context.events_compaction_config = self.events_compaction_config.clone();
 
         // C0897/`_handle_new_message`: on_user_message_callback may
         // replace the incoming message before anything else sees it.
@@ -921,6 +945,7 @@ mod tests {
     use super::*;
     use adk_agents::services::InMemorySessionService;
     use adk_genai::content::Part;
+    use std::sync::Mutex;
 
     struct EchoBehavior;
 
@@ -966,6 +991,56 @@ mod tests {
         let agent = BaseAgent::new("echo_agent", EchoBehavior).unwrap();
         Runner::new("app", agent, Arc::new(InMemorySessionService::new()))
             .with_auto_create_session(auto_create_session)
+    }
+
+    /// C0918/C0919 test helper: captures the three configs a driven
+    /// `InvocationContext` carries, so a test can assert `Runner`'s own
+    /// configuration actually reached the context the agent ran with.
+    #[derive(Default)]
+    struct CapturedConfigs {
+        context_cache_config: Option<ContextCacheConfig>,
+        resumability_config: Option<ResumabilityConfig>,
+        events_compaction_config: Option<EventsCompactionConfig>,
+    }
+
+    struct ConfigCapturingBehavior {
+        captured: Arc<Mutex<CapturedConfigs>>,
+    }
+
+    impl adk_agents::base_agent::AgentBehavior for ConfigCapturingBehavior {
+        fn run_async_impl<'a>(
+            &'a self,
+            ctx: &'a mut adk_agents::invocation_context::InvocationContext,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<Vec<Event>, adk_agents::base_agent::AgentRunError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let mut captured = self.captured.lock().unwrap();
+                captured.context_cache_config = ctx.context_cache_config.clone();
+                captured.resumability_config = ctx.resumability_config;
+                captured.events_compaction_config = ctx.events_compaction_config.clone();
+                Ok(Vec::new())
+            })
+        }
+
+        fn run_live_impl<'a>(
+            &'a self,
+            _ctx: &'a mut adk_agents::invocation_context::InvocationContext,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<Vec<Event>, adk_agents::base_agent::AgentRunError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Ok(Vec::new()) })
+        }
     }
 
     #[rusty_tokio::test]
@@ -1088,6 +1163,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
+    }
+
+    #[rusty_tokio::test]
+    async fn run_async_wires_the_runners_configs_onto_the_invocation_context() {
+        // C0918/C0919: `context_cache_config`/`resumability_config`/
+        // `events_compaction_config` must reach the `InvocationContext`
+        // the agent actually runs with, not just live on `Runner` itself.
+        let captured = Arc::new(Mutex::new(CapturedConfigs::default()));
+        let agent = BaseAgent::new(
+            "capturing_agent",
+            ConfigCapturingBehavior {
+                captured: captured.clone(),
+            },
+        )
+        .unwrap();
+        let app = App::new("my-app", agent)
+            .unwrap()
+            .with_context_cache_config(ContextCacheConfig::default())
+            .with_resumability_config(ResumabilityConfig::new(true))
+            .with_events_compaction_config(EventsCompactionConfig {
+                token_threshold: Some(42),
+                ..Default::default()
+            });
+        let runner = Runner::from_app(app, None, Arc::new(InMemorySessionService::new()))
+            .unwrap()
+            .with_auto_create_session(true);
+
+        runner
+            .run_async("user", "s1", Content::user_text("hi"))
+            .await
+            .unwrap();
+
+        let captured = captured.lock().unwrap();
+        assert!(captured.context_cache_config.is_some());
+        assert!(captured.resumability_config.unwrap().is_resumable);
+        assert_eq!(
+            captured
+                .events_compaction_config
+                .as_ref()
+                .unwrap()
+                .token_threshold,
+            Some(42)
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn run_async_leaves_unset_configs_absent_on_the_invocation_context() {
+        let captured = Arc::new(Mutex::new(CapturedConfigs::default()));
+        let agent = BaseAgent::new(
+            "capturing_agent",
+            ConfigCapturingBehavior {
+                captured: captured.clone(),
+            },
+        )
+        .unwrap();
+        let runner = Runner::new("app", agent, Arc::new(InMemorySessionService::new()))
+            .with_auto_create_session(true);
+
+        runner
+            .run_async("user", "s1", Content::user_text("hi"))
+            .await
+            .unwrap();
+
+        let captured = captured.lock().unwrap();
+        assert!(captured.context_cache_config.is_none());
+        assert!(captured.resumability_config.is_none());
+        assert!(captured.events_compaction_config.is_none());
     }
 
     #[rusty_tokio::test]

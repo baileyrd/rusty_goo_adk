@@ -22,6 +22,37 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `runners.py`: invocation-context config wiring (C0918 N/A, C0919 partial)
+**2026-08-24** · (link added once this PR is opened)
+
+Closes a real gap found while scoping the next batch: `Runner` already
+held `context_cache_config`/`resumability_config`/`events_compaction_config`,
+but `run_async_with_config` never patched them onto the
+`InvocationContext` it built — so the agent, plugin callbacks, and every
+other consumer of the context never actually saw them.
+
+- **Fixed:** `adk_runners::Runner::run_async_with_config` now also
+  copies `context_cache_config`/`resumability_config`/
+  `events_compaction_config` onto the built `InvocationContext`,
+  alongside the four services it already patched.
+- **Confirmed, not new code:** `adk_agents::invocation_context::InvocationContextBuilder`
+  already plays the role of the source's `_create_invocation_context`
+  factory (C0918) — this port has no subclassing to override, which is
+  that factory's only documented purpose in the source, so there's
+  nothing left to port.
+- **Disclosed narrowing:** the source's `support_cfc` (Compositional
+  Function Calling, experimental) branch — validating the resolved
+  model name and force-installing a `BuiltInCodeExecutor` on the agent
+  — has nothing to port onto: `LlmAgent.code_executor` is still an
+  opaque `Value` placeholder (C0088), the same architecture-investment
+  blocker already disclosed for C0092/C0429 (`GoogleSearchAgentTool`/
+  `canonical_tools`).
+- **Scope:** 2 new tests, via a new `ConfigCapturingBehavior` test
+  double that captures the configs an `InvocationContext` actually
+  carried into an agent run.
+
+---
+
 ## PR #TBD — `runners.py`: `Runner::run_debug` (C0911, C0912, C0913, C0914 N/A)
 **2026-08-24** · (link added once this PR is opened)
 

@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-runners::Runner::run_async_with_config` (C0918 N/A-by-existing-design,
+  C0919 partial DONE) — now also patches `context_cache_config`/
+  `resumability_config`/`events_compaction_config` onto the
+  `InvocationContext` it builds; previously these three configs lived on
+  `Runner` but were never wired onto the context the agent/callbacks
+  actually ran with. `adk-agents::invocation_context::InvocationContextBuilder`
+  is confirmed to already play the role of the source's
+  `_create_invocation_context` factory (C0918) — no Rust subclassing to
+  override, so nothing further to port. Not ported: the `support_cfc`
+  (Compositional Function Calling) branch — `LlmAgent.code_executor` is
+  still an opaque `Value` placeholder (C0088), the same
+  architecture-investment blocker as C0092/C0429. 2 new tests, using a new
+  `ConfigCapturingBehavior` test double.
+### Added
 - `adk-runners::Runner::{run_debug, run_debug_with_config}` (C0911/C0912/C0913
   DONE, C0914 N/A) — a debugging/experimentation convenience ported from
   `runners.py`'s `run_debug`, plus a new `DebugMessages` type normalizing a
