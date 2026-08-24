@@ -22,6 +22,75 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `skills/`: `Frontmatter`/`Resources`/`Script`/`Skill` data models (C0393, C0394)
+**2026-08-24** · (link added once this PR is opened)
+
+The `skills/models.py` data models: L1 discovery metadata
+(`Frontmatter`), L3 on-demand content (`Resources`/`Script`), and the
+combined `Skill` type. This is the second of three `skills/` pieces —
+`format_skills_as_xml` (C0400) landed in PR #81; `SkillRegistry`/
+`load_skill_from_dir` (C0395/C0396) are still open, the latter blocked
+on a YAML crate decision.
+
+- **Added:** `adk_tools::skills_models::Frontmatter` (C0393) — `name`
+  (kebab-case by default, or kebab-or-snake-case once
+  `FeatureName::SnakeCaseSkillName` is enabled, ≤64 chars, NFKC-
+  normalized first), `description` (required, ≤1024 chars),
+  `license`, `compatibility` (≤500 chars), `allowed_tools` (accepts
+  both `allowed_tools` and the YAML-friendly `allowed-tools` wire
+  names on the way in, always serializes as `allowed-tools`), and
+  `metadata` (validates `adk_additional_tools` is a list and
+  `adk_inject_state` is a bool when present). Cross-checked the
+  64-char-name, default-snake_case-rejected, and `allowed-tools`
+  alias/dump behavior directly against a real `pydantic`-backed
+  `Frontmatter` instantiated from the source — messages and behavior
+  match exactly.
+- **Added:** `adk_tools::skills_models::{Script, Resources}` (C0394)
+  — `Script`'s `Display` impl (mirrors `__str__`, returning the raw
+  script source) and `Resources`'s six accessor methods
+  (`get_reference`/`get_asset`/`get_script`/`list_references`/
+  `list_assets`/`list_scripts`) over its `references`/`assets`/
+  `scripts` maps.
+- **Added:** `adk_tools::skills_models::Skill` (C0394) — combines
+  `frontmatter`/`instructions`/`resources`, with `name()`/
+  `description()` delegating to `self.frontmatter`, and a
+  `pub(crate)` `_uri` provenance field (`uri()`/`set_uri()`
+  accessors) matching the source's `PrivateAttr`-style privacy.
+- **Adaptation, disclosed:** the source's `@field_validator`s
+  (pydantic) run automatically on construction, including
+  deserialization. This port keeps `Frontmatter`'s fields plainly
+  `pub`/deserializable and exposes the checks as an explicit
+  `Frontmatter::validate()` — the same "plain fields + explicit
+  `validate()`" pattern already established for
+  `adk_eval::eval_case::EvalCase`. NFKC normalization is a separate
+  `normalize_name()` step (call before `validate()`) rather than
+  folded into validation itself, since a Rust validator can't rewrite
+  the struct it borrows the way a pydantic validator mutates and
+  returns the field value.
+- **Disclosed narrowing:** `Frontmatter`'s `extra="allow"` narrows the
+  same way `adk_eval::eval_case::SessionInput` already discloses — an
+  unrecognized inbound field no longer rejects the payload, but isn't
+  captured anywhere either (silently dropped, not preserved).
+  `Resources`'s `dict[str, str | bytes]` values (`references`/
+  `assets`) narrow to `String` only — no `str`-or-`bytes` union
+  representation exists yet in this codebase, and every other
+  content field ported so far (`Script.src`, `Skill.instructions`) is
+  text; widen once a caller actually loads a binary resource.
+- **New dependencies:** `adk-features` (an existing internal
+  workspace crate, new usage site — `Frontmatter::validate` needs
+  `FeatureName::SnakeCaseSkillName`/`is_feature_enabled` to branch its
+  name pattern the way the source does) and `unicode-normalization`
+  (NFKC has no workspace-internal equivalent; same "small,
+  well-audited, near-zero-transitive-dependency" bar already used to
+  adopt `adk-eval`'s `unicode-general-category` — one dependency of
+  its own, `tinyvec`, and the same `unicode-rs` maintainers).
+- 19 new tests in `adk-tools::skills_models`, including one
+  demonstrating NFKC normalization on a fullwidth-hyphen name and one
+  demonstrating snake_case acceptance once the feature flag is
+  enabled via `TemporaryFeatureOverride`.
+
+---
+
 ## PR #TBD — `features/`: feature-gating decorators as guard functions (C0647 partial, C0797 partial)
 **2026-08-24** · (link added once this PR is opened)
 

@@ -49,6 +49,7 @@ pub mod preload_memory_tool;
 pub mod remote_mcp_server;
 pub mod request_input_tool;
 pub mod set_model_response_tool;
+pub mod skills_models;
 pub mod skills_prompt;
 pub mod tool_confirmation;
 pub mod tool_context;

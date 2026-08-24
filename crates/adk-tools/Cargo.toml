@@ -31,3 +31,17 @@ rusty_tokio = { workspace = true }
 reqwest = { workspace = true }
 url = "2"
 regex = { workspace = true }
+# `skills_models` (C0393) needs `FeatureName::SnakeCaseSkillName`/
+# `is_feature_enabled` to branch `Frontmatter::validate_name`'s pattern the
+# same way the source does -- an already-existing internal workspace crate,
+# same "new usage site of an already-vetted dependency" bar as this
+# crate's other entries above, not a new sovereignty decision.
+adk-features = { path = "../adk-features" }
+# `Frontmatter::validate_name` (C0393) NFKC-normalizes `name` before
+# validating it, matching the source's `unicodedata.normalize("NFKC", v)`.
+# No workspace-internal equivalent exists. `unicode-normalization` is the
+# standard `unicode-rs` crate for this (same GitHub org/maintainers as
+# `unicode-general-category`, already adopted in `adk-eval` under this
+# same "small, well-audited, near-zero-transitive-dependency" bar), with a
+# single dependency of its own (`tinyvec`).
+unicode-normalization = "0.1"

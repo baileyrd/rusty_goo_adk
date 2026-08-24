@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::skills_models::{Frontmatter, Script, Resources, Skill}`
+  (C0393 DONE, C0394 DONE) — the `skills/models.py` data models:
+  `Frontmatter`'s `name`/`description`/`license`/`compatibility`/
+  `allowed_tools`/`metadata` fields with NFKC-normalized, kebab/
+  snake-case `name` validation (branching on
+  `FeatureName::SnakeCaseSkillName`, same 64/1024/500-char limits and
+  `adk_additional_tools`/`adk_inject_state` metadata checks as the
+  source), `Script`'s `Display` impl, `Resources`'s six
+  get/list accessors, and `Skill`'s `name()`/`description()`
+  delegation plus a `pub(crate)` `_uri` provenance field. Cross-checked
+  the 64-char, snake_case-rejected-by-default, and `allowed-tools`
+  alias/dump behavior directly against a real `pydantic`-backed
+  `Frontmatter` from the source. New dependencies: `adk-features`
+  (existing internal crate, new usage site) and `unicode-normalization`
+  (small, well-audited, near-zero-transitive-deps, same bar as
+  `adk-eval`'s `unicode-general-category`). 19 new tests.
 - `adk-features::feature_decorator::check_feature_enabled` (C0647
   partial) and `adk-features::legacy_feature_decorator::{check_wip_or_bypass,
   warn_experimental}` (C0797 partial) — the `experimental`/
