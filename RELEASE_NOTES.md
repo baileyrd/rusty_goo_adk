@@ -22,6 +22,51 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `runners.py`: `Runner::run_debug` (C0911, C0912, C0913, C0914 N/A)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the debugging/experimentation convenience method developers use to
+quickly exercise an agent without dealing with session management,
+content formatting, or event streaming directly.
+
+- **Added:** `adk_runners::Runner::run_debug(user_messages)` — defaults
+  `user_id`/`session_id` to the source's own `"debug_user_id"`/
+  `"debug_session_id"` literals (reusing them across calls continues the
+  same debug conversation, intentional and documented) and every other
+  parameter to the source's own defaults.
+- **Added:** `adk_runners::Runner::run_debug_with_config(user_messages,
+  user_id, session_id, run_config, quiet, verbose)` — the full-control
+  form. Rust has no keyword-argument defaults, so the source's single
+  method with defaulted kwargs splits into two, the same split
+  `run_async`/`run_async_with_config` already established.
+- **Added:** `adk_runners::runner::DebugMessages` — normalizes a bare
+  `&str`/`String` or a `Vec<&str>`/`Vec<String>` to the message list,
+  mirroring the source's `str | list[str]` parameter.
+- **Behavior:** session lookup is unconditional get-or-create — it
+  bypasses `Runner::with_auto_create_session` entirely, unlike
+  `run_async`'s own session handling (C0912). Drives
+  `run_async_with_config` once per message and prints each produced
+  event via `adk_events::debug_output::print_event` (already DONE)
+  unless `quiet`, returning the full flat event list across *every*
+  message, not just the last (C0913).
+- **Disclosed narrowing:** the source also logs `"Created new
+  session"`/`"Continue session"`/`"User > %s"` via Python's `logging`
+  module at various points; this port has no logging framework adopted
+  anywhere in this crate, so those log lines have no destination —
+  only the actual stdout output (`print_event`) is preserved. C0914
+  (forwarding `run_config.get_session_config`) is N/A: this port's
+  `SessionService::get_session` has no config parameter to forward one
+  to (an already-disclosed narrowing from `Runner::get_or_create_session`).
+- **Housekeeping:** corrected two stale manifest/doc notes touched while
+  in this file — C0924's evidence understated `Runner::close` (it
+  already closes both the plugin manager and the session service, not
+  just the session service); C0925 (`__aenter__`/`__aexit__`) is now
+  disclosed N/A, since Rust has no async-context-manager protocol and
+  `Drop` cannot run an async close.
+- **Scope:** 6 new tests.
+
+---
+
 ## PR #TBD — `apps/compaction.py`/`runners.py`: post-invocation compaction trigger (C0293, C0871, C0872)
 **2026-08-24** · (link added once this PR is opened)
 
