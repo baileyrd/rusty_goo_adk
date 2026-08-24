@@ -43,6 +43,22 @@
 //! fields" pattern as `ExtendedOAuth2`). `LlmAgent` has no `Clone`/
 //! `Debug`, so `BaseAgentWithScores::optimized_agent` holds an `Arc`
 //! handle rather than an owned value. No new dependency.
+//!
+//! **Telemetry per-request config batch**: [`telemetry_context`]
+//! (`ContentCapturingMode`/`TelemetryConfig`/`SemconvStabilityOptIn`,
+//! C0651/C0652, plus 5 of C0670's 6 env-var-name constants) and
+//! [`schema_version`] (`resolve_schema_version`, C0679, plus its own
+//! `ADK_TELEMETRY_SCHEMA_VERSION_OPT_IN` constant closing out C0670, and
+//! `GOOGLE_CLOUD_AGENT_ENGINE_*`, C0671) — ported from `telemetry
+//! /context.py`/`telemetry/_schema_version.py`. `RunConfig::telemetry`
+//! widens from a `Value` placeholder to the real `TelemetryConfig` (same
+//! "widen a placeholder once a real consumer needs the structure"
+//! precedent already used repeatedly this port). Pure env-var-precedence
+//! logic only — no OTel SDK/span/tracer machinery, that being a much
+//! larger, still-unported surface (see `telemetry_context`'s own doc).
+//! C0671's four Agent-Engine constants beyond `GOOGLE_CLOUD_AGENT_ENGINE_ID`
+//! have no consumer yet either — declared for the next batch that needs
+//! them. No new dependency.
 
 pub mod active_streaming_tool;
 pub mod agent_optimizer;
@@ -70,6 +86,7 @@ pub mod parallel_agent;
 pub mod readonly_context;
 pub mod run_config;
 pub mod sampler;
+pub mod schema_version;
 pub mod sequential_agent;
 pub mod services;
 pub mod session;
@@ -77,4 +94,5 @@ pub mod session_util;
 pub mod state;
 pub mod streaming_mode;
 pub mod task_models;
+pub mod telemetry_context;
 pub mod transcription_entry;

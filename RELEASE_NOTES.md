@@ -22,6 +22,32 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `telemetry/`: per-request config — `TelemetryConfig`/`resolve_schema_version` (C0651, C0652, C0670, C0671, C0679)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports `telemetry/context.py`/`telemetry/_schema_version.py`'s pure
+env-var-precedence logic. No OTel SDK/span/tracer machinery — that's a
+much larger, still-unported surface; this batch is the resolution
+logic a caller's `RunConfig` carries and how it resolves against env
+vars.
+
+- **Added:** `adk_agents::telemetry_context::{ContentCapturingMode,
+  TelemetryConfig, SemconvStabilityOptIn}` (C0651/C0652 DONE).
+- **Added:** `adk_agents::schema_version::resolve_schema_version`
+  (C0679 DONE).
+- **Closed:** C0670 (telemetry config env-var names) and C0671
+  (Agent-Engine env-var names) as a side effect — all ported as real,
+  actually-declared `pub const`s rather than just documented strings.
+- **Changed:** `RunConfig::telemetry` widens from a bare `Value`
+  placeholder to the real `TelemetryConfig`.
+- **Fixed (manifest hygiene, no new code):** C0505 and C0798 were both
+  already fully covered by earlier merged work (C0504's `auth_tool.rs`,
+  C0942's `telemetry_config.rs`) but were never cross-linked and still
+  read `REQUIRED`. Both now point at their real evidence.
+- **Scope:** no new dependency. 23 new tests.
+
+---
+
 ## PR #TBD — `optimization/`: `AgentOptimizer`/`Sampler`/data types (C0636, C0637)
 **2026-08-24** · (link added once this PR is opened)
 
