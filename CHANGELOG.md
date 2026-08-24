@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::parallel_agent::ParallelAgent` (Phase 7 batch 3, C0336,
+  partial) — runs its sub-agents with genuine concurrency
+  (`rusty_tokio::spawn`, one task per sub-agent), each in its own
+  isolated branch (`BranchPath::create_sub_branch`). Adaptation,
+  disclosed at length in the module doc: since `AgentBehavior` returns
+  a fully-collected `Vec<Event>` rather than a live stream, there's no
+  partial result to cancel mid-flight, so `escalate`-triggered early
+  cancellation of still-running siblings isn't implemented (a sibling
+  already in flight finishes normally). Each sub-agent's `state_delta`
+  is applied onto the parent's `ctx.session.state` post-hoc (same fix
+  as `SequentialAgent`) to restore cross-branch state visibility, since
+  this port's `InvocationContext::clone()` is a real deep clone unlike
+  the source's shallow `model_copy()`. 7 new tests.
 - `adk-agents::sequential_agent::SequentialAgent` (Phase 7 batch 2,
   C0335, partial) — a `BaseAgent`-pluggable `AgentBehavior` running its
   sub-agents in order, with resumability (start-index resumption,

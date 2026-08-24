@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 7 batch 3: `ParallelAgent`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_agents::parallel_agent::ParallelAgent` (C0336,
+  partial) — a `BaseAgent`-pluggable `AgentBehavior` running its
+  sub-agents with genuine concurrency, each in its own isolated branch
+  (`BranchPath::create_sub_branch`, already built for a prior batch).
+  Resumability mirrors `SequentialAgent`'s: an is-resumable-only start
+  marker, a skip for any sub-agent already marked finished in a
+  previous (paused) run, and a final end-of-agent marker.
+- **Adaptation, disclosed at length in the module doc:** the source's
+  `_merge_agent_run` merges sub-agent event *streams* through a queue
+  with per-event backpressure, letting it cancel remaining sub-agents
+  the instant one escalates. This port's `AgentBehavior` returns a
+  fully-collected `Vec<Event>` per run (already disclosed in
+  `base_agent.rs`), so there is no partial result to race against or
+  cancel mid-flight — sub-agents still run with real concurrency (via
+  `rusty_tokio::spawn`), but escalate detection happens only after
+  every included sub-agent has already run to completion, and a
+  sibling already mid-flight when one escalates is not cancelled. Both
+  are direct, disclosed consequences of the earlier streaming-vs-`Vec`
+  decision, not a new gap.
+- **Adaptation, disclosed at length in the module doc:** the source's
+  per-sub-agent context copy is shallow, so `agent_states`/
+  `end_of_agents`/session state stay the same shared dicts across every
+  branch and the parent — a sub-agent marking itself done is instantly
+  visible to the parent. This port's `InvocationContext::clone()` is a
+  real deep clone (the same already-disclosed departure
+  `SequentialAgent` has), so nothing a sub-agent's own branch mutates
+  reaches the parent automatically. Every produced event's
+  `state_delta` is applied onto `ctx.session.state` post-hoc to restore
+  cross-branch visibility. Full nested-resumability propagation isn't
+  implemented — "all sub-agents finished" is derived from this turn
+  completing without a pause rather than replaying each sub-agent's own
+  nested agent-state events; correct for the common case, narrower for
+  an independently-paused nested sub-agent tree.
+- **Not ported:** `ParallelAgentConfig`/YAML config loading (C0338,
+  needs the config-resolution pipeline C0348 discloses as unbuilt).
+  `_run_live_impl` matches the source exactly (raises
+  `NotImplementedError` — never implemented upstream either).
+- 7 new tests (`adk-agents`, 143 total). Full workspace gate green.
+
 ## PR #TBD — Phase 7 batch 2: `SequentialAgent`
 **2026-08-24** · (link added once this PR is opened)
 
