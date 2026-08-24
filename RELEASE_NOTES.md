@@ -22,6 +22,37 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `LoadMcpResourceTool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::load_mcp_resource_tool::{LoadMcpResourceTool,
+  McpResourceProvider}` (C0426, partial) — the full
+  list→instruction-inject→function-response-detect→per-resource-read→
+  append flow, reusing `load_artifacts_tool::maybe_base64_to_bytes`
+  (C0425) for the same decode-with-placeholder-fallback shape the
+  source's `_mcp_content_to_part` uses.
+- **Disclosed narrowing:** no real `McpToolset` exists yet — the
+  actual MCP client (stdio/SSE/streamable-HTTP transport) is its own,
+  much larger capability (C0540-C0542), not built in this port. This
+  batch defines a minimal `McpResourceProvider` trait carrying just
+  the two operations this tool actually calls
+  (`list_resources`/`read_resource`) — the same "placeholder trait,
+  forward-referencing a not-yet-built phase" pattern
+  `adk-agents::services` already uses for `MemoryService`/
+  `ArtifactService`, so `LoadMcpResourceTool` itself is fully real and
+  tested against a stub provider even though no real MCP client
+  exists yet to plug into it.
+- **Bugfix, shared with C0425:** refined `maybe_base64_to_bytes` — a
+  non-empty input with no recognizable base64 characters at all
+  previously decoded to a silent empty byte vector rather than
+  signaling failure (the lenient URL-safe fallback pass never
+  early-returns `None` by construction). It now correctly reports a
+  decode failure in that case, matching the source's actual intent
+  even though Python's own lenient `urlsafe_b64decode` fallback has
+  the identical latent quirk. This makes the "could not be decoded"
+  placeholder path genuinely reachable rather than dead code.
+- 7 new tests.
+
 ## PR #TBD — `load_web_page`
 **2026-08-24** · (link added once this PR is opened)
 

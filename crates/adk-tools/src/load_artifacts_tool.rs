@@ -99,8 +99,25 @@ fn base64_value_urlsafe(c: u8) -> Option<u8> {
 /// first (rejecting any non-alphabet/non-padding byte, matching
 /// `base64.b64decode(..., validate=True)`), then falls back to a lenient
 /// URL-safe decode (skipping unrecognized bytes) — see the module doc.
-fn maybe_base64_to_bytes(data: &str) -> Option<Vec<u8>> {
-    decode_base64(data, false).or_else(|| decode_base64(data, true))
+/// Reused by `load_mcp_resource_tool.rs` for the same decode shape.
+///
+/// Adaptation: the lenient fallback pass, by construction, never
+/// early-returns `None` — it just skips bytes outside its alphabet, the
+/// same "silently discard invalid characters" default Python's own
+/// `base64.urlsafe_b64decode` (called without `validate=True`) has. A
+/// non-empty input with *no* recognizable base64 characters at all would
+/// therefore decode to an empty, useless byte vector rather than
+/// signaling failure; this port treats that specific case (empty result
+/// from non-empty input) as a decode failure instead, so a genuinely
+/// undecodable string reaches the caller's `None` fallback path rather
+/// than silently becoming zero bytes.
+pub(crate) fn maybe_base64_to_bytes(data: &str) -> Option<Vec<u8>> {
+    let result = decode_base64(data, false).or_else(|| decode_base64(data, true))?;
+    if result.is_empty() && !data.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 fn decode_base64(data: &str, lenient_urlsafe: bool) -> Option<Vec<u8>> {
