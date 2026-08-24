@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- Starts `Runner` (`runners.py`, C0833-C0926):
+  `adk-agents::services::SessionService` upgraded from an empty
+  marker trait to a real (if narrowed) port of `BaseSessionService`
+  (C0206 partial) — `create_session`/`get_session`/`list_sessions`/
+  `delete_session`, plus a concrete `append_event` default (temp-state
+  apply/trim, session-state update) and a no-op `flush`. Object-safe
+  via a boxed-future method pattern (mirrors
+  `adk_tools::base_tool::BaseTool`), since `InvocationContext` stores
+  it as `Arc<dyn SessionService>`. Adds `InMemorySessionService`
+  (C0211 partial, C0213 done): nested-map storage behind a `Mutex`,
+  with a real `append_event` override that dedups a re-delivered event
+  against the canonical stored session and mirrors the appended
+  event/state back onto it (since `get_session`/`create_session` hand
+  callers their own clone). Narrowed, disclosed: no app:/user:
+  state-prefix scoping or `get_user_state` (C0209/C0214, need their
+  own architecture); no `last_update_time`-based `list_sessions`
+  ordering or `StaleSessionError` (no such field on the placeholder
+  `Session` yet); no `GetSessionConfig` event-trimming
+  (`RunConfig.get_session_config` is still an opaque placeholder). 17
+  new tests. Full workspace gate green.
 - `adk-tools`: `FunctionTool` (Phase 8 batch 3, C0404 partial, C0405
   done) — wraps a Rust closure as a `BaseTool`. Since Rust has no
   runtime function-signature reflection, `FunctionTool::new` takes an

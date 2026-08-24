@@ -43,7 +43,7 @@ use crate::base_agent::BaseAgent;
 use crate::context_cache_config::ContextCacheConfig;
 use crate::run_config::RunConfig;
 use crate::services::{
-    ArtifactService, AuthCredential, CredentialService, MemoryService, PluginManager,
+    ArtifactService, AuthCredential, BoxFuture, CredentialService, MemoryService, PluginManager,
     SessionService,
 };
 use crate::session::Session;
@@ -379,7 +379,51 @@ pub struct InvocationContextBuilder {
 }
 
 struct NoopSessionService;
-impl SessionService for NoopSessionService {}
+impl SessionService for NoopSessionService {
+    fn create_session<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: &'a str,
+        state: Option<BTreeMap<String, Value>>,
+        session_id: Option<String>,
+    ) -> BoxFuture<'a, Result<Session, adk_errors::already_exists::AlreadyExistsError>> {
+        Box::pin(async move {
+            Ok(Session {
+                id: session_id.unwrap_or_default(),
+                app_name: app_name.to_string(),
+                user_id: user_id.to_string(),
+                state: state.unwrap_or_default(),
+                events: Vec::new(),
+            })
+        })
+    }
+
+    fn get_session<'a>(
+        &'a self,
+        _app_name: &'a str,
+        _user_id: &'a str,
+        _session_id: &'a str,
+    ) -> BoxFuture<'a, Option<Session>> {
+        Box::pin(async { None })
+    }
+
+    fn list_sessions<'a>(
+        &'a self,
+        _app_name: &'a str,
+        _user_id: Option<&'a str>,
+    ) -> BoxFuture<'a, Vec<Session>> {
+        Box::pin(async { Vec::new() })
+    }
+
+    fn delete_session<'a>(
+        &'a self,
+        _app_name: &'a str,
+        _user_id: &'a str,
+        _session_id: &'a str,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
+}
 
 impl InvocationContextBuilder {
     pub fn new(invocation_id: impl Into<String>, session: Session) -> Self {

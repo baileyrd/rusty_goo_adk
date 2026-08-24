@@ -22,6 +22,65 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Start `Runner` batch 1: a real `SessionService` + `InMemorySessionService`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Scoping note:** `Runner` (`runners.py`, 2609 lines, C0833-C0926 — 94
+  capability rows) is the core execution engine. Most of it depends on
+  infrastructure this port doesn't have yet: an `App` type (Phase 7),
+  the workflow/node/task-delegation engine (`BaseNode`, `Context.run_node`,
+  Phase 7, confirmed absent), and a real plugin system (`PluginManager`
+  is currently a hardcoded no-op stub). What Runner's own legacy
+  (non-node) turn orchestration genuinely needs *first* is a working
+  session backend — and `SessionService` was, until now, an empty
+  marker trait (a Phase 5 forward-reference stub with zero methods).
+  So this first batch builds that real prerequisite rather than a
+  Runner shell that can't yet do anything.
+- **Added:** `adk_agents::services::SessionService` upgraded to a real
+  (if narrowed) port of `sessions.base_session_service.BaseSessionService`
+  (C0206, partial) — `create_session`/`get_session`/`list_sessions`/
+  `delete_session` (required), plus a concrete `append_event` default
+  (drops partial events; applies-then-trims `temp:`-scoped state delta;
+  updates session state) and a no-op `flush`, both ported directly from
+  the source's own non-abstract defaults. Methods return a boxed future
+  (`BoxFuture`) rather than using native `async fn`, since
+  `InvocationContext` stores this trait as `Arc<dyn SessionService>` —
+  the same object-safety pattern `adk_tools::base_tool::BaseTool`
+  already established for the same reason.
+- **Added:** `InMemorySessionService` (C0211, partial; C0213, done) —
+  nested-map storage (`app_name -> user_id -> session_id -> Session`)
+  behind a `Mutex`. Its `append_event` is a real override (not the
+  shared default): since `get_session`/`create_session` hand callers
+  their own clone of a session (mirroring the source's `_copy_session`),
+  appending to that clone alone would never become visible to a later
+  `get_session` call. The override dedups a re-delivered event against
+  the *canonical stored* session's events (matched by id, then full
+  equality) before applying anything, then mirrors the resulting
+  state/event onto that canonical copy — and returns the event
+  unstored (not raised) if the session's app/user/id isn't (or is no
+  longer) in the store.
+- **Adaptation, disclosed:** the source logs a warning on that
+  unknown-session case; this port has no logging framework adopted yet
+  (the same "no logging framework" substitution used throughout this
+  migration), so it's silent instead. The deprecated `*_sync` mirror
+  methods aren't ported — Rust has no sync/async method-duplication
+  problem to begin with (nothing here has a legacy sync API predating
+  an async one).
+- **Not ported:** app:/user: state-prefix scoping and cross-session
+  shared state maps (`_session_util.extract_state_delta`, `get_user_state`,
+  C0209/C0214) — the placeholder `Session`/`State` have no prefix-scoping
+  concept yet, a Phase 5 concern of their own; `last_update_time`-based
+  `list_sessions` ordering and `StaleSessionError` (no such field exists
+  on the placeholder `Session`, and the source's own in-memory backend
+  never raises `StaleSessionError` either — that's a persistent-backend
+  concern); `GetSessionConfig` event-trimming (`num_recent_events`/
+  `after_timestamp`) — `RunConfig.get_session_config` is already an
+  opaque `Value` placeholder with nothing typed to apply it against.
+- 17 new tests (`adk-agents`, 124 total). Full workspace gate green.
+- **Next:** the `Runner` struct itself (constructor, `close()`, the
+  legacy single-agent `run_async` turn) — deferred to keep this batch
+  to one clean, testable piece.
+
 ## PR #TBD — Phase 8 batch 3: `FunctionTool`
 **2026-08-24** · (link added once this PR is opened)
 
