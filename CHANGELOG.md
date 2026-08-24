@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-runners::Runner` now stores a real `PluginManager` (`Runner::with_plugin`)
+  and wires its run-level hooks into a new `Runner::run_async_with_config`
+  (`run_async` delegates to it with a default `RunConfig`) — the Rust analog
+  of `_exec_with_plugin`/`_handle_new_message`/`_append_new_message_to_session`:
+  `on_user_message_callback`, the deprecated `save_input_blobs_as_artifacts`
+  blob-saving path (C0898/C0899 DONE), `before_run_callback` (early-exit
+  support), `on_event_callback` merging (`merge_output_event`, C0896 DONE),
+  event-persistence gating (`should_append_event`, C0895 partial — only the
+  non-live half is reachable), and `after_run_callback`/`on_run_error_callback`
+  (C0357 DONE). Closes out C0353's remaining run-level call-site gap and
+  C0886's plugin-wrapping gap (compaction is now the only thing left on that
+  row). `Runner::close` now also closes every registered plugin. 10 new
+  tests. No new dependency.
+### Added
 - `adk-agents::{base_credential_exchanger::BaseCredentialExchanger,
   credential_exchanger_registry::CredentialExchangerRegistry}` (C0523
   DONE), `adk-agents::{base_credential_refresher::BaseCredentialRefresher,
