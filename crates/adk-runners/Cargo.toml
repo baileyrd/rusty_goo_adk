@@ -1,0 +1,15 @@
+[package]
+name = "adk-runners"
+description = "The core execution engine, ported from google/adk-python's runners.py (C0833-C0926)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+adk-agents = { path = "../adk-agents" }
+adk-errors = { path = "../adk-errors" }
+adk-events = { path = "../adk-events" }
+adk-genai = { path = "../adk-genai" }
+rusty_serde = { workspace = true }
+rusty_err = { workspace = true }
+rusty_tokio = { workspace = true }

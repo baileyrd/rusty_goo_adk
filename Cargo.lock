@@ -77,6 +77,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-runners"
+version = "0.1.0"
+dependencies = [
+ "adk-agents",
+ "adk-errors",
+ "adk-events",
+ "adk-genai",
+ "rusty_err",
+ "rusty_serde",
+ "rusty_tokio",
+]
+
+[[package]]
 name = "adk-tools"
 version = "0.1.0"
 dependencies = [

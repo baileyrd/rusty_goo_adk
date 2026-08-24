@@ -22,6 +22,52 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Start `Runner` batch 2: the `Runner` struct + legacy `run_async`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** a new `adk-runners` crate with `Runner` — the "legacy"
+  (plain `BaseAgent`, no node/task/live/rewind/debug) execution path,
+  built on top of batch 1's `SessionService`.
+  - `Runner::new(app_name, agent, session_service)` — since no `App`
+    type exists in this port (Phase 7), `Runner` only ever wraps one
+    concrete `BaseAgent` directly; there's no app/agent/node
+    mutual-exclusivity contract to enforce (C0840-C0842, N/A) since
+    only one combination is representable at all. `.with_artifact_service`/
+    `.with_memory_service`/`.with_credential_service`/
+    `.with_plugin_close_timeout`/`.with_auto_create_session` (C0844,
+    C0845) round out construction.
+  - `Runner::run_async(user_id, session_id, new_message)` (C0884,
+    C0886, C0888, partial/done — see below): rejects a `new_message`
+    carrying a function call (C0888, done); fetches-or-creates the
+    session per `auto_create_session` (C0873, partial); builds an
+    `InvocationContext` wired with the Runner's own services; appends
+    the user message event; drives `agent.run_async(&invocation_context)`
+    — the real orchestration primitive `BaseAgent` already provides;
+    persists every resulting event; returns them (the appended user
+    event itself isn't returned, matching the source's own
+    yielded-events contract).
+  - `Runner::close()` (C0924, partial) — flushes the session service.
+- **Not ported:** the workflow/node/task-delegation engine (Phase 7,
+  confirmed absent) — so no node/task-mode paths, no
+  `_find_agent_to_run`/resumed-conversation continuation (C0907-C0910),
+  no `_resolve_invocation_id` (C0855, needs resumability, always false
+  here); a real plugin system (Phase 7) — `Runner` doesn't store or
+  call through a `PluginManager` at its own level at all, rather than
+  invent placeholder methods for a shape (`run_before_run_callback`/
+  `run_on_event_callback`/`run_after_run_callback`) that isn't real
+  until Phase 7 defines it (the per-agent `before`/`after_agent_callback`
+  hooks *are* exercised transitively, via `agent.run_async`); toolset
+  collection/closing in `close()` (C0922/C0923 — needs `LlmAgent.tools`
+  wired to real `BaseToolset` instances instead of the `ToolUnion`
+  placeholder); `Runner.run()`'s sync thread-bridging wrapper
+  (C0877-C0880 — a local-testing convenience with less need in an
+  already async-native codebase); `InMemoryRunner` (C0926 — needs
+  `InMemoryArtifactService`/`InMemoryMemoryService`, neither built);
+  compaction (C0871-C0872, needs `events_compaction_config` wiring);
+  agent-origin inference/warnings (C0851-C0854 — no Rust module-path
+  reflection, no logging framework adopted).
+- 6 new tests (`adk-runners`). Full workspace gate green.
+
 ## PR #TBD — Start `Runner` batch 1: a real `SessionService` + `InMemorySessionService`
 **2026-08-24** · (link added once this PR is opened)
 

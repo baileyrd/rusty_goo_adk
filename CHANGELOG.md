@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `adk-runners` crate: `Runner` (C0840-C0845/C0873/C0884/C0886/
+  C0888/C0924, all partial except C0888 done) — the core execution
+  engine's "legacy" (plain `BaseAgent`, single always-non-resumable
+  turn) path. `Runner::new(app_name, agent, session_service)` +
+  `.with_artifact_service`/`.with_memory_service`/
+  `.with_credential_service`/`.with_plugin_close_timeout`/
+  `.with_auto_create_session`; `run_async` fetches-or-creates a
+  session, rejects a `new_message` containing a function call, appends
+  the user message, drives `agent.run_async`, and persists the
+  resulting events; `close()` flushes the session service. No `App`
+  type or workflow/node/task engine exists in this port yet (both
+  Phase 7), so there's no app/agent/node union to validate against and
+  no node/task/live/rewind/debug execution path — this crate wraps
+  exactly one concrete `BaseAgent` directly. 6 new tests.
 - Starts `Runner` (`runners.py`, C0833-C0926):
   `adk-agents::services::SessionService` upgraded from an empty
   marker trait to a real (if narrowed) port of `BaseSessionService`
