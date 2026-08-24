@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::agent_optimizer::AgentOptimizer` (C0636 DONE),
+  `adk-agents::sampler::{Sampler, ExampleSet}`, and
+  `adk-agents::optimization_data_types::{SamplingResult,
+  BaseSamplingResult, UnstructuredSamplingResult, AgentWithScores,
+  BaseAgentWithScores, OptimizerResult}` (C0637 DONE). 8 new tests.
+  Ports `optimization/`'s pure interfaces in full — no LLM call lives in
+  either row (concrete LLM-touching optimizers/samplers stay their own,
+  still-blocked rows). The source's pydantic-generic bounds become
+  traits (`SamplingResult`/`AgentWithScores`) rather than base structs
+  callers subclass; `UnstructuredSamplingResult`'s extra `data` field is
+  declared directly on its own struct (same "flatten inherited fields"
+  pattern as `ExtendedOAuth2`). `BaseAgentWithScores::optimized_agent`
+  holds an `Arc<LlmAgent>` handle since `LlmAgent` has neither `Clone`
+  nor `Debug`. Disclosed narrowing: `sample_and_score`'s Python-style
+  default parameter values have no Rust equivalent (every caller passes
+  every argument explicitly). No new dependency.
 - `adk-agents::auth_schemes::{SecuritySchemeType, AuthSchemeType, ApiKeyIn,
   ApiKeyScheme, HttpScheme, OAuthFlow, OAuthFlows, OAuth2Scheme,
   OpenIdConnectScheme, SecurityScheme, OpenIdConnectWithConfig,

@@ -24,8 +24,28 @@
 //! `sha2` (already a workspace dependency, `adk-models
 //! ::gemini_context_cache_manager`, new usage site for `auth_tool
 //! ::stable_digest`).
+//!
+//! **Optimization batch**: [`optimization_data_types`]
+//! (`SamplingResult`/`BaseSamplingResult`/`UnstructuredSamplingResult`/
+//! `AgentWithScores`/`BaseAgentWithScores`/`OptimizerResult`, C0637's
+//! data-type half), [`sampler`] (`Sampler`/`ExampleSet`, C0637's
+//! interface half), and [`agent_optimizer`] (`AgentOptimizer`, C0636) —
+//! ported from `optimization/`, a distinct top-level source package
+//! folded into this crate rather than a new one, the same placement
+//! reasoning `app_configs.rs` already established for `apps/_configs.py`
+//! (every type here reaches directly into `LlmAgent`, this crate's own
+//! type, and needs nothing else new). The source's pydantic-generic
+//! bounds (`SamplingResultT`/`AgentWithScoresT`) become traits
+//! (`SamplingResult`/`AgentWithScores`) `Sampler`/`AgentOptimizer`'s
+//! generic parameters are bounded by, rather than base structs callers
+//! subclass — `UnstructuredSamplingResult`'s extra `data` field is
+//! declared directly on its own struct instead (same "flatten inherited
+//! fields" pattern as `ExtendedOAuth2`). `LlmAgent` has no `Clone`/
+//! `Debug`, so `BaseAgentWithScores::optimized_agent` holds an `Arc`
+//! handle rather than an owned value. No new dependency.
 
 pub mod active_streaming_tool;
+pub mod agent_optimizer;
 pub mod app_configs;
 pub mod artifact_util;
 pub mod auth_credential;
@@ -45,9 +65,11 @@ pub mod live_request;
 pub mod llm_agent;
 pub mod loop_agent;
 pub mod oauth2_util;
+pub mod optimization_data_types;
 pub mod parallel_agent;
 pub mod readonly_context;
 pub mod run_config;
+pub mod sampler;
 pub mod sequential_agent;
 pub mod services;
 pub mod session;
