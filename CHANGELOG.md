@@ -5,6 +5,28 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-eval::final_response_match_v1::RougeEvaluator` (C0590) — the
+  `response_match_score` metric, ROUGE-1 F-measure between an agent's
+  final response and a golden/expected response, using a hand-ported
+  `nltk.stem.porter.PorterStemmer` (`adk-eval::porter_stemmer`, verified
+  against 409 word/stem pairs from real nltk 3.10.3 — an earlier
+  hand-derived expectation table, read from Porter's paper's own
+  per-step examples in isolation, was caught wrong by this cross-check
+  and replaced) and a Unicode-aware tokenizer (`adk-eval::rouge`)
+  correctly handling CJK (character-level splitting), Thai/Lao/Khmer/
+  Myanmar (grapheme-cluster grouping via combining-mark detection), and
+  ASCII (routed through the stemmer) text — the stock ASCII-only ROUGE
+  tokenizer would score any of the former scripts as zero overlap.
+  End-to-end cross-checked against the real upstream `rouge_score`
+  package source (fetched and run locally under real `nltk`) over 11
+  candidate/reference pairs; all match to floating-point precision.
+  Adds `unicode-general-category` (zero transitive dependencies,
+  `no_std`, static Unicode 16.0.0 tables) as a new `adk-eval` dependency
+  for cross-script Mark-category classification — judged impractical to
+  hand-roll accurately, adopted directly under the same well-audited/
+  non-sovereignty-sensitive bar the `regex` crate was. Disclosed
+  narrowing: `unicodedata.normalize("NFKC", ...)` is skipped (affects
+  only compatibility-decomposable characters, not the common case).
 - New `adk-eval` crate: the pure-computation core of `google.adk.evaluation`
   (Phase 11's first landing) — `eval_case::Invocation`/`IntermediateData`/
   `InvocationEvents` + accessor helpers (C0605), `evaluator::Evaluator`

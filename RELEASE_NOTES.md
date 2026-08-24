@@ -22,6 +22,78 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: `RougeEvaluator` (C0590) — hand-ported Porter stemmer + Unicode-aware ROUGE-1 tokenizer
+**2026-08-24** · (link added once this PR is opened)
+
+Follow-on to the previous `evaluation/` PR. Adds the `response_match_score`
+metric — the second-tier candidate flagged in that PR's own review as
+"more effort than the trajectory metric": it requires hand-writing a
+ROUGE-1 scorer plus the exact Porter-stemming and CJK/Thai/Lao/Khmer/
+Myanmar-aware tokenization the source's own `RougeEvaluator` depends on
+(the source itself just glues to the pip `rouge_score`/`nltk` packages).
+
+- **Added:** `adk-eval::porter_stemmer` — a from-scratch port of
+  `nltk.stem.porter.PorterStemmer` (`NLTK_EXTENSIONS` mode, the only mode
+  `rouge_score`'s `DefaultTokenizer` ever constructs). Every step (1a
+  through 5b), the irregular-forms pool, and the NLTK-only extensions
+  (length-4 `ies`/`ied` cases, the relaxed step 1c condition, the
+  `alli`/`fulli`/`logi` step 2 additions) are ported line-for-line from
+  nltk's own source. Verified against 409 `(word, stem)` pairs generated
+  by actually running nltk 3.10.3 in this environment — not reconstructed
+  from memory. This cross-check caught a real mistake in an earlier
+  hand-derived expectation table: reading Porter's paper's own per-step
+  worked examples in isolation gives `"agreed"` → `"agree"` (step 1b's own
+  example), but the *full* pipeline continues through step 5a, which
+  strips the trailing `e` to give `"agre"` — the actual nltk output. The
+  fixture-based test replaced the wrong hand-derived table before this
+  PR, not after.
+- **Added:** `adk-eval::rouge` — `_UnicodeAwareTokenizer` (CJK characters
+  split individually; Thai/Lao/Khmer/Myanmar grouped into grapheme
+  clusters by attaching combining marks to their preceding base
+  consonant; ASCII words routed through the stemmer) and `RougeScorer`'s
+  `rouge1` unigram-overlap precision/recall/F-measure. Only the `rouge1`
+  path `RougeEvaluator` uses is ported — `rougeL`/`rougeLsum`/`rouge2+`/
+  `score_multi` are unreached by this consumer.
+- **Added:** `adk-eval::final_response_match_v1::RougeEvaluator` —
+  `evaluate_invocations` ported exactly (per-invocation ROUGE-1
+  F-measure vs. threshold, mean overall score), including the
+  `expected_invocations`-required check and the file-local
+  `_get_text_from_content` helper (join non-empty part text with `"\n"`
+  — deliberately not reusing `content_utils::extract_text_from_content`,
+  C0927, which filters `thought` parts and concatenates without a
+  separator: a different, purpose-built helper the source itself keeps
+  file-local).
+- **Verification:** end-to-end cross-checked against the real upstream
+  `rouge_score` package source (fetched from `google-research/
+  google-research` on GitHub, reassembled locally, and run under real
+  `nltk`) over 11 candidate/reference pairs spanning plain ASCII,
+  stemming-sensitive text, CJK, Thai, and punctuation-heavy input — every
+  precision/recall/F-measure triple matches to floating-point precision.
+- **New dependency:** `unicode-general-category` (zero transitive
+  dependencies, `no_std`, static Unicode 16.0.0 tables) — needed for the
+  source's `unicodedata.category(char).startswith("M")` combining-mark
+  checks, which span far more scripts (Devanagari matras, Arabic
+  diacritics, etc., not just the four non-spaced scripts this metric
+  specifically targets) than a hand-embedded table could accurately
+  cover. Adopted directly under the same well-audited, non-sovereignty-
+  sensitive bar the workspace's `regex` dependency was adopted under,
+  rather than stopping to ask, since it is pure text-processing
+  infrastructure with no I/O/crypto/network surface.
+- **Disclosed narrowing:** `unicodedata.normalize("NFKC", text)` is
+  skipped — no normalization-table dependency was added. NFKC mainly
+  affects compatibility-decomposable characters (full-width Latin/digit
+  variants, some ligatures); text already in common normalization forms
+  tokenizes identically either way.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-eval +24 new tests — porter_stemmer, rouge, final_response_match_v1 — all passing; zero regressions elsewhere)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — Start `evaluation/` pure-scoring core: `TrajectoryEvaluator` + `Invocation`/`EvalMetric` (C0588, C0600 partial, C0605, C0608, C0612 partial)
 **2026-08-24** · (link added once this PR is opened)
 

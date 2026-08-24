@@ -8,3 +8,4 @@ publish.workspace = true
 [dependencies]
 adk-genai = { path = "../adk-genai" }
 rusty_serde = { workspace = true }
+unicode-general-category = "1.1.0"
