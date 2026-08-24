@@ -77,8 +77,32 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub use crate::auth_credential::AuthCredential;
 /// Placeholder for `auth.auth_tool.AuthConfig` (Phase 9).
 pub type AuthConfig = Value;
-/// Placeholder for `artifacts.base_artifact_service.ArtifactVersion` (Phase 6).
-pub type ArtifactVersion = Value;
+/// `artifacts.base_artifact_service.ArtifactVersion` — metadata
+/// describing a specific version of an artifact. Promoted from an
+/// opaque `Value` placeholder to a real struct (Phase 6,
+/// `InMemoryArtifactService`, C0265) — the same "widen a placeholder
+/// to a real type once a real consumer needs its structure" precedent
+/// already used for `MemoryEntry`/`SearchMemoryResponse` (C0423/C0424)
+/// and `AuthCredential` (C0494-C0499). `alias_generator=to_camel` is
+/// ported via `rename_all = "camelCase"`; `populate_by_name=True`'s
+/// dual-name accept has no port, the same disclosed gap as
+/// `auth_credential.rs`'s own camelCase fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct ArtifactVersion {
+    /// Monotonically increasing identifier for the artifact version.
+    pub version: i64,
+    /// Canonical URI referencing the persisted artifact payload.
+    pub canonical_uri: String,
+    /// Optional user-supplied metadata stored with the artifact.
+    #[rusty_serde(default)]
+    pub custom_metadata: BTreeMap<String, Value>,
+    /// Unix timestamp (seconds) when the version record was created.
+    pub create_time: f64,
+    /// MIME type when the artifact payload is stored as binary data.
+    #[rusty_serde(default)]
+    pub mime_type: Option<String>,
+}
 /// `memory.memory_entry.MemoryEntry` — one memory entry. Promoted from an
 /// opaque `Value` placeholder to a real struct (Phase 8,
 /// `LoadMemoryTool`/`PreloadMemoryTool`, C0423/C0424) now that a concrete
@@ -349,8 +373,23 @@ impl SessionService for InMemorySessionService {
     }
 }
 
-/// Placeholder for `artifacts.base_artifact_service.BaseArtifactService`
-/// (Phase 6).
+/// `artifacts.base_artifact_service.BaseArtifactService` — placeholder
+/// since Phase 6, now with a first real implementor
+/// (`InMemoryArtifactService`, C0265) exercising it. Disclosed
+/// narrowings, predating this batch (not newly introduced by
+/// `InMemoryArtifactService`): every method's `session_id` is a
+/// required `&str`, not the source's `Optional[str]` — so the
+/// source's "session_id is `None`" branch (list/scope user-only
+/// artifacts without a session in play) isn't representable through
+/// this trait signature at all; and `artifact`/the return values stay
+/// as opaque `Value` rather than a typed `types.Part`, so an
+/// implementor must serialize/deserialize at this boundary itself
+/// (the same "parse the opaque `Value` via its own `Deserialize` impl"
+/// pattern `ExampleTool`/`PreloadMemoryTool`/`LoadArtifactsTool`
+/// already use). `delete_artifact`/`list_versions`/
+/// `list_artifact_versions` are added in this batch to match the
+/// source's full abstract interface — the pre-existing 4 methods'
+/// signatures are otherwise unchanged.
 pub trait ArtifactService {
     fn load_artifact(
         &self,
@@ -381,6 +420,28 @@ pub trait ArtifactService {
     ) -> Option<ArtifactVersion>;
 
     fn list_artifact_keys(&self, app_name: &str, user_id: &str, session_id: &str) -> Vec<String>;
+
+    /// C0265: deletes an artifact (all its versions). A no-op if the
+    /// artifact doesn't exist, matching the source.
+    fn delete_artifact(&self, app_name: &str, user_id: &str, session_id: &str, filename: &str);
+
+    /// C0265: lists all version numbers of an artifact, oldest first.
+    fn list_versions(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        filename: &str,
+    ) -> Vec<i64>;
+
+    /// C0265: lists all versions and their metadata for an artifact.
+    fn list_artifact_versions(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        session_id: &str,
+        filename: &str,
+    ) -> Vec<ArtifactVersion>;
 }
 
 /// Placeholder for `memory.base_memory_service.BaseMemoryService` (Phase 6).

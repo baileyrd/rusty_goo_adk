@@ -256,7 +256,7 @@ impl Context {
         &self,
         filename: &str,
         version: Option<i64>,
-    ) -> Result<Option<Value>, ContextError> {
+    ) -> Result<Option<services::ArtifactVersion>, ContextError> {
         let service = self
             .invocation_context
             .artifact_service
@@ -645,6 +645,35 @@ mod tests {
             _session_id: &str,
         ) -> Vec<String> {
             vec!["f.txt".to_string()]
+        }
+
+        fn delete_artifact(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+            _filename: &str,
+        ) {
+        }
+
+        fn list_versions(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+            _filename: &str,
+        ) -> Vec<i64> {
+            vec![0]
+        }
+
+        fn list_artifact_versions(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+            _filename: &str,
+        ) -> Vec<services::ArtifactVersion> {
+            Vec::new()
         }
     }
 
