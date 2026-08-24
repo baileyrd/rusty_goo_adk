@@ -28,6 +28,7 @@ pub mod run_config;
 pub mod sequential_agent;
 pub mod services;
 pub mod session;
+pub mod session_util;
 pub mod state;
 pub mod streaming_mode;
 pub mod task_models;

@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::session_util::{decode_model, extract_state_delta,
+  make_json_safe_state, extract_json_safe_state_delta}` (Phase 5,
+  C0209 partial) plus `State::{APP_PREFIX, USER_PREFIX, TEMP_PREFIX}`
+  (completing C0205's evidence — the dict-with-pending-delta wrapper
+  itself was already ported in an earlier batch, just never linked
+  back to its manifest row) — ported from
+  `google.adk.sessions._session_util`/`state.py`'s prefix constants.
+  Reconciles `services.rs`'s own pre-existing private
+  `TEMP_STATE_PREFIX` duplicate to reference `State::TEMP_PREFIX` as
+  the single source of truth. `extract_state_delta`/
+  `extract_json_safe_state_delta` ported exactly; `make_json_safe_state`
+  is a disclosed near-no-op (this port's `Value` can only ever hold
+  JSON-representable variants by construction, so there's no value
+  that could fail the source's coercion); `decode_model` collapses the
+  source's two distinct failure modes (primitive-non-dict vs.
+  malformed-dict) to a uniform `None`, a disclosed narrowing. Nothing
+  in this port's `SessionService` routes `extract_state_delta`'s
+  output to real cross-session shared storage yet — ahead of its own
+  caller, same as `remote_mcp_server.rs`. 8 new tests.
 - New `adk-features` crate:
   `adk_features::feature_registry::{FeatureName, FeatureStage,
   FeatureConfig, feature_config, is_feature_enabled,

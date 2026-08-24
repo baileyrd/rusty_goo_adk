@@ -30,6 +30,23 @@ pub struct State {
 }
 
 impl State {
+    /// C0205: prefix marking a key as app-scoped (shared across all
+    /// users/sessions of an app). See `services.rs`'s module doc: this
+    /// port's `Session`/`State` have no cross-session shared-state
+    /// architecture to actually honor this scoping yet — the constant
+    /// exists (and is used by `session_util::extract_state_delta`,
+    /// C0209) ahead of that architecture landing.
+    pub const APP_PREFIX: &'static str = "app:";
+    /// C0205: prefix marking a key as user-scoped (shared across all
+    /// sessions of one user within an app). Same disclosed gap as
+    /// [`Self::APP_PREFIX`].
+    pub const USER_PREFIX: &'static str = "user:";
+    /// C0205: prefix marking a key as transient — visible only within
+    /// the invocation that set it, never persisted. Already enforced
+    /// by `services.rs`'s `SessionService::append_event` (previously
+    /// via a private duplicate constant, now this one).
+    pub const TEMP_PREFIX: &'static str = "temp:";
+
     pub fn new(value: BTreeMap<String, Value>, delta: BTreeMap<String, Value>) -> Self {
         Self { value, delta }
     }
