@@ -22,6 +22,35 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Auth credential camelCase wire format
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `#[rusty_serde(rename_all = "camelCase")]` on
+  `HttpCredentials`/`HttpAuth`/`OAuth2Auth`/`ServiceAccount`/
+  `AuthCredential` (C0501, partial), matching
+  `BaseModelWithConfig`'s `alias_generator=alias_generators.to_camel`.
+- **Deliberate exception:** `ServiceAccountCredential` keeps its
+  snake_case field names. Its fields mirror a real downloaded GCP
+  service-account JSON key file verbatim, and that file format is
+  itself snake_case (`project_id`, `private_key_id`, ...) — the
+  source's `populate_by_name=True` is what lets Pydantic accept either
+  form there, but this port's `rename_all` sets one fixed wire name
+  with no dual-name accept, so applying camelCase would have broken
+  parsing an actual key file, the opposite of matching the source.
+- **Disclosed narrowing:** `populate_by_name=True`'s dual-name accept
+  (snake_case *or* camelCase on input) has no port for the structs
+  that *do* get `rename_all` — this port's `Deserialize` only accepts
+  the one configured wire name.
+- **Also:** marks manifest row C0502 (`AuthCredential.resource_ref`)
+  `DONE` — the field was already ported in the prior `auth_credential`
+  batch (PR #56), just not yet reflected in the manifest. Marks C0500
+  (secret redaction) with detailed `Partial:` evidence: this port has
+  no `Debug`/log output path for these structs to harden yet, so
+  there's nothing to redact.
+- 3 new tests.
+
+---
+
 ## PR #TBD — Auth credential schemes (Phase 9 start)
 **2026-08-24** · (link added once this PR is opened)
 

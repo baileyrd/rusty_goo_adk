@@ -35,6 +35,30 @@
 //! Phase 9 placeholders themselves — nothing here *produces* a real
 //! `AuthCredential` from an actual auth flow yet, only the shape is
 //! real and tested.
+//!
+//! **C0501 (credential model config)**: `BaseModelWithConfig`'s
+//! `alias_generator=alias_generators.to_camel` puts every one of
+//! these models on the wire in camelCase — `#[rusty_serde(rename_all
+//! = "camelCase")]` ports that for `HttpCredentials`, `HttpAuth`,
+//! `OAuth2Auth`, `ServiceAccount`, and `AuthCredential` itself.
+//! **Deliberately excluded: `ServiceAccountCredential`.** Despite
+//! also subclassing `BaseModelWithConfig`, its fields mirror a real
+//! downloaded GCP service-account JSON key file verbatim — which is
+//! itself snake_case (`project_id`, `private_key_id`, ...), not
+//! camelCase. In the source, `populate_by_name=True` papers over this:
+//! Pydantic accepts *either* the camelCase alias *or* the original
+//! snake_case field name on input, so a real key file still parses.
+//! This port's `rename_all` sets both the serialize *and* deserialize
+//! name — there's no dual-name-accepting mode to port — so applying
+//! it here would have made parsing an actual GCP key file impossible,
+//! the opposite of matching the source's behavior. Snake-case field
+//! names were kept instead, which is what the only real input format
+//! this struct exists to parse actually uses. The same dual-name gap
+//! applies more narrowly to every other struct in this file too:
+//! `populate_by_name=True` also means the source accepts snake_case
+//! input even where camelCase is the primary alias, and this port's
+//! `Deserialize` only accepts the camelCase name once `rename_all` is
+//! set — a real, disclosed narrowing.
 
 use std::collections::BTreeMap;
 
@@ -65,6 +89,7 @@ pub enum AuthCredentialTypes {
 /// `deny_unknown_fields`), which has the identical net effect without
 /// needing a hand-written override.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
 pub struct HttpCredentials {
     #[rusty_serde(default)]
     pub username: Option<String>,
@@ -85,6 +110,7 @@ impl HttpCredentials {
 /// other IANA-registered value) — represented as a plain `String`,
 /// matching the source's own unconstrained `str` field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
 pub struct HttpAuth {
     pub scheme: String,
     pub credentials: HttpCredentials,
@@ -117,6 +143,7 @@ pub enum TokenEndpointAuthMethod {
 
 /// `auth.auth_credential.OAuth2Auth` — C0497.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
 pub struct OAuth2Auth {
     #[rusty_serde(default)]
     pub client_id: Option<String>,
@@ -208,6 +235,7 @@ pub struct ServiceAccountCredential {
 /// fallible: [`ServiceAccount::new`] runs the same two checks as the
 /// source's `_validate_config` `model_validator`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
 pub struct ServiceAccount {
     #[rusty_serde(default)]
     pub service_account_credential: Option<ServiceAccountCredential>,
@@ -263,6 +291,7 @@ impl ServiceAccount {
 /// `adk_agents::services::AuthCredential` from its former `Value`
 /// placeholder — see the module doc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
 pub struct AuthCredential {
     pub auth_type: AuthCredentialTypes,
     #[rusty_serde(default)]
@@ -302,6 +331,58 @@ impl AuthCredential {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_credential_serializes_field_names_as_camel_case() {
+        let credential = AuthCredential::api_key("1234");
+        let value = rusty_serde::json::to_value(&credential).unwrap();
+        match value {
+            rusty_serde::value::Value::Map(fields) => {
+                assert!(fields.iter().any(|(k, _)| k == "authType"));
+                assert!(fields.iter().any(|(k, _)| k == "apiKey"));
+                assert!(!fields.iter().any(|(k, _)| k == "auth_type"));
+            }
+            other => panic!("expected a map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn oauth2_auth_serializes_client_id_as_camel_case() {
+        let mut oauth2 = OAuth2Auth::new();
+        oauth2.client_id = Some("abc".to_string());
+        let value = rusty_serde::json::to_value(&oauth2).unwrap();
+        match value {
+            rusty_serde::value::Value::Map(fields) => {
+                assert!(fields.iter().any(|(k, _)| k == "clientId"));
+            }
+            other => panic!("expected a map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn service_account_credential_keeps_snake_case_field_names() {
+        let credential = ServiceAccountCredential {
+            type_: "service_account".to_string(),
+            project_id: "proj".to_string(),
+            private_key_id: "kid".to_string(),
+            private_key: "key".to_string(),
+            client_email: "a@b.iam.gserviceaccount.com".to_string(),
+            client_id: "cid".to_string(),
+            auth_uri: "https://accounts.google.com".to_string(),
+            token_uri: "https://oauth2.googleapis.com/token".to_string(),
+            auth_provider_x509_cert_url: "https://certs".to_string(),
+            client_x509_cert_url: "https://client-certs".to_string(),
+            universe_domain: "googleapis.com".to_string(),
+        };
+        let value = rusty_serde::json::to_value(&credential).unwrap();
+        match value {
+            rusty_serde::value::Value::Map(fields) => {
+                assert!(fields.iter().any(|(k, _)| k == "project_id"));
+                assert!(!fields.iter().any(|(k, _)| k == "projectId"));
+            }
+            other => panic!("expected a map, got {other:?}"),
+        }
+    }
 
     #[test]
     fn auth_credential_types_serialize_to_their_wire_strings() {
