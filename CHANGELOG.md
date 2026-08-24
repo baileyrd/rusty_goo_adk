@@ -5,6 +5,23 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::llm_event_summarizer::LlmEventSummarizer` (C0286/C0287
+  DONE) — the LLM-based sliding-window-compaction summarizer,
+  implementing `adk-agents::app_configs::BaseEventsSummarizer` (C0285).
+  Formats a conversation history (text, thoughts — skipping ones from a
+  prior compaction event, tool calls/responses truncated at 2000
+  chars), drives one non-streaming LLM call, and wraps the result into
+  an `Event` carrying an `EventCompaction` action with `role` forced to
+  `"model"` and `author` forced to `"user"`. Lands in `adk-tools`, not
+  `adk-agents`, since it needs a real `adk-models::BaseLlm` and
+  `adk-models` already depends on `adk-agents` — disclosed in the
+  module doc, the same supporting-crate placement
+  `forwarding_artifact_service.rs` (C0489) already used. `args`/
+  `response` formatting reuses the compact-JSON-instead-of-`str()`
+  divergence `adk-events::debug_output` (C0933) already established.
+  Also corrects `app_configs.rs`'s stale "still LLM-blocked" claim
+  about C0286/C0287. 10 new tests. No new dependency.
+### Added
 - `adk-tools::forwarding_artifact_service::ForwardingArtifactService`
   (C0489 partial) — routes a nested `AgentTool` `Runner`'s artifact
   reads/writes back through the parent tool context's own real
