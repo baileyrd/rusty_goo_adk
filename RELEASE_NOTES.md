@@ -22,6 +22,34 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `auth/oauth2_discovery.py`/`runners.py`: two small data-only ports (C0533, C0835)
+**2026-08-24** · (link added once this PR is opened)
+
+Two small, unrelated capabilities landed together.
+
+- **Added:** `crates/adk-agents/src/oauth2_discovery.rs` —
+  `AuthorizationServerMetadata` (RFC8414) and `ProtectedResourceMetadata`
+  (RFC9728), C0533's two data models. Field names stay literal
+  snake_case (both RFCs specify snake_case wire fields themselves,
+  unlike this crate's Google-genai-facing camelCase types); the
+  source's `@experimental` decorator warns on every *construction* (not
+  class definition) — ported via an explicit `::new()` calling
+  `warn_experimental`, the same `ResumabilityConfig::new` precedent.
+  `OAuth2DiscoveryManager`'s actual `.well-known` fetching/mix-up-attack
+  validation logic stays its own rows (C0534/C0535) — needs an async
+  HTTP client this port hasn't adopted anywhere yet.
+- **Added:** `adk_runners::runner::get_function_responses_from_content`
+  (C0835) — extracts every `FunctionResponse` from a `Content`'s parts,
+  `[]` for `None`/no-parts, reusing the already-real
+  `Content::get_function_responses`. Built ahead of its own caller
+  (`_resolve_invocation_id`, C0855 — needs resumability wiring `Runner`
+  doesn't have yet), the same precedent `session_util.rs`/`artifact_util.rs`
+  already established.
+- **Scope:** 7 new tests (4 for the OAuth2 discovery models, 3 for
+  `get_function_responses_from_content`).
+
+---
+
 ## PR #TBD — `sessions/base_session_service.py`: `GetSessionConfig` (C0207)
 **2026-08-24** · (link added once this PR is opened)
 
