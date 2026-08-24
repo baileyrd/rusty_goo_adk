@@ -72,6 +72,37 @@ pub struct FunctionResponse {
     pub response: Option<std::collections::BTreeMap<String, Value>>,
 }
 
+/// A tool's declared calling contract, advertised to the model —
+/// `types.FunctionDeclaration`. Added for Phase 8 (`tools/`):
+/// `BaseTool::get_declaration` returns one of these, and
+/// `adk-tools::append_tools` (C0116) assembles them into
+/// `LlmRequest.config.tools`.
+///
+/// **Adaptation**: only `name`/`description` are real, inspectable fields —
+/// ADK's own code reads them (for tool-name dedup in `append_tools`,
+/// building instruction/error text). `parameters`/`parameters_json_schema`/
+/// `response`/`response_json_schema` (all JSON-Schema-shaped) stay opaque
+/// `Value` placeholders: ADK's own code never inspects their internal
+/// shape, only forwards whatever a tool builds (e.g. from a Python
+/// function's type hints, or Pydantic's own schema generation) straight to
+/// the wire.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct FunctionDeclaration {
+    #[rusty_serde(default)]
+    pub name: Option<String>,
+    #[rusty_serde(default)]
+    pub description: Option<String>,
+    #[rusty_serde(default)]
+    pub parameters: Option<Value>,
+    #[rusty_serde(default)]
+    pub parameters_json_schema: Option<Value>,
+    #[rusty_serde(default)]
+    pub response: Option<Value>,
+    #[rusty_serde(default)]
+    pub response_json_schema: Option<Value>,
+}
+
 /// Narrowed placeholder for `types.Blob` (`inline_data`) and
 /// `types.FileData` (`file_data`) — only `mime_type` is modeled, since
 /// `utils/content_utils.py::is_audio_part` (needed by `GeminiLlmConnection`,
@@ -291,5 +322,40 @@ mod tests {
         assert!(json.contains("\"willContinue\""));
         assert!(!json.contains("function_call"));
         assert!(!json.contains("will_continue"));
+    }
+
+    #[test]
+    fn function_declaration_round_trips_with_camel_case_field_names() {
+        let declaration = FunctionDeclaration {
+            name: Some("get_weather".to_string()),
+            description: Some("Looks up the weather".to_string()),
+            parameters: Some(Value::Map(vec![(
+                "type".to_string(),
+                Value::String("object".to_string()),
+            )])),
+            parameters_json_schema: None,
+            response: None,
+            response_json_schema: None,
+        };
+        let json = rusty_serde::json::to_string(&declaration).unwrap();
+        assert!(json.contains("\"parameters\""));
+        assert!(!json.contains("parameters_json_schema"));
+
+        let back: FunctionDeclaration = rusty_serde::json::from_str(&json).unwrap();
+        assert_eq!(declaration, back);
+    }
+
+    #[test]
+    fn function_declaration_camel_cases_its_multi_word_field_names() {
+        let declaration = FunctionDeclaration {
+            parameters_json_schema: Some(Value::Bool(true)),
+            response_json_schema: Some(Value::Bool(true)),
+            ..Default::default()
+        };
+        let json = rusty_serde::json::to_string(&declaration).unwrap();
+        assert!(json.contains("\"parametersJsonSchema\""));
+        assert!(json.contains("\"responseJsonSchema\""));
+        assert!(!json.contains("parameters_json_schema"));
+        assert!(!json.contains("response_json_schema"));
     }
 }
