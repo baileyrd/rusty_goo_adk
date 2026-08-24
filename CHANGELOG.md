@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-platform::telemetry_config::{get_user_config_path,
+  read_telemetry_consent, write_telemetry_consent}` (C0942), ported from
+  `google.adk.utils._telemetry_config` — reads/writes the ADK global
+  telemetry-consent preference at `~/.adk/config.json`, preserving any
+  other keys already in the file. `pathlib.Path.home()`'s cross-platform
+  resolution narrows to reading `$HOME` directly (disclosed Windows gap,
+  no new dependency added); the on-disk file is compact JSON rather than
+  the source's pretty-printed `indent=2` (`rusty_serde::json` has no
+  pretty-printer) — a cosmetic-only divergence.
+- Manifest rows C0940 (`context_utils.py`) and C0941 (`agent_info.py`)
+  added: C0940 flagged — its `find_context_parameter` reflection-based
+  Context-parameter detection is already handled differently (a fixed
+  closure signature, disclosed in `function_tool.rs`'s own C0404 doc)
+  for the one caller this workspace has built; C0941 is genuinely
+  portable (every dependency already exists) but left `REQUIRED` for
+  its own dedicated future batch rather than rushed into this one.
 - `adk-errors::missing_extra::missing_extra` (C0935), ported from
   `google.adk.utils._dependency` — builds the standard "install this
   extra" message for a missing optional dependency.

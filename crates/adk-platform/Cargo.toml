@@ -7,3 +7,8 @@ publish.workspace = true
 
 [dependencies]
 rusty_uuid = { workspace = true }
+# `telemetry_config` (C0942) needs to read/write an arbitrary JSON dict at
+# ~/.adk/config.json, preserving unrelated keys -- a new usage site of an
+# already-vetted workspace dependency (every other crate in this workspace
+# already depends on it), not a new sovereignty decision.
+rusty_serde = { workspace = true }

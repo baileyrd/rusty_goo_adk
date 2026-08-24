@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `utils/` sweep 3: `_telemetry_config`, plus flagging `context_utils`/`agent_info`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk-platform::telemetry_config::{get_user_config_path,
+  read_telemetry_consent, write_telemetry_consent}` (C0942) —
+  reads/writes the ADK global telemetry-consent preference at
+  `~/.adk/config.json`, preserving other keys already in the file.
+- **Disclosed adaptation:** `pathlib.Path.home()` narrows to reading
+  `$HOME` directly (no new `dirs`-crate dependency; a disclosed gap on
+  Windows). The on-disk file is compact JSON, not the source's
+  pretty-printed `indent=2` — cosmetic only, since this same code is
+  the file's only reader.
+- **Added, flagged:** manifest row C0940 (`context_utils.py`) — `Aclosing`
+  has no Rust equivalent (no async-generator protocol to close);
+  `find_context_parameter`'s reflection-based Context-parameter
+  detection is already handled differently for this workspace's one
+  built caller (`FunctionTool`'s fixed closure signature, per its own
+  C0404 module doc) — left `REQUIRED` since other source callers
+  (`mcp_tool.py`, the automatic-function-calling util) aren't ported
+  here yet.
+- **Added, deferred:** manifest row C0941 (`agent_info.py`) — genuinely
+  portable (every dependency it needs already exists in this
+  workspace) but a larger, multi-type-spanning capability than fit
+  alongside this batch's smaller rows; left `REQUIRED` for its own
+  future batch.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-platform +4 new tests, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `utils/` sweep 2: `_dependency`/`_telemetry_context`/`_serialized_base_model`/`output_schema_utils`
 **2026-08-24** · (link added once this PR is opened)
 
