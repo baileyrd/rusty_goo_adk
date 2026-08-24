@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::code_execution_utils::{File, CodeExecutionInput,
+  CodeExecutionResult, get_encoded_file_content,
+  extract_code_and_truncate_content, build_executable_code_part,
+  build_code_execution_result_part, convert_code_execution_parts}`
+  (C0391) and `adk-tools::base_code_executor::{BaseCodeExecutor,
+  CodeExecutorConfig}` (C0383), ported from
+  `google.adk.code_executors.{code_execution_utils, base_code_executor}` —
+  the first landing in a new `code_executors/` capability area. Reads/
+  writes `Part.executable_code`/`code_execution_result` (opaque `Value`
+  placeholders) by known Gemini wire keys, the same established pattern
+  used elsewhere for opaque-boundary fields. A small base64 codec is
+  duplicated locally (no workspace `base64` dependency; neither existing
+  hand-rolled copy has the right shape for reuse here).
 - `adk-agents::file_artifact_service::FileArtifactService` (C0268-C0274),
   ported from `google.adk.artifacts.file_artifact_service` — a
   filesystem-backed `ArtifactService` implementation: full storage
