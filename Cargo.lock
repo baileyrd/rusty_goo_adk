@@ -51,6 +51,7 @@ name = "adk-flows"
 version = "0.1.0"
 dependencies = [
  "adk-agents",
+ "adk-errors",
  "adk-events",
  "adk-genai",
  "adk-models",

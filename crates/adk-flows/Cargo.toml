@@ -15,3 +15,9 @@ rusty_serde = { workspace = true }
 rusty_err = { workspace = true }
 rusty_tokio = { workspace = true }
 regex = { workspace = true }
+# `cache_performance_analyzer` (C0946) test double needs to name
+# `SessionService::create_session`'s error type
+# (`adk_errors::already_exists::AlreadyExistsError`) -- a new usage site
+# of an already-vetted workspace dependency (adk-agents itself already
+# depends on it), not a new sovereignty decision.
+adk-errors = { path = "../adk-errors" }

@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-flows::cache_performance_analyzer::{CachePerformanceAnalyzer,
+  CachePerformanceReport, CachePerformanceStats}` (C0946), ported from
+  `google.adk.utils.cache_performance_analyzer` — analyzes
+  `GeminiContextCacheManager` cache-hit/refresh performance from a
+  session's event history. `Event.cache_metadata`/`usage_metadata` stay
+  opaque `Value` placeholders (parsed into `CacheMetadata` on demand,
+  the same idiom `context_cache.rs`'s C0175 already established); the
+  source's untyped `Dict[str, Any]` return becomes a closed
+  `CachePerformanceReport` enum; a missing session becomes an explicit
+  `Err` rather than the source's implicit `AttributeError` risk.
+  `@experimental` (C0797, still unresolved) isn't represented. Adds
+  `adk-errors` as a new direct (test-only) dependency of `adk-flows` —
+  an already-vetted workspace dependency, new usage site only.
 - `adk-genai::schema_utils::strip_json_code_fence` (C0944), ported from
   `google.adk.utils._schema_utils`'s `_strip_json_code_fence` —
   hand-rolled rather than adding `regex` as a new usage site of the

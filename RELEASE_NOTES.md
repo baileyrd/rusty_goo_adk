@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `CachePerformanceAnalyzer` (C0946)
+**2026-08-24** · (link added once this PR is opened)
+
+Closes out C0946, the one capability flagged in the previous PR as a
+genuinely tractable next batch (unlike C0941/C0945's deeper blockers).
+
+- **Added:** `adk-flows::cache_performance_analyzer::{CachePerformanceAnalyzer,
+  CachePerformanceReport, CachePerformanceStats}` — analyzes
+  `GeminiContextCacheManager` cache-hit/refresh performance from a
+  session's event history (token totals, hit/utilization ratios,
+  invocation counts, cache-refresh count, latest cache name), including
+  the source's truthy-int treatment of `prompt_token_count`/
+  `cached_content_token_count`.
+- **Disclosed adaptation:** `Event.cache_metadata`/`usage_metadata` stay
+  opaque `Value` placeholders — parsed into `CacheMetadata` on demand,
+  and `usage_metadata`'s `promptTokenCount`/`cachedContentTokenCount`
+  keys read directly, the same idiom `context_cache.rs`'s C0175 already
+  established (`adk-events` can't depend on `adk-models` without a
+  cycle).
+- **Disclosed adaptation:** the source's untyped `Dict[str, Any]` return
+  becomes a closed `CachePerformanceReport` enum — a strict improvement,
+  not a narrowing, since no consumer needs a serialized wire form yet.
+- **Disclosed adaptation, compile-time strengthening:** a missing
+  session becomes an explicit `Err(SessionNotFound)` rather than the
+  source's implicit `AttributeError`-on-`None` risk.
+- **Not represented:** `@experimental` (`utils/feature_decorator.py`,
+  C0797) — that decorator's own manifest row is still unresolved
+  (possibly a second, parallel feature-gating mechanism), so this port
+  doesn't guess at a representation for it here.
+- Adds `adk-errors` as a new direct dependency of `adk-flows`
+  (test-only use, naming a trait method's error type) — an
+  already-vetted workspace dependency, new usage site only.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-flows +4 new tests, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `utils/` sweep 4: `_strip_json_code_fence`; flag `yaml_utils`/rest of `_schema_utils`/`cache_performance_analyzer`; correct C0941
 **2026-08-24** · (link added once this PR is opened)
 
