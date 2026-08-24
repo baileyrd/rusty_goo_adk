@@ -22,6 +22,60 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `load_web_page`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::load_web_page::{load_web_page,
+  LoadWebPageTool}` (C0427, partial) — fetches a URL and extracts its
+  text. The source's substantial SSRF-hardening core is ported in
+  full: URL scheme/host/port validation, `localhost`/`*.localhost`
+  rejection, DNS resolution with every resolved address vetted before
+  any connection is attempted, IP-literal vetting, IPv4/IPv6
+  global-reachability classification, embedded-IPv4-in-IPv6 checks
+  (mapped/6to4/NAT64/deprecated-compatible forms), IP-pinned
+  connection with the original Host header preserved, and disabled
+  redirects.
+- **Verification methodology:** the IP-classification logic was
+  transcribed field-for-field from CPython 3.11's own `ipaddress.py`
+  (consulted locally at `/usr/lib/python3.11/ipaddress.py` — the exact
+  reference the source's `is_global` calls resolve to), then
+  ground-truthed by running a 30+-address battery through the real
+  Python `ipaddress` module before writing the Rust tests. The
+  battery specifically confirms the embedded-IPv4 check catches cases
+  the plain IPv6 `is_global` check alone misses: `64:ff9b::169.254.169.254`
+  and `::169.254.169.254` both read as "global" by the raw check
+  (NAT64/IPv4-compatible ranges aren't in IPv6's private-network
+  list) but are correctly blocked once the embedded IPv4 target
+  (169.254.169.254, the cloud metadata endpoint) is extracted and
+  checked — exactly the vulnerability class this hardening exists to
+  close.
+- **Implementation notes:** IP-pinning uses
+  `reqwest::blocking::ClientBuilder::resolve` rather than a hand-rolled
+  connection adapter (the source's own `_PinnedAddressAdapter`) —
+  `resolve()` keeps the request URL pointed at the original hostname,
+  so the correct Host header is sent automatically without manual
+  header surgery. New `adk-tools` dependencies: `reqwest` (already a
+  workspace dependency via `adk-models`/`gemini.rs` — this is a new
+  usage site, not a new supply-chain surface), `url` (the exact crate
+  `reqwest::Url` re-exports, added explicitly for `url::Host`'s
+  already-parsed Domain/Ipv4/Ipv6 variant), `regex` (already a
+  workspace dependency, new usage site).
+- **Disclosed narrowings:** no proxy-aware branching — this port
+  never reads `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` and always does
+  the direct IP-pinned fetch (strictly more restrictive than the
+  source, not a safety regression, but a real behavior gap for
+  proxy-dependent environments). HTML text extraction has no HTML5
+  parser behind it — a regex-based tag/script/style stripper plus a
+  handful of common named-entity decodes stands in for
+  `BeautifulSoup`+`lxml`, with no DOM-aware whitespace collapsing.
+  The live-fetch path itself (the real `reqwest` GET) has no
+  automated test in this sandboxed environment — it depends on
+  outbound network/DNS this test run may not have, and the tool's own
+  safety design correctly rejects `127.0.0.1`/`localhost` before any
+  request is attempted, so a local mock server can't stand in without
+  weakening the real check being tested. Every other piece is
+  covered: 15 new tests.
+
 ## PR #TBD — `LoadArtifactsTool`
 **2026-08-24** · (link added once this PR is opened)
 

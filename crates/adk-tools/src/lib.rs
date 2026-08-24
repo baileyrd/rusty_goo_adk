@@ -31,6 +31,7 @@ pub mod function_tool;
 pub mod get_user_choice_tool;
 pub mod load_artifacts_tool;
 pub mod load_memory_tool;
+pub mod load_web_page;
 pub mod long_running_tool;
 pub mod memory_entry_utils;
 pub mod preload_memory_tool;
