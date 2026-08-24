@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-eval::evaluation_generator::{collect_events_by_invocation_id,
+  convert_events_to_eval_invocations}` (C0623 DONE) +
+  `adk-eval::agent_evaluator::{load_json, find_config_for_test_file,
+  get_initial_session, DatasetInput, load_dataset, validate_input,
+  get_eval_set_from_old_format, load_eval_set_from_file,
+  migrate_eval_data_to_new_schema}` (C0619 partial, C0620 DONE). 25 new
+  tests total. Neither needs a real `Runner`/LLM-invocation path.
+  `evaluation_generator` preserves invocation insertion order via a
+  parallel `Vec<String>` alongside its grouping `HashMap` — unlike this
+  crate's other `HashMap`-for-grouping choices, order here is
+  semantically load-bearing (invocations are matched positionally
+  against `expected_invocations` elsewhere). `agent_evaluator`'s
+  `DatasetInput` enum (`Path`/`Paths`) models `_load_dataset`'s actual
+  reachable `isinstance` dispatch rather than its broader, partly
+  unreachable type hint; cross-verified the assert-vs-`ValidationError`
+  control flow in `_load_eval_set_from_file` against the real source
+  logic run standalone. `AgentEvaluator.evaluate`/`evaluate_eval_set`
+  themselves stay `REQUIRED`, needing C0621/C0622/C0624's still-unbuilt
+  inference generation. No new dependency.
 - `adk-eval::llm_as_judge_utils::{Label, get_text_from_content,
   get_text_from_invocation, get_eval_status, get_average_rubric_score,
   get_tool_declarations_as_json_str,
