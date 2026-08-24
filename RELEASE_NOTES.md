@@ -22,6 +22,39 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `AgentTool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::agent_tool::AgentTool` (C0406, partial) —
+  wraps a `BaseAgent` as a callable tool. Spins up an isolated
+  `InMemorySessionService` session (forwarding the parent's
+  non-`_adk`-prefixed state as the child's initial state, matching
+  the source's own filter), runs the wrapped agent for one turn via
+  the real `adk_runners::Runner`, forwards state deltas back to the
+  parent tool context as each event arrives, and merges the last
+  response event's non-thought text parts into the tool's return
+  value — falling back to the last error message when there's no
+  usable text. Adds a new `adk-tools` → `adk-runners` dependency edge
+  (verified non-circular) and a new `ToolError::NestedRunFailed`
+  variant for session-creation/nested-run failures.
+- **Known limitations (disclosed in the module doc):**
+  input/output-schema-driven declaration and response validation
+  aren't ported — this port's `BaseAgent` is type-erased with no way
+  to recover a concrete `LlmAgent` to read `input_schema`/
+  `output_schema` from, the same blocker every Phase 4 processor
+  already discloses, so `get_declaration` always uses the generic
+  `{"request": string}` fallback shape. `ForwardingArtifactService`
+  isn't built (nested run has no artifact service).
+  `InMemoryMemoryService` is Phase 6 (nested run has no memory
+  service). `include_plugins` has no observable effect —
+  `adk_runners::Runner` doesn't accept a `PluginManager` yet, its own
+  module doc already discloses this as a genuine gap.
+  `propagate_grounding_metadata` and
+  `code_execution_result`/`executable_code` part-to-text extraction
+  aren't ported (opaque `Part` placeholders in `adk-genai`).
+  `support_cfc` disabling isn't ported (no CFC concept in this port).
+- 4 new tests.
+
 ## PR #TBD — `SetModelResponseTool`
 **2026-08-24** · (link added once this PR is opened)
 

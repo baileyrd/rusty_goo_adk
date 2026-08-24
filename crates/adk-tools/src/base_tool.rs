@@ -35,6 +35,10 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub enum ToolError {
     #[error("{0} is not implemented")]
     NotImplemented(String),
+    /// A tool that drives a nested run (e.g. `AgentTool`, C0406) failed to
+    /// create its session or complete the nested agent's turn.
+    #[error("{0}")]
+    NestedRunFailed(String),
 }
 
 /// `types.FunctionResponseScheduling` — controls when the model reacts to

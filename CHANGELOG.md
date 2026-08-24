@@ -5,6 +5,23 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::agent_tool::AgentTool` (Phase 8, C0406, partial) — wraps a
+  `BaseAgent` as a callable tool: spins up an isolated
+  `InMemorySessionService` session (forwarding the parent's
+  non-`_adk`-prefixed state), runs the wrapped agent for one turn via
+  the real `adk_runners::Runner`, forwards state deltas back to the
+  parent tool context per-event, and merges the last response event's
+  non-thought text parts into the return value. New `adk-tools` →
+  `adk-runners` dependency edge (verified non-circular). Adds a new
+  `ToolError::NestedRunFailed` variant for session-creation/nested-run
+  failures. Not ported (disclosed at length in the module doc):
+  input/output-schema-driven declaration and validation (needs a
+  concrete `LlmAgent` resolved from `BaseAgent`, same blocker every
+  Phase 4 processor discloses), `ForwardingArtifactService`,
+  `InMemoryMemoryService` (Phase 6), `include_plugins` propagation
+  (`Runner` doesn't accept a `PluginManager` yet), grounding-metadata
+  propagation, and code-execution part-to-text extraction. 4 new
+  tests.
 - `adk-tools::set_model_response_tool::SetModelResponseTool` (Phase 8,
   C0437, partial) — the output-schema workaround letting a model set
   its final structured response via a tool call when `output_schema`
