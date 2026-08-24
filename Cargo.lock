@@ -105,6 +105,7 @@ name = "adk-tools"
 version = "0.1.0"
 dependencies = [
  "adk-agents",
+ "adk-events",
  "adk-examples",
  "adk-genai",
  "adk-models",

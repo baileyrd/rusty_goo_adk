@@ -22,6 +22,40 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `LoadMemoryTool`, `PreloadMemoryTool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::load_memory_tool::{load_memory, LoadMemoryTool}`
+  (C0423, DONE) — wraps the already-real `Context::search_memory`
+  (Phase 2) in a `FunctionTool`; `process_llm_request` merges the
+  declaration then appends the "you have memory" instruction, matching
+  the source's `super().process_llm_request()` + append.
+- **Added:** `adk_tools::preload_memory_tool::PreloadMemoryTool`
+  (C0424, DONE) — automatically (never model-invoked) searches memory
+  each turn: parses the opaque `user_content` back into a typed
+  `Content` (same pattern `ExampleTool`/C0419 uses), builds the
+  `Time: .../author: text` per-memory rendering exactly, and injects
+  it via the already-real `LlmRequest::insert_transient_user_content`
+  (C0117).
+- **Added:** `adk_tools::memory_entry_utils::extract_text` — joins a
+  memory entry's text parts, matching `_memory_entry_utils.py`.
+- **Widened:** `adk_agents::services::{MemoryEntry,
+  SearchMemoryResponse}` promoted from opaque `Value` placeholders to
+  real structs matching the source's pydantic models field-for-field
+  — the same "widen from placeholder once a real consumer needs the
+  shape" precedent already used for `EventCompaction.compacted_content`
+  (C0185). `BaseMemoryService` itself is still an unbuilt Phase 6
+  trait — nothing in this workspace produces real values of these
+  types yet, only consumes the shape.
+- **Adaptation:** since `FunctionTool`'s wrapped-closure signature has
+  no `Result` to propagate an error through, `load_memory` reports a
+  missing memory service as an `{"error": ...}` response value rather
+  than a raised exception. `PreloadMemoryTool` swallows a failed
+  `search_memory` call silently (matching the source's own
+  exception-swallowing control flow) but doesn't log a warning — no
+  logging framework has been adopted by this workspace yet.
+- 11 new tests across the three modules.
+
 ## PR #TBD — New `adk-examples` crate + `ExampleTool`
 **2026-08-24** · (link added once this PR is opened)
 
