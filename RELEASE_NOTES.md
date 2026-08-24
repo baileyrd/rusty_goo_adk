@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/vertex_ai_search_tool.py`: `VertexAiSearchTool` (C0433)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the last unstarted member of the built-in-grounding-tool family
+(alongside `GoogleSearchTool`/`EnterpriseWebSearchTool`/
+`GoogleMapsGroundingTool`/`UrlContextTool`, all already landed).
+
+- **Added:** `adk_tools::vertex_ai_search_tool::{VertexAiSearchTool,
+  VertexAiSearchConfig}` (C0433 DONE) — mutual-exclusivity constructor
+  validation (`data_store_id`/`search_engine_id`, and `data_store_specs`
+  requiring `search_engine_id`) and the full populated
+  `{"retrieval":{"vertexAiSearch":{datastore, dataStoreSpecs, engine,
+  filter, maxResults}}}` config shape.
+- **Adapted:** the source's subclass-based dynamic-filter customization
+  point (override `_build_vertex_ai_search_config` to set a per-request
+  filter from session state) becomes an optional closure field
+  (`with_config_builder`) — the same "overridable Python method →
+  closure field" adaptation `base_agent.rs`'s `AgentCallback` already
+  established for `before_agent_callback`/`after_agent_callback`.
+- **Disclosed** (shared with every sibling built-in grounding tool): an
+  unsupported model simply doesn't get the tool appended rather than the
+  source's `ValueError` (no `Result` channel through
+  `process_llm_request`); `bypass_multi_tools_limit` is stored but not
+  enforced (deferred with C0171, same as `GoogleSearchTool`);
+  `data_store_specs` entries round-trip as opaque values (an unmodeled
+  third-party SDK type); `logger.debug` isn't reproduced.
+- **Scope:** no new dependency. 8 new tests.
+
+---
+
 ## PR #TBD — `AgentBehavior::as_any` downcast + real `global_instruction` root-walk (C0170)
 **2026-08-24** · (link added once this PR is opened)
 
