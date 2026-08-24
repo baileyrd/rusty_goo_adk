@@ -123,9 +123,22 @@
 //! through Python's `logging` module for this specific plugin. The
 //! remaining 7 (model-level and tool-level hooks) stay N/A, blocked on
 //! C0355/C0356's already-disclosed crate-cycle blocker.
+//!
+//! **`App` model batch**: [`app`] (`App`/`validate_app_name`, C0279/C0280)
+//! — ported from `apps/app.py`. `root_agent` narrows from the source's
+//! `Union[BaseAgent, BaseNode, None]` to `BaseAgent`-only (the workflow
+//! graph engine, C0298-C0306, isn't built in this port — see the module's
+//! own doc) and becomes a required constructor argument rather than an
+//! `Option`, since the source's own `_validate` model-validator already
+//! rejects a `None` root_agent. App-name validation is a new, distinct
+//! validator from `base_agent::validate_name` — the source's app-name
+//! regex additionally permits hyphens. `App` is deliberately not wired
+//! into `Runner`'s constructor this batch (a follow-up, once `App` exists
+//! and can be reviewed on its own). No new dependency.
 
 pub mod active_streaming_tool;
 pub mod agent_optimizer;
+pub mod app;
 pub mod app_configs;
 pub mod artifact_util;
 pub mod auth_credential;
