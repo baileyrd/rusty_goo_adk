@@ -14,6 +14,7 @@ pub mod auth_credential;
 pub mod base_agent;
 pub mod context;
 pub mod context_cache_config;
+pub mod in_memory_memory_service;
 pub mod invocation_context;
 pub mod live_request;
 pub mod llm_agent;

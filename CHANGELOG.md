@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::in_memory_memory_service::{InMemoryMemoryService,
+  format_timestamp, UNKNOWN_SESSION_ID}` (Phase 6, C0244/C0245 partial/
+  C0247/C0248/C0249) — the first real `MemoryService` implementation:
+  a `Mutex`-guarded in-process keyword-search memory backend
+  ("prototyping purpose only", matching the source's own docstring).
+  Ports `add_session_to_memory` (wholesale per-session overwrite),
+  `add_events_to_memory` (additive, dedup by event id), and
+  `search_memory` (Unicode-aware `\w+` tokenization + non-ASCII
+  substring fallback, snapshot-under-lock-then-score-outside-lock,
+  10-result cap, stable ties) exactly. Also ports `format_timestamp`
+  using a hand-rolled, deterministic public-domain epoch-to-calendar
+  algorithm rather than a date/time crate. Disclosed: this port
+  formats timestamps in UTC, not the host's local timezone the way the
+  source does (true local-time conversion needs a full IANA
+  timezone-database crate, not added); `add_memory` (never overridden
+  by the source, defaulting to `NotImplementedError`) has no `Result`
+  path through the pre-existing `MemoryService` trait, so it panics via
+  `unimplemented!()` instead — the closest analog to an uncaught
+  exception. 11 new tests.
 - `adk-agents::oauth2_util::{normalize_oauth_scopes, OAuthScopes,
   is_non_mtls_googleapis_endpoint, effective_googleapis_endpoint,
   use_client_cert_effective, update_credential_with_tokens}` (Phase 9,

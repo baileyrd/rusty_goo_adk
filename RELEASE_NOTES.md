@@ -22,6 +22,59 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `InMemoryMemoryService`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_agents::in_memory_memory_service::{InMemoryMemoryService,
+  format_timestamp, UNKNOWN_SESSION_ID}` (C0243 partial/C0244/C0245
+  partial/C0247/C0248/C0249) — the first real implementation of the
+  `MemoryService` trait (a Phase 6 placeholder), the same
+  "first real backend narrows a placeholder trait to its actual
+  contract" moment `InMemorySessionService` was for `SessionService`.
+  A `Mutex`-guarded, in-process keyword-search memory backend —
+  "prototyping purpose only", matching the source's own docstring.
+- **Ported exactly:** `add_session_to_memory` (wholesale per-session
+  overwrite) vs. `add_events_to_memory` (additive, dedup by event id)
+  — distinct semantics, each covered by its own test; `search_memory`'s
+  keyword-match scoring (Unicode-aware `\w+` tokenization, a substring
+  fallback for non-ASCII query words, snapshot-under-the-lock then
+  score-outside-it to avoid the source's own documented
+  "dictionary changed size during iteration" race, a 10-result cap,
+  and a stable sort so equally-scored memories stay in insertion
+  order); only events with non-empty content parts are retained on any
+  write path.
+- **Also ported:** `format_timestamp`, using a hand-rolled, well-known
+  public-domain epoch-to-calendar algorithm (Howard Hinnant's
+  `civil_from_days`) rather than pulling in a date/time crate.
+- **Disclosed narrowing (`format_timestamp`):** the source's bare
+  `datetime.fromtimestamp(timestamp)` uses the host's *local*
+  timezone; this port formats in UTC, since true local-time conversion
+  needs a full IANA timezone-database crate (`chrono-tz` or similar),
+  not added in this batch. Since `MemoryEntry.timestamp` is forwarded
+  to the LLM verbatim rather than parsed back, this is real but
+  low-severity (a different wall-clock hour shown to the LLM, not
+  corrupted data).
+- **Disclosed narrowing (`add_memory`):** the source's `BaseMemoryService`
+  gives `add_memory` a default that raises `NotImplementedError`
+  unless overridden, and `InMemoryMemoryService` never overrides it.
+  This port's pre-existing `MemoryService` trait method has no
+  `Result` to signal "unsupported" through, so
+  `InMemoryMemoryService::add_memory` panics via `unimplemented!()` —
+  the closest Rust analog to an uncaught exception.
+- **Disclosed, already narrowed by an earlier batch:** the source's
+  `add_events_to_memory(session_id: str | None = None)` falls back to
+  an `__unknown_session_id__` sentinel when no session id is given;
+  this port's pre-existing `MemoryService::add_events_to_memory` trait
+  signature takes a required `&str`, and its sole caller
+  (`Context::add_events_to_memory`, built before any real
+  `MemoryService` existed) always supplies the real session id — so
+  that fallback path isn't reachable through `Context` today. The
+  sentinel constant is kept as `UNKNOWN_SESSION_ID` for a follow-up
+  that corrects the trait signature.
+- 11 new tests.
+
+---
+
 ## PR #TBD — OAuth2/mTLS utility functions
 **2026-08-24** · (link added once this PR is opened)
 
