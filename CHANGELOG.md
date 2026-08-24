@@ -5,6 +5,18 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools`: `BaseToolset` (Phase 8 batch 2, C0403, partial) — the
+  base trait for a tool collection: `tool_filter`/`tool_name_prefix` as
+  trait methods (not fields), a `ToolFilter` enum standing in for the
+  source's `Union[ToolPredicate, List[str]]` (no runtime `isinstance`
+  dispatch in Rust), and `get_tools_with_prefix` built as a default
+  method over an explicit `PrefixCache`-behind-a-`Mutex` each
+  implementor owns (the source's per-invocation cache is normal mutable
+  instance state, which a `&self` trait method can't hold directly). A
+  `PrefixedTool` wrapper (delegates to an inner `Arc<dyn BaseTool>`,
+  overrides `name`/`get_declaration`) replaces the source's
+  `copy.copy(tool)` + closure rewrite. `from_config` deferred (needs
+  `ToolArgsConfig`, C0417, same gap as `BaseTool`).
 - `adk-tools` crate (Phase 8 batch 1): `BaseTool` (C0402, partial —
   `from_config`/`SelfTool` deferred pending C0417), `ToolContext` (C0415,
   partial — `Context` type alias; Auth back-compat re-exports deferred to

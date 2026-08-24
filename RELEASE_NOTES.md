@@ -22,6 +22,40 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 8 batch 2: `BaseToolset`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::base_toolset::BaseToolset` (C0403, partial) —
+  the base trait for a tool collection.
+  - `tool_filter`/`tool_name_prefix` are trait methods, not fields
+    (same `BaseTool` precedent). `ToolFilter` (an enum of
+    `Predicate(Arc<dyn Fn(&dyn BaseTool, Option<&ReadonlyContext>) ->
+    bool>)` / `Names(Vec<String>)`) stands in for the source's
+    `Union[ToolPredicate, List[str]]` — Rust has no runtime
+    `isinstance` dispatch to distinguish the two at call time the way
+    the source does.
+  - `get_tools_with_prefix` (per-invocation-cached, prefixes tool +
+    declaration names) is a default trait method built over an
+    explicit `PrefixCache` behind a `Mutex` that each implementor owns
+    and exposes via a required `prefix_cache()` method — the source's
+    `_cached_invocation_id`/`_cached_prefixed_tools` are plain mutable
+    instance state on a normal Python object, which a Rust `&self`
+    trait method has no equivalent for without an owned, explicit cache
+    field.
+  - A `PrefixedTool` wrapper (delegates to an inner `Arc<dyn BaseTool>`,
+    overrides `name()`/`get_declaration()`) replaces the source's
+    `copy.copy(tool)` plus closure-rewrite of `_get_declaration` — there's
+    no way to "shallow-copy and monkey-patch a method" on a Rust trait
+    object.
+  - `get_auth_config` returns the pre-existing
+    `adk_agents::services::AuthConfig` opaque `Value` placeholder.
+- **Not ported:** `from_config` (needs `ToolArgsConfig`, C0417, the
+  same gap `BaseTool` (C0402) already discloses); the source's
+  `@final` on `get_tools_with_prefix` (no Rust equivalent — an
+  implementor could in principle override the default method, which
+  the source disallows).
+- 9 new tests (24 total in `adk-tools`). Full workspace gate green.
+
 ## PR #TBD — Phase 8 batch 1: `adk-tools` — `BaseTool`, `ToolContext`, `ToolConfirmation`, `append_tools`
 **2026-08-24** · (link added once this PR is opened)
 
