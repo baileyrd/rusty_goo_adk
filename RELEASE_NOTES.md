@@ -22,6 +22,45 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `utils/` sweep 4: `_strip_json_code_fence`; flag `yaml_utils`/rest of `_schema_utils`/`cache_performance_analyzer`; correct C0941
+**2026-08-24** · (link added once this PR is opened)
+
+Closes out the `utils/` sweep's last few files.
+
+- **Added:** `adk-genai::schema_utils::strip_json_code_fence` (C0944) —
+  hand-rolled rather than adding `regex` as a new usage site, since the
+  source's anchored-fullmatch-with-DOTALL regex reduces to plain string
+  slicing.
+- **Added, flagged:** manifest row C0943 (`yaml_utils.py`) — needs a
+  new YAML crate dependency decision (no YAML crate is a dependency
+  anywhere in this workspace); hand-rolling a YAML parser/dumper isn't
+  the "simple and deterministic" tier this port's hand-roll precedent
+  covers.
+- **Added, flagged:** manifest row C0945 (the rest of
+  `_schema_utils.py`) — every function dispatches on an arbitrary
+  Python type object at runtime (`TypeAdapter`, `get_origin`/`get_args`);
+  this workspace has no generic-validation layer to port it onto.
+- **Added, deferred:** manifest row C0946
+  (`cache_performance_analyzer.py`) — its dependencies (`CacheMetadata`,
+  `Event.cache_metadata`/`.author`) already exist, unlike C0941/C0945's
+  deeper blockers, making it a good future-batch candidate; not
+  attempted in this batch.
+- **Corrected:** C0941's evidence (`agent_info.py`) after investigating
+  it for a possible follow-up batch — it's blocked on prerequisite
+  architecture, not merely "larger than one batch": `LlmAgent` has no
+  `name`/`sub_agents` fields (those live only on `BaseAgent`, and
+  `LlmAgent` isn't wired into its tree yet), and `LlmAgent::tools` is
+  `Vec<ToolUnion>` where every variant is still an opaque placeholder.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-genai +5 new tests, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `utils/` sweep 3: `_telemetry_config`, plus flagging `context_utils`/`agent_info`
 **2026-08-24** · (link added once this PR is opened)
 

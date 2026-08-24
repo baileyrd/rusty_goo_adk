@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-genai::schema_utils::strip_json_code_fence` (C0944), ported from
+  `google.adk.utils._schema_utils`'s `_strip_json_code_fence` —
+  hand-rolled rather than adding `regex` as a new usage site of the
+  crate, since the source's `re.fullmatch(..., re.DOTALL)` reduces to
+  plain string slicing once anchored at both ends.
+- Manifest rows C0943 (`yaml_utils.py`, flagged — needs a new YAML
+  dependency decision), C0945 (the rest of `_schema_utils.py`, flagged
+  — blocked on missing generic runtime type-reflection/validation
+  machinery this workspace doesn't have a `TypeAdapter` equivalent
+  for), and C0946 (`cache_performance_analyzer.py`, deferred — a
+  promising future-batch candidate, its own dependencies already exist).
+  C0941's evidence corrected with a deeper investigation of exactly
+  what blocks it (`LlmAgent` isn't wired into `BaseAgent`'s tree, and
+  `ToolUnion` is still an opaque placeholder).
 - `adk-platform::telemetry_config::{get_user_config_path,
   read_telemetry_consent, write_telemetry_consent}` (C0942), ported from
   `google.adk.utils._telemetry_config` — reads/writes the ADK global
