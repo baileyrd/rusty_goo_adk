@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::services::{GetSessionConfig, SessionService::get_session_with_config}`
+  (C0207 DONE) — `num_recent_events`/`after_timestamp` session-history
+  bounding, ported as a new default trait method on `SessionService`
+  (additive; doesn't touch `get_session`'s already-shipped signature or
+  any of its ~26 existing call sites) that defers to `get_session` and
+  applies the trimming generically in one shared place, so every
+  current implementer (`InMemorySessionService`/`NoopSessionService`/a
+  test-only `FakeSessionService`) gets correct, identical behavior for
+  free. Replicates the source's own Python-truthiness quirk where
+  `after_timestamp: Some(0.0)` is treated as unset, not "keep nothing."
+  Not yet wired: `RunConfig.get_session_config` is still an opaque
+  `Value` placeholder (C0875), so nothing on the `Runner` side threads
+  a real `GetSessionConfig` through this new method yet — updated the
+  citation text on C0873/C0891/C0914 and two code comments in
+  `runner.rs` accordingly, rather than leaving them saying
+  `GetSessionConfig` doesn't exist at all. 7 new tests.
 - `adk-flows::llm_flow::{apply_no_content_error, should_skip_empty_response}`
   (C0156 partial DONE) — the two remaining `_postprocess_async` guard
   clauses: converting a non-partial, non-streaming STOP-with-no-content

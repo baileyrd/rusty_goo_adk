@@ -116,8 +116,9 @@
 //! own docs for the unconditional-session-creation (C0912) and
 //! flat-event-collection (C0913) semantics, and their disclosed
 //! narrowings (no logging framework adopted, matching C0851-C0854 below;
-//! C0914's `run_config.get_session_config` forwarding is N/A — this
-//! port's `SessionService::get_session` has no config parameter).
+//! C0914's `run_config.get_session_config` forwarding is N/A — `RunConfig`
+//! still has no `get_session_config` field to forward, even though
+//! `GetSessionConfig` itself is now real, C0207 — see C0875).
 //!
 //! **Invocation-context factory** (C0918/C0919): [`InvocationContextBuilder`]
 //! (`adk-agents`) already plays the role of the source's
@@ -541,8 +542,10 @@ impl Runner {
         self
     }
 
-    /// C0873 (narrowed — no `GetSessionConfig`, see `adk-agents::services`'
-    /// own disclosed scope cut): gets the named session, or creates it
+    /// C0873 (narrowed — no `GetSessionConfig` threaded through yet;
+    /// `GetSessionConfig`/`SessionService::get_session_with_config` are
+    /// now real, C0207, but `RunConfig`/`Runner` don't carry one to
+    /// forward, see C0875): gets the named session, or creates it
     /// (empty of history) if missing and [`Runner::with_auto_create_session`]
     /// is set; otherwise reports it as not found.
     async fn get_or_create_session(

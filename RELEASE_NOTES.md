@@ -22,6 +22,40 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `sessions/base_session_service.py`: `GetSessionConfig` (C0207)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the session-history-bounding config every `SessionService`
+backend is expected to honor identically.
+
+- **Added:** `adk_agents::services::GetSessionConfig` —
+  `num_recent_events`/`after_timestamp`, both optional and composable.
+- **Added:** `adk_agents::services::SessionService::get_session_with_config`
+  — a new default trait method (additive; `get_session`'s
+  already-shipped signature and its ~26 existing call sites are
+  untouched) that defers to `get_session` and applies the trimming
+  generically in one shared place. `num_recent_events` tail-slices
+  first (`Some(0)` or negative returns no events); `after_timestamp`
+  then drops everything older — replicating the source's own Python
+  truthiness quirk where `after_timestamp: Some(0.0)` is treated the
+  same as unset, not "return nothing." Every current implementer
+  (`InMemorySessionService`, `NoopSessionService`, a test-only
+  `FakeSessionService`) gets correct, identical behavior for free —
+  matching the manifest row's own "every backend must honor
+  identically" framing more faithfully than a per-backend override
+  would.
+- **Not yet wired:** `RunConfig.get_session_config` is still an opaque
+  `Value` placeholder (C0875), so no `adk-runners` call site threads a
+  real `GetSessionConfig` through this new method yet — built ahead of
+  its own caller, the same precedent `session_util.rs`/`artifact_util.rs`
+  already established. Updated the citation text on C0873/C0891/C0914's
+  manifest evidence and two `runner.rs` doc comments to say so
+  precisely, rather than leaving them saying `GetSessionConfig` doesn't
+  exist at all.
+- **Scope:** 7 new tests.
+
+---
+
 ## PR #TBD — `base_llm_flow.py`/`base_llm.py`: postprocess no-content guards + streaming-contract evidence (C0156, C0102)
 **2026-08-24** · (link added once this PR is opened)
 
