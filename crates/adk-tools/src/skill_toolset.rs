@@ -1,9 +1,10 @@
 //! Capabilities C0408 (core `SkillToolset`/`ListSkillsTool`/
 //! `SearchSkillsTool`/`LoadSkillTool`), C0409 (`LoadSkillResourceTool`),
 //! C0410 (`RunSkillScriptTool`, partial), C0411
-//! (`DEFAULT_SKILL_SYSTEM_INSTRUCTION`), and C0401 (`adk_inject_state`
-//! interpolation, exercised via `LoadSkillTool`), ported from
-//! `google.adk.tools.skill_toolset`.
+//! (`DEFAULT_SKILL_SYSTEM_INSTRUCTION`), C0401 (`adk_inject_state`
+//! interpolation, exercised via `LoadSkillTool`), and C0950
+//! (`SkillToolset.additional_tools`/`_resolve_additional_tools_from_state`/
+//! `clone_with_updated_skills`), ported from `google.adk.tools.skill_toolset`.
 //!
 //! **Architectural adaptation, disclosed at length**: the source's five
 //! tool classes (`ListSkillsTool`, `SearchSkillsTool`, `LoadSkillTool`,
@@ -22,12 +23,17 @@
 //! `environment_toolset.rs` (C0440) already established for its four
 //! tools sharing one `Arc<dyn BaseEnvironment>`.
 //!
-//! **Scope narrowing, disclosed**: this batch does NOT port
-//! `SkillToolset.additional_tools`/`_resolve_additional_tools_from_state`/
-//! `clone_with_updated_skills` — a genuine inventory gap discovered while
-//! reading this file for this batch (no manifest row covers it), added
-//! as its own new row **C0950** (REQUIRED, not implemented here). Every
-//! other observable behavior this file's rows describe is ported.
+//! **C0950, `ToolUnion`'s callable branch not ported**: the source's
+//! `additional_tools` accepts `BaseTool | BaseToolset | Callable` and
+//! wraps a bare callable in `FunctionTool(tool_union)` via
+//! `inspect.signature` reflection. [`crate::function_tool::FunctionTool`]'s
+//! own module doc already discloses that this port has no such runtime
+//! reflection — `FunctionTool::new` requires an explicit, hand-built
+//! `FunctionDeclaration`, it can't derive one from a bare closure. So
+//! [`AdditionalTool`] only models the two branches Rust can actually
+//! express (`Tool`/`Toolset`) — the callable branch was a convenience
+//! overload in Python with no faithful equivalent here, not a capability
+//! this port drops.
 //!
 //! **C0410, partial**: `RunSkillScriptTool`'s `environment`-configured
 //! branch (JIT resource materialization + `env.execute(command)`) and its
@@ -1241,6 +1247,14 @@ impl BaseTool for RunSkillScriptTool {
 // SkillToolset
 // ---------------------------------------------------------------------
 
+/// C0950: `ToolUnion`'s two Rust-expressible member kinds — see the
+/// module doc for why the source's third (`callable`, wrapped via
+/// `FunctionTool(callable)`) has no port here.
+pub enum AdditionalTool {
+    Tool(Arc<dyn BaseTool>),
+    Toolset(Arc<dyn BaseToolset>),
+}
+
 /// Configuration for [`SkillToolset::new`] — Python's keyword-argument
 /// constructor collapsed into one struct, per this port's usual
 /// many-optional-params convention.
@@ -1250,6 +1264,9 @@ pub struct SkillToolsetConfig {
     pub environment: Option<Arc<dyn BaseEnvironment>>,
     pub skills_folder: Option<PathBuf>,
     pub script_timeout: Duration,
+    /// C0950: tools/toolsets made available when an activated skill's
+    /// `Frontmatter.metadata["adk_additional_tools"]` names them.
+    pub additional_tools: Vec<AdditionalTool>,
     pub tool_name_prefix: Option<String>,
     pub tool_filter: Option<ToolFilter>,
 }
@@ -1262,6 +1279,7 @@ impl Default for SkillToolsetConfig {
             environment: None,
             skills_folder: None,
             script_timeout: DEFAULT_SCRIPT_TIMEOUT,
+            additional_tools: Vec::new(),
             tool_name_prefix: None,
             tool_filter: None,
         }
@@ -1272,6 +1290,8 @@ impl Default for SkillToolsetConfig {
 pub struct SkillToolset {
     core: Arc<SkillCoreState>,
     tools: Vec<Arc<dyn BaseTool>>,
+    provided_tools_by_name: HashMap<String, Arc<dyn BaseTool>>,
+    provided_toolsets: Vec<Arc<dyn BaseToolset>>,
     tool_name_prefix: Option<String>,
     tool_filter: Option<ToolFilter>,
     prefix_cache: Mutex<PrefixCache>,
@@ -1302,6 +1322,17 @@ impl SkillToolset {
             }
         }
 
+        let mut provided_tools_by_name = HashMap::new();
+        let mut provided_toolsets = Vec::new();
+        for tool in config.additional_tools {
+            match tool {
+                AdditionalTool::Tool(tool) => {
+                    provided_tools_by_name.insert(tool.name().to_string(), tool);
+                }
+                AdditionalTool::Toolset(toolset) => provided_toolsets.push(toolset),
+            }
+        }
+
         let core = Arc::new(SkillCoreState {
             skills,
             registry: config.registry,
@@ -1324,6 +1355,8 @@ impl SkillToolset {
         Ok(Self {
             core,
             tools,
+            provided_tools_by_name,
+            provided_toolsets,
             tool_name_prefix: config.tool_name_prefix,
             tool_filter: config.tool_filter,
             prefix_cache: Mutex::new(PrefixCache::new()),
@@ -1339,6 +1372,116 @@ impl SkillToolset {
     pub fn skills(&self) -> Vec<Skill> {
         self.core.list_skills()
     }
+
+    /// C0950: `SkillToolset.clone_with_updated_skills` — a new toolset
+    /// with identical configuration but a different `skills` list. Note
+    /// the source itself doesn't carry `tool_name_prefix`/`tool_filter`
+    /// forward through this call (only `additional_tools`/`registry`/
+    /// `code_executor`/`environment`/`skills_folder`/`script_timeout`),
+    /// so neither does this port — a faithful port of that omission, not
+    /// an oversight.
+    pub fn clone_with_updated_skills(&self, skills: Vec<Skill>) -> Result<SkillToolset, String> {
+        let mut additional_tools: Vec<AdditionalTool> = self
+            .provided_tools_by_name
+            .values()
+            .cloned()
+            .map(AdditionalTool::Tool)
+            .collect();
+        additional_tools.extend(
+            self.provided_toolsets
+                .iter()
+                .cloned()
+                .map(AdditionalTool::Toolset),
+        );
+
+        SkillToolset::new(SkillToolsetConfig {
+            skills,
+            registry: self.core.registry.clone(),
+            environment: self.core.env.clone(),
+            skills_folder: self.core.skills_folder_override.clone(),
+            script_timeout: self.core.script_timeout,
+            additional_tools,
+            ..Default::default()
+        })
+    }
+
+    /// `SkillToolset._resolve_additional_tools_from_state` — see the
+    /// module doc for the `asyncio.gather(..., return_exceptions=True)`
+    /// simplification: this port's `BaseToolset::get_tools_with_prefix`
+    /// is already infallible, so there's no exception path to catch.
+    async fn resolve_additional_tools_from_state(
+        &self,
+        readonly_context: Option<&ReadonlyContext>,
+    ) -> Vec<Arc<dyn BaseTool>> {
+        let Some(readonly_context) = readonly_context else {
+            return Vec::new();
+        };
+
+        let state_key = format!("_adk_activated_skill_{}", readonly_context.agent_name());
+        let activated_skills: Vec<String> = match readonly_context.state().get(&state_key) {
+            Some(Value::Seq(items)) => items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        if activated_skills.is_empty() {
+            return Vec::new();
+        }
+
+        // A `BTreeSet`, not Python's unordered `set()` -- deterministic
+        // iteration order for tests; correctness doesn't depend on order
+        // (every name is looked up independently below).
+        let mut additional_tool_names: std::collections::BTreeSet<String> = Default::default();
+        for skill_name in &activated_skills {
+            if let Ok(Some(skill)) = self
+                .core
+                .get_or_fetch_skill(skill_name, readonly_context.invocation_id())
+                .await
+            {
+                if let Some(Value::Seq(names)) =
+                    skill.frontmatter.metadata.get("adk_additional_tools")
+                {
+                    for name in names {
+                        if let Value::String(s) = name {
+                            additional_tool_names.insert(s.clone());
+                        }
+                    }
+                }
+            }
+        }
+        if additional_tool_names.is_empty() {
+            return Vec::new();
+        }
+
+        let mut candidate_tools: HashMap<String, Arc<dyn BaseTool>> =
+            self.provided_tools_by_name.clone();
+        for toolset in &self.provided_toolsets {
+            for tool in toolset.get_tools_with_prefix(Some(readonly_context)).await {
+                candidate_tools.insert(tool.name().to_string(), tool);
+            }
+        }
+
+        let mut resolved = Vec::new();
+        let mut existing_names: std::collections::HashSet<String> =
+            self.tools.iter().map(|t| t.name().to_string()).collect();
+        for name in &additional_tool_names {
+            let Some(tool) = candidate_tools.get(name) else {
+                continue;
+            };
+            if existing_names.contains(tool.name()) {
+                // Name collision with a core tool -- skip, matching the
+                // source's `logger.error(...); continue`.
+                continue;
+            }
+            existing_names.insert(tool.name().to_string());
+            resolved.push(tool.clone());
+        }
+        resolved
+    }
 }
 
 impl BaseToolset for SkillToolset {
@@ -1347,10 +1490,14 @@ impl BaseToolset for SkillToolset {
         readonly_context: Option<&'a ReadonlyContext>,
     ) -> BoxFuture<'a, Vec<Arc<dyn BaseTool>>> {
         Box::pin(async move {
+            let dynamic_tools = self
+                .resolve_additional_tools_from_state(readonly_context)
+                .await;
             self.tools
                 .iter()
-                .filter(|tool| self.is_tool_selected(tool.as_ref(), readonly_context))
                 .cloned()
+                .chain(dynamic_tools)
+                .filter(|tool| self.is_tool_selected(tool.as_ref(), readonly_context))
                 .collect()
         })
     }
@@ -2203,5 +2350,178 @@ mod tests {
     fn guess_mime_type_falls_back_to_octet_stream() {
         assert_eq!(guess_mime_type("logo.png"), "image/png");
         assert_eq!(guess_mime_type("data.bin"), "application/octet-stream");
+    }
+
+    // -------------------------------------------------------------
+    // C0950: additional_tools / _resolve_additional_tools_from_state /
+    // clone_with_updated_skills
+    // -------------------------------------------------------------
+
+    struct NamedTool {
+        name: String,
+    }
+
+    impl BaseTool for NamedTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "a test tool"
+        }
+    }
+
+    struct StaticToolset {
+        tools: Vec<Arc<dyn BaseTool>>,
+        prefix: Option<String>,
+        cache: Mutex<PrefixCache>,
+    }
+
+    impl BaseToolset for StaticToolset {
+        fn get_tools<'a>(
+            &'a self,
+            _readonly_context: Option<&'a ReadonlyContext>,
+        ) -> BoxFuture<'a, Vec<Arc<dyn BaseTool>>> {
+            let tools = self.tools.clone();
+            Box::pin(async move { tools })
+        }
+
+        fn prefix_cache(&self) -> &Mutex<PrefixCache> {
+            &self.cache
+        }
+
+        fn tool_name_prefix(&self) -> Option<&str> {
+            self.prefix.as_deref()
+        }
+    }
+
+    fn readonly_context_with_activated_skill(skill_name: &str) -> ReadonlyContext {
+        let mut session = Session::new("app", "user", "s1");
+        session.state.insert(
+            "_adk_activated_skill_unknown".to_string(),
+            Value::Seq(vec![Value::String(skill_name.to_string())]),
+        );
+        let ic = InvocationContextBuilder::new("inv-1", session).build();
+        ReadonlyContext::new(ic)
+    }
+
+    fn skill_with_additional_tools(name: &str, tool_names: &[&str]) -> Skill {
+        let mut skill = skill(name);
+        skill.frontmatter.metadata.insert(
+            "adk_additional_tools".to_string(),
+            Value::Seq(
+                tool_names
+                    .iter()
+                    .map(|n| Value::String(n.to_string()))
+                    .collect(),
+            ),
+        );
+        skill
+    }
+
+    #[rusty_tokio::test]
+    async fn get_tools_returns_only_core_tools_without_a_readonly_context() {
+        let config = SkillToolsetConfig {
+            additional_tools: vec![AdditionalTool::Tool(Arc::new(NamedTool {
+                name: "extra_tool".to_string(),
+            }))],
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let tools = toolset.get_tools(None).await;
+        assert!(!tools.iter().any(|t| t.name() == "extra_tool"));
+    }
+
+    #[rusty_tokio::test]
+    async fn get_tools_resolves_a_provided_tool_once_its_skill_is_activated() {
+        let config = SkillToolsetConfig {
+            skills: vec![skill_with_additional_tools("alpha", &["extra_tool"])],
+            additional_tools: vec![AdditionalTool::Tool(Arc::new(NamedTool {
+                name: "extra_tool".to_string(),
+            }))],
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let ctx = readonly_context_with_activated_skill("alpha");
+        let tools = toolset.get_tools(Some(&ctx)).await;
+        assert!(tools.iter().any(|t| t.name() == "extra_tool"));
+    }
+
+    #[rusty_tokio::test]
+    async fn get_tools_resolves_a_provided_toolsets_tools() {
+        let config = SkillToolsetConfig {
+            skills: vec![skill_with_additional_tools("alpha", &["ns_extra_tool"])],
+            additional_tools: vec![AdditionalTool::Toolset(Arc::new(StaticToolset {
+                tools: vec![Arc::new(NamedTool {
+                    name: "extra_tool".to_string(),
+                })],
+                prefix: Some("ns".to_string()),
+                cache: Mutex::new(PrefixCache::new()),
+            }))],
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let ctx = readonly_context_with_activated_skill("alpha");
+        let tools = toolset.get_tools(Some(&ctx)).await;
+        assert!(tools.iter().any(|t| t.name() == "ns_extra_tool"));
+    }
+
+    #[rusty_tokio::test]
+    async fn get_tools_skips_a_provided_tool_that_collides_with_a_core_tool_name() {
+        let config = SkillToolsetConfig {
+            skills: vec![skill_with_additional_tools("alpha", &["list_skills"])],
+            additional_tools: vec![AdditionalTool::Tool(Arc::new(NamedTool {
+                name: "list_skills".to_string(),
+            }))],
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let ctx = readonly_context_with_activated_skill("alpha");
+        let tools = toolset.get_tools(Some(&ctx)).await;
+        assert_eq!(
+            tools.iter().filter(|t| t.name() == "list_skills").count(),
+            1
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn get_tools_resolves_nothing_when_no_skill_is_activated() {
+        let config = SkillToolsetConfig {
+            skills: vec![skill_with_additional_tools("alpha", &["extra_tool"])],
+            additional_tools: vec![AdditionalTool::Tool(Arc::new(NamedTool {
+                name: "extra_tool".to_string(),
+            }))],
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let ctx = readonly_context_with_activated_skill("beta"); // not "alpha"
+        let tools = toolset.get_tools(Some(&ctx)).await;
+        assert!(!tools.iter().any(|t| t.name() == "extra_tool"));
+    }
+
+    #[test]
+    fn clone_with_updated_skills_preserves_additional_tools_but_resets_prefix() {
+        let config = SkillToolsetConfig {
+            skills: vec![skill("alpha")],
+            additional_tools: vec![AdditionalTool::Tool(Arc::new(NamedTool {
+                name: "extra_tool".to_string(),
+            }))],
+            tool_name_prefix: Some("ns".to_string()),
+            ..Default::default()
+        };
+        let toolset = SkillToolset::new(config).unwrap();
+        let cloned = toolset
+            .clone_with_updated_skills(vec![skill("beta")])
+            .unwrap();
+
+        assert_eq!(
+            cloned
+                .skills()
+                .iter()
+                .map(|s| s.name().to_string())
+                .collect::<Vec<_>>(),
+            vec!["beta"]
+        );
+        assert!(cloned.provided_tools_by_name.contains_key("extra_tool"));
+        assert_eq!(cloned.tool_name_prefix(), None);
     }
 }

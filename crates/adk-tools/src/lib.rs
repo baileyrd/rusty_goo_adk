@@ -39,9 +39,26 @@
 //! to, replacing the source's toolset-back-reference cycle — the same
 //! pattern the environment batch's `EnvironmentToolset` already
 //! established) and its other disclosed narrowings. New manifest row
-//! **C0950** (REQUIRED, not implemented this batch) covers a discovered
-//! gap: `SkillToolset.additional_tools`/`_resolve_additional_tools_from_state`/
-//! `clone_with_updated_skills`. No new dependency.
+//! **C0950** (a discovered gap: `SkillToolset.additional_tools`/
+//! `_resolve_additional_tools_from_state`/`clone_with_updated_skills`,
+//! left `REQUIRED` this batch) is closed out in the next one, below. No
+//! new dependency.
+//!
+//! **Skills additional_tools batch**: closes **C0950** —
+//! `skill_toolset::{AdditionalTool, SkillToolsetConfig::additional_tools,
+//! SkillToolset::resolve_additional_tools_from_state,
+//! SkillToolset::clone_with_updated_skills}`. Every real behavior ports:
+//! provided-tool/provided-toolset candidate resolution once a skill
+//! naming them in `adk_additional_tools` is activated, the core-tool-
+//! name-collision skip, and `clone_with_updated_skills`'s exact field
+//! carry-forward (faithfully including the source's own omission of
+//! `tool_name_prefix`/`tool_filter` from the clone). Disclosed
+//! narrowing: `ToolUnion`'s third member — a bare `Callable`, wrapped via
+//! `FunctionTool(callable)`'s `inspect.signature` reflection in the
+//! source — has no port, since `FunctionTool`'s own module doc already
+//! discloses this port has no such runtime reflection; `AdditionalTool`
+//! only models the two Rust-expressible branches (`Tool`/`Toolset`). No
+//! new dependency.
 //!
 //! **Environment batch**: [`base_environment`] (`BaseEnvironment`/
 //! `ExecutionResult`, C0948 — a genuine inventory gap discovered this
