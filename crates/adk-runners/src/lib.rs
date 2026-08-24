@@ -5,6 +5,8 @@
 //! most of `runners.py` depends on infrastructure this port doesn't have
 //! yet (an `App` type, the workflow/node/task-delegation engine, a real
 //! plugin system), so this crate builds up the buildable "legacy" (plain
-//! `BaseAgent`, no node/task/live/rewind/debug) slice first.
+//! `BaseAgent`, no node/task/live/debug) slice first. `rewind_async`
+//! (C0891-C0894) is now built too — see [`rewind`]'s own module doc.
 
+pub mod rewind;
 pub mod runner;
