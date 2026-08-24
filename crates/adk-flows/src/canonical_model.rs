@@ -4,13 +4,20 @@
 //! **Deferred, disclosed**: the source resolves an unset `model` (an empty
 //! string, the field's default) by walking up `parent_agent` looking for
 //! the nearest `LlmAgent` ancestor before falling back to the class-level
-//! default. `LlmAgent` isn't wired into `BaseAgent`'s tree yet (see
-//! `llm_agent.rs`'s own module doc — that wiring is blocked on Phase 3/4/8
-//! landing, which is exactly what this crate is starting), so there is no
-//! parent to walk to yet. An unset model resolves straight to the default
-//! model/live model, skipping the ancestor-lookup step; once `LlmAgent`
-//! gains real tree placement, that step slots in here without changing
-//! this function's contract.
+//! default. `LlmAgent` *is* wired into `BaseAgent`'s tree now (via
+//! `adk-flows::llm_flow::LlmFlow`, Phase 4 batch 14) and
+//! `AgentBehavior::as_any`'s downcast (`base_agent.rs`) makes an ancestor
+//! walk mechanically possible — but this function is only ever called once,
+//! at `LlmFlow::new` construction time (`llm_flow.rs`'s own disclosed
+//! memoization adaptation), which happens *before* the agent is placed
+//! anywhere in a tree — there is no parent to walk to yet at that point,
+//! regardless of the downcast mechanism's availability. Genuinely
+//! implementing the ancestor-chain fallback means deferring model
+//! resolution to first-use (inside `run_async_impl`, once `ctx.agent` is
+//! set) instead of at construction — reconsidering that deliberate
+//! memoization design, not just adding a downcast call. An unset model
+//! resolves straight to the default model/live model, skipping the
+//! ancestor-lookup step.
 //!
 //! **Deferred, disclosed**: [`ModelRef::Instance`] (the source's
 //! `model: BaseLlm` case — an agent constructed with a live model

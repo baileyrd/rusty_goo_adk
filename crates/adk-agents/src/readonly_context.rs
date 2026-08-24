@@ -37,6 +37,15 @@ impl ReadonlyContext {
         }
     }
 
+    /// The agent currently running, if one is set. Lets a caller walk the
+    /// tree (`.parent_agent()`/`.root_agent()`) or downcast onto a
+    /// concrete `AgentBehavior` (`.as_any()`) — needed for a cross-tree
+    /// lookup like the deprecated `global_instruction`'s root-agent
+    /// resolution (`instructions.rs`, C0170).
+    pub fn agent(&self) -> Option<&crate::base_agent::BaseAgent> {
+        self.invocation_context.agent.as_ref()
+    }
+
     /// The state of the current session, as a read-only view. READONLY.
     pub fn state(&self) -> &BTreeMap<String, Value> {
         &self.invocation_context.session.state

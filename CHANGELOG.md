@@ -5,6 +5,33 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::base_agent::{AgentBehavior::as_any, AsAny, BaseAgent::as_any}`
+  (new) — a downcast escape hatch letting code holding a `BaseAgent`
+  (type-erased: `Box<dyn AgentBehavior>`) recover a concrete behavior type
+  for a cross-tree lookup (an ancestor's `LlmAgent`-specific fields).
+  Purely additive via a blanket-implemented `AsAny` supertrait — no
+  existing `AgentBehavior` implementor needs changes. Also adds
+  `adk-agents::readonly_context::ReadonlyContext::agent`, exposing the
+  running agent so callers can walk `.parent_agent()`/`.root_agent()`.
+- `adk-flows::instructions::build_instructions` now genuinely walks to the
+  tree root for the deprecated `global_instruction` field (C0170), using
+  the new downcast mechanism, matching the source's
+  `hasattr(root_agent, 'global_instruction')` gate — closing a
+  previously-disclosed narrowing (reading the running agent's own field
+  as a same-agent stand-in). 2 new tests build a real 2-level tree and
+  prove a sub-agent's `LlmAgent` picks up the *root's* field. Falls back
+  to the passed-in agent's own field only when no tree context is set at
+  all (a remaining disclosed narrowing, see the module doc).
+### Fixed
+- `BaseAgent::as_any` (added in this same change): `Box<dyn AgentBehavior>`
+  is itself `Sized + 'static`, so a naive `AsAny` blanket impl also
+  (over-broadly) covers the `Box` itself — method resolution picks that
+  outer impl before reaching the supertrait vtable, silently returning
+  the `Box`'s own `TypeId` instead of the concrete behavior's, so every
+  downcast would always fail. Fixed by forcing an explicit `.as_ref()`
+  deref to `&dyn AgentBehavior` before calling `.as_any()`. Caught by a
+  same-crate regression test before this line ever shipped in a release.
+### Added
 - `adk-agents::logging_plugin::LoggingPlugin` (C0362 partial) — an
   ANSI-grey console-debugging plugin. 6 of 13 hooks ported
   (`on_user_message_callback`/`before_run_callback`/`on_event_callback`/
