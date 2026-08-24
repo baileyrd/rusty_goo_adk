@@ -22,6 +22,43 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/skill_toolset.py`: the SkillToolset stack (C0395, C0401, C0408-C0411), plus a discovered `additional_tools` gap
+**2026-08-24** · (link added once this PR is opened)
+
+Builds `SkillToolset` and four of its five tools on top of the
+`BaseEnvironment`/`BaseCodeExecutor`/skill-model infrastructure landed in
+earlier batches.
+
+- **Added:** `adk_tools::skill_registry::SkillRegistry` (C0395 DONE).
+- **Added:** `adk_tools::skill_instructions_utils::inject_session_state`
+  (C0401 DONE) — a local duplicate of the C0170 port in `adk-flows`
+  (avoiding a crate-graph cycle), exercised via `LoadSkillTool`'s
+  `adk_inject_state` interpolation.
+- **Added:** `adk_tools::skill_toolset::{SkillToolset, SkillToolsetConfig,
+  ListSkillsTool, SearchSkillsTool, LoadSkillTool}` (C0408 DONE),
+  `LoadSkillResourceTool` (C0409 DONE), `RunSkillScriptTool` (C0410
+  partial — `environment` path only), `build_skill_system_instruction`/
+  `default_skill_system_instruction` (C0411 DONE).
+- **Widened:** `adk_tools::skills_models::Resources` from `String`-only
+  to a real `ResourceContent` (`Text`/`Bytes`) enum, now that
+  `LoadSkillResourceTool` needs the binary branch.
+- **Architectural adaptation:** the source's tools hold a live
+  back-reference to their owning toolset (a Python reference cycle);
+  this port shares one `SkillCoreState` behind an `Arc` instead, the
+  same pattern `EnvironmentToolset` (previous PR) already established.
+- **Disclosed narrowing:** the source's per-invocation skill-fetch cache
+  coalesces concurrent in-flight fetches via a shared `asyncio.Future`;
+  this port keeps the 16-turn FIFO caching exactly but doesn't coalesce
+  concurrent fetches for the same uncached skill.
+- **Deferred:** `RunSkillScriptTool`'s `code_executor` path (needs
+  `_SkillScriptCodeExecutor`'s from-scratch Python-wrapper-generation
+  design — its own batch). New manifest row **C0950** (REQUIRED, not
+  implemented) covers a discovered gap: `SkillToolset.additional_tools`/
+  `_resolve_additional_tools_from_state`/`clone_with_updated_skills`.
+- **Scope:** no new dependency. 30 new tests.
+
+---
+
 ## PR #TBD — `tools/environment/`: the environment-toolset stack, plus a discovered `environment/` inventory gap (C0948, C0949, C0440-C0444)
 **2026-08-24** · (link added once this PR is opened)
 

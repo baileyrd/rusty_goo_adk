@@ -170,34 +170,40 @@ impl std::fmt::Display for Script {
     }
 }
 
+/// `dict[str, str | bytes]`'s value union, now that `LoadSkillResourceTool`
+/// (C0409, `adk-tools::skill_toolset`) is a real consumer needing the
+/// binary branch — widened from the placeholder `String`-only shape this
+/// module's own doc previously disclosed, the same "widen a placeholder
+/// once a real consumer needs the structure" pattern already used
+/// elsewhere in this port (e.g. `adk_eval::evaluator::PerInvocationResult
+/// ::rubric_scores`).
+#[derive(Debug, Clone, PartialEq, rusty_serde::Serialize, rusty_serde::Deserialize)]
+#[rusty_serde(untagged)]
+pub enum ResourceContent {
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
 /// C0394: `skills.models.Resources` — L3 skill content: additional
 /// instructions, assets, and scripts.
-///
-/// **Disclosed narrowing**: the source's `dict[str, str | bytes]` values
-/// (for `references`/`assets`) narrow to `String` — this codebase has no
-/// established `str | bytes` union representation, and every other
-/// content-bearing field ported so far (`Skill::instructions`, `Script::src`)
-/// is text. Binary reference/asset content would need a real
-/// `String`-or-`Vec<u8>` type; widen this once a caller actually loads a
-/// binary resource.
 #[derive(Debug, Clone, Default, PartialEq, rusty_serde::Serialize, rusty_serde::Deserialize)]
 pub struct Resources {
     #[rusty_serde(default)]
-    pub references: HashMap<String, String>,
+    pub references: HashMap<String, ResourceContent>,
     #[rusty_serde(default)]
-    pub assets: HashMap<String, String>,
+    pub assets: HashMap<String, ResourceContent>,
     #[rusty_serde(default)]
     pub scripts: HashMap<String, Script>,
 }
 
 impl Resources {
     /// `Resources.get_reference`.
-    pub fn get_reference(&self, reference_id: &str) -> Option<&String> {
+    pub fn get_reference(&self, reference_id: &str) -> Option<&ResourceContent> {
         self.references.get(reference_id)
     }
 
     /// `Resources.get_asset`.
-    pub fn get_asset(&self, asset_id: &str) -> Option<&String> {
+    pub fn get_asset(&self, asset_id: &str) -> Option<&ResourceContent> {
         self.assets.get(asset_id)
     }
 
@@ -428,6 +434,24 @@ mod tests {
     }
 
     #[test]
+    fn resource_content_untagged_round_trips_both_variants() {
+        let text = ResourceContent::Text("hello".to_string());
+        let json = rusty_serde::json::to_string(&text).unwrap();
+        assert_eq!(json, "\"hello\"");
+        assert_eq!(
+            rusty_serde::json::from_str::<ResourceContent>(&json).unwrap(),
+            text
+        );
+
+        let bytes = ResourceContent::Bytes(vec![1, 2, 3]);
+        let json = rusty_serde::json::to_string(&bytes).unwrap();
+        assert_eq!(
+            rusty_serde::json::from_str::<ResourceContent>(&json).unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
     fn script_display_returns_its_source() {
         let script = Script {
             src: "echo hi".to_string(),
@@ -438,12 +462,14 @@ mod tests {
     #[test]
     fn resources_accessors_look_up_by_id() {
         let mut resources = Resources::default();
-        resources
-            .references
-            .insert("ref.md".to_string(), "content".to_string());
-        resources
-            .assets
-            .insert("schema.json".to_string(), "{}".to_string());
+        resources.references.insert(
+            "ref.md".to_string(),
+            ResourceContent::Text("content".to_string()),
+        );
+        resources.assets.insert(
+            "schema.json".to_string(),
+            ResourceContent::Text("{}".to_string()),
+        );
         resources.scripts.insert(
             "run.sh".to_string(),
             Script {
@@ -453,10 +479,13 @@ mod tests {
 
         assert_eq!(
             resources.get_reference("ref.md"),
-            Some(&"content".to_string())
+            Some(&ResourceContent::Text("content".to_string()))
         );
         assert_eq!(resources.get_reference("missing"), None);
-        assert_eq!(resources.get_asset("schema.json"), Some(&"{}".to_string()));
+        assert_eq!(
+            resources.get_asset("schema.json"),
+            Some(&ResourceContent::Text("{}".to_string()))
+        );
         assert_eq!(resources.get_script("run.sh").unwrap().src, "echo hi");
         assert_eq!(resources.list_references(), vec![&"ref.md".to_string()]);
         assert_eq!(resources.list_assets(), vec![&"schema.json".to_string()]);
