@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-flows::apps_compaction::{latest_compaction_event,
+  estimate_prompt_token_count, latest_prompt_token_count}` (C0288
+  partial, C0289 DONE) — dedup and token-estimation logic ported from
+  `apps/compaction.py`, distinct from this crate's sibling
+  `compaction.rs` (`flows/llm_flows/_content_compaction.py`, C0185,
+  a different source module needing the same subsumption-detection
+  shape for a different purpose). `latest_compaction_event` finds the
+  latest non-subsumed compaction range (a range fully contained by/
+  identical to a later one is subsumed and ignored). Token estimation
+  reuses the real `adk-flows::contents::get_contents` prompt-assembly
+  path (4 chars/token), preferring a real `usage_metadata
+  .promptTokenCount` (the already-established key-read convention)
+  over the estimate. Not ported: the OTel-traced summarization wrapper
+  (C0288's other half — needs span/tracer machinery not adopted in
+  this port) and C0290-C0293 (summarizer lazy-init, the safe-window
+  split logic, and the two `Runner`-facing trigger entrypoints —
+  deliberately left for a follow-up batch). 11 new tests. No new
+  dependency.
+### Added
 - `adk-tools::llm_event_summarizer::LlmEventSummarizer` (C0286/C0287
   DONE) — the LLM-based sliding-window-compaction summarizer,
   implementing `adk-agents::app_configs::BaseEventsSummarizer` (C0285).

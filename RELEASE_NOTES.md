@@ -22,6 +22,42 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `apps/compaction.py`: dedup + token estimation (C0288 partial, C0289)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the pure, self-contained pieces of the sliding-window/token-
+threshold compaction trigger logic.
+
+- **Added:** `adk_flows::apps_compaction::latest_compaction_event` —
+  the latest non-subsumed compaction event by stream order (a range
+  fully contained by, or identical to, a later one is subsumed; an
+  identical-range tie breaks toward the later event).
+- **Added:** `adk_flows::apps_compaction::{estimate_prompt_token_count,
+  latest_prompt_token_count}` — an approximate prompt token count (4
+  chars/token) over the real `adk-flows::contents::get_contents`
+  prompt-assembly path, and a lookup that prefers a real
+  `usage_metadata.promptTokenCount` over the estimate.
+- **Disclosed placement:** lands in `adk-flows`, distinct from this
+  crate's own `compaction.rs` (`flows/llm_flows/_content_compaction.py`,
+  C0185) — a different source module that happens to need the same
+  subsumption-detection shape for a different purpose (filtering
+  contents, not deciding what to summarize next).
+- **Disclosed adaptation:** `_count_chars_in_content`'s `json.dumps`-
+  with-`str()`-fallback narrows to just the `json.dumps` path, since
+  this port's `args`/`response` are already-typed `BTreeMap` values
+  and always serializable — there's no failure case to fall back from.
+  `usage_metadata.prompt_token_count` reads through the
+  `"promptTokenCount"`-key convention `cache_performance_analyzer.rs`/
+  `context_cache.rs` already established.
+- **Scope:** the OTel-traced summarization wrapper (C0288's other
+  half) and C0290-C0293 (summarizer lazy-init, the safe-window split
+  logic, and the two `Runner`-facing trigger entrypoints) are
+  deliberately left for a follow-up batch — this one stays to the pure
+  functions with no `Runner`/`App` wiring dependency.
+- **Scope:** no new dependency. 11 new tests.
+
+---
+
 ## PR #TBD — `apps/llm_event_summarizer.py`: `LlmEventSummarizer` (C0286, C0287)
 **2026-08-24** · (link added once this PR is opened)
 

@@ -17,6 +17,7 @@
 //! instance, rather than a model name, can't be resolved through it).
 
 pub mod agent_transfer;
+pub mod apps_compaction;
 pub mod basic;
 pub mod cache_performance_analyzer;
 pub mod canonical_model;
