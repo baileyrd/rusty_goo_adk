@@ -126,15 +126,15 @@
 use std::sync::Arc;
 
 use adk_agents::app::App;
-use adk_agents::app_configs::ResumabilityConfig;
+use adk_agents::app_configs::{EventsCompactionConfig, ResumabilityConfig};
 use adk_agents::base_agent::BaseAgent;
 use adk_agents::context::Context;
 use adk_agents::context_cache_config::ContextCacheConfig;
 use adk_agents::invocation_context::InvocationContextBuilder;
 use adk_agents::run_config::RunConfig;
 use adk_agents::services::{
-    new_invocation_context_id, ArtifactService, BasePlugin, CredentialService, MemoryService,
-    PluginManager, PluginManagerError, SessionService,
+    new_invocation_context_id, ArtifactService, BasePlugin, BoxFuture, CredentialService,
+    MemoryService, PluginManager, PluginManagerError, SessionService,
 };
 use adk_agents::session::Session;
 use adk_errors::already_exists::AlreadyExistsError;
@@ -240,6 +240,31 @@ fn apply_run_config_custom_metadata(event: &mut Event, run_config: &RunConfig) {
     event.custom_metadata = Some(merged);
 }
 
+/// C0871/C0872: the extension point for post-invocation compaction.
+/// This port's crate layering (`adk-tools`/`adk-flows` both depend on
+/// `adk-runners`, not the reverse — the same direction
+/// `ForwardingArtifactService`, C0489, already relies on) means the
+/// real decision logic
+/// (`adk_flows::apps_compaction::run_compaction_for_sliding_window`,
+/// C0293) can't be called directly from this crate. `Runner` instead
+/// accepts one via this trait-object extension point, matching the
+/// "overridable behavior → injected trait object" pattern this crate
+/// already uses for `ArtifactService`/`SessionService`; a caller that
+/// can see both crates (`adk-flows`, which already depends on
+/// `adk-runners`) wires the real implementation in via
+/// [`Runner::with_compaction_trigger`]. `Runner::from_app` alone
+/// (without that wiring) leaves compaction configured but inert —
+/// disclosed on [`Runner::events_compaction_config`].
+pub trait CompactionTrigger: Send + Sync {
+    fn run<'a>(
+        &'a self,
+        config: &'a EventsCompactionConfig,
+        agent: &'a BaseAgent,
+        session_events: &'a [Event],
+        skip_token_compaction: bool,
+    ) -> BoxFuture<'a, Option<Event>>;
+}
+
 /// C0840-C0845 (narrowed, see the module doc): the core execution engine.
 /// Wraps exactly one [`BaseAgent`] — no `App`/bare-node union, since
 /// neither exists in this port.
@@ -262,12 +287,23 @@ pub struct Runner {
     /// C0846: derived from an [`App`] via [`Runner::from_app`] — never a
     /// direct constructor argument (`Runner::new` always leaves this
     /// `None`), matching the source exactly. Not yet read anywhere else
-    /// in this port (compaction, C0871/C0872, isn't built).
+    /// in this port (resumable-run support isn't built).
     context_cache_config: Option<ContextCacheConfig>,
     /// C0846: same sourcing rule as `context_cache_config` above. Not yet
     /// read anywhere else in this port (resumable-run support isn't
     /// built).
     resumability_config: Option<ResumabilityConfig>,
+    /// C0846: derived from an [`App`] via [`Runner::from_app`], same
+    /// sourcing rule as `context_cache_config`. Configuring this alone
+    /// doesn't make compaction happen — see [`CompactionTrigger`]'s own
+    /// doc for why the real decision logic must be injected separately
+    /// via [`Runner::with_compaction_trigger`].
+    events_compaction_config: Option<EventsCompactionConfig>,
+    /// C0871/C0872: the injected real compaction decision logic — see
+    /// [`CompactionTrigger`]'s own doc. `None` (the default after both
+    /// [`Runner::new`] and [`Runner::from_app`]) means post-invocation
+    /// compaction never runs, even if `events_compaction_config` is set.
+    compaction_trigger: Option<Arc<dyn CompactionTrigger>>,
 }
 
 impl Runner {
@@ -291,6 +327,8 @@ impl Runner {
             auto_create_session: false,
             context_cache_config: None,
             resumability_config: None,
+            events_compaction_config: None,
+            compaction_trigger: None,
         }
     }
 
@@ -315,6 +353,7 @@ impl Runner {
         let mut runner = Self::new(app_name, app.root_agent, session_service);
         runner.context_cache_config = app.context_cache_config;
         runner.resumability_config = app.resumability_config;
+        runner.events_compaction_config = app.events_compaction_config;
         for plugin in app.plugins {
             runner = runner.with_plugin(plugin)?;
         }
@@ -413,6 +452,21 @@ impl Runner {
     /// [`Runner::new`]/[`Runner::in_memory`].
     pub fn resumability_config(&self) -> Option<&ResumabilityConfig> {
         self.resumability_config.as_ref()
+    }
+
+    /// C0846: set only via [`Runner::from_app`]; always `None` after
+    /// [`Runner::new`]/[`Runner::in_memory`]. Configuring this alone
+    /// doesn't make compaction happen — see [`CompactionTrigger`]'s doc.
+    pub fn events_compaction_config(&self) -> Option<&EventsCompactionConfig> {
+        self.events_compaction_config.as_ref()
+    }
+
+    /// C0871/C0872: injects the real post-invocation compaction decision
+    /// logic — see [`CompactionTrigger`]'s own doc for why this can't be
+    /// wired automatically from this crate.
+    pub fn with_compaction_trigger(mut self, trigger: Arc<dyn CompactionTrigger>) -> Self {
+        self.compaction_trigger = Some(trigger);
+        self
     }
 
     /// C0873 (narrowed — no `GetSessionConfig`, see `adk-agents::services`'
@@ -590,6 +644,28 @@ impl Runner {
             .run_after_run_callback(&mut after_run_ctx)
             .await;
         merge_context_state_into_session(after_run_ctx, &mut invocation_context, &mut session);
+
+        // C0871/C0872: best-effort post-invocation compaction, run only
+        // after all events are yielded from the agent. See
+        // `CompactionTrigger`'s own doc for why the real decision logic
+        // is injected rather than called directly from this crate.
+        if let (Some(config), Some(trigger)) =
+            (&self.events_compaction_config, &self.compaction_trigger)
+        {
+            if let Some(compaction_event) = trigger
+                .run(
+                    config,
+                    &self.agent,
+                    &session.events,
+                    invocation_context.token_compaction_checked,
+                )
+                .await
+            {
+                self.session_service
+                    .append_event(&mut session, compaction_event)
+                    .await;
+            }
+        }
 
         Ok(output_events)
     }

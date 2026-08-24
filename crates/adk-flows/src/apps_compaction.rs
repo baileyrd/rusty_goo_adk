@@ -31,10 +31,19 @@
 //! resolves and returns instead, leaving in-place caching (if wanted)
 //! to whatever wires C0293.
 //!
-//! Deliberately left for a follow-up batch: C0293 (the two
-//! `Runner`-facing trigger entrypoints, which need `App`/`Runner`
-//! wiring and a `BaseSessionService::append_event` call — a genuinely
-//! larger, separate batch).
+//! **Scope, batch 3 (C0293/C0871/C0872)**: `_run_compaction_for_token_threshold`/
+//! `_run_compaction_for_token_threshold_config` and
+//! `_run_compaction_for_sliding_window` — the two trigger entrypoints,
+//! narrowed to take `agent`/`config`/raw session events directly (no
+//! `App`, matching this file's other functions) and to return
+//! `Option<Event>` (the source's `AsyncGenerator[Event, None]` never
+//! yields more than one event, so there's nothing a stream buys here).
+//! Neither performs the actual `session_service.append_event` call
+//! itself — the caller (`Runner::run_async_with_config`) does, the same
+//! "compute, caller applies" split `Runner::rewind_async` (C0891)
+//! already established. `_summarize_events_with_trace`'s OTel span is
+//! stripped for the same reason batch 1 disclosed for C0288 — what's
+//! left is just `config.summarizer.maybe_summarize_events(..)`.
 //!
 //! **Adaptation, disclosed**: the source's `_count_chars_in_content`
 //! `json.dumps`s a function call's `args`/a function response's
@@ -43,7 +52,7 @@
 //! (always JSON-serializable), so only the `json.dumps` path applies —
 //! there's no failure case to fall back from.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use adk_agents::app_configs::{BaseEventsSummarizer, EventsCompactionConfig};
@@ -378,6 +387,201 @@ pub fn latest_prompt_token_count(
         }
     }
     estimate_prompt_token_count(events, current_branch, agent_name)
+}
+
+#[derive(Debug, rusty_err::Error)]
+pub enum CompactionTriggerError {
+    #[error("{0}")]
+    Contents(ContentsError),
+    #[error("{0}")]
+    Summarizer(EnsureCompactionSummarizerError),
+}
+
+impl From<ContentsError> for CompactionTriggerError {
+    fn from(err: ContentsError) -> Self {
+        CompactionTriggerError::Contents(err)
+    }
+}
+
+impl From<EnsureCompactionSummarizerError> for CompactionTriggerError {
+    fn from(err: EnsureCompactionSummarizerError) -> Self {
+        CompactionTriggerError::Summarizer(err)
+    }
+}
+
+/// C0293: `_run_compaction_for_token_threshold`/
+/// `_run_compaction_for_token_threshold_config` — checks whether
+/// token-threshold compaction is fully configured and triggered by the
+/// latest observed/estimated prompt token count, and if so, generates a
+/// compaction event summarizing the retention-window candidates.
+/// `agent_name`/`current_branch` are hardcoded to `""`/`None`, matching
+/// the source's own `App`-wrapper call site.
+pub async fn run_compaction_for_token_threshold(
+    config: &EventsCompactionConfig,
+    agent: &BaseAgent,
+    session_events: &[Event],
+) -> Result<Option<Event>, CompactionTriggerError> {
+    let (Some(token_threshold), Some(event_retention_size)) =
+        (config.token_threshold, config.event_retention_size)
+    else {
+        return Ok(None);
+    };
+
+    let events = adk_events::rewind::apply_rewinds(session_events);
+
+    let Some(prompt_token_count) = latest_prompt_token_count(&events, None, "")? else {
+        return Ok(None);
+    };
+    if prompt_token_count < token_threshold {
+        return Ok(None);
+    }
+
+    let events_to_compact = events_to_compact_for_token_threshold(&events, event_retention_size);
+    if events_to_compact.is_empty() {
+        return Ok(None);
+    }
+
+    let summarizer = ensure_compaction_summarizer(config, agent)?;
+    Ok(summarizer.maybe_summarize_events(&events_to_compact).await)
+}
+
+/// C0293: `_run_compaction_for_sliding_window` — the interval-based
+/// trigger. Prefers token-threshold compaction if configured and
+/// triggered (unless `skip_token_compaction`); otherwise checks whether
+/// enough new invocations have completed since the last compaction
+/// and, if so, selects the invocation-id range to compact (from
+/// `overlap_size` invocations before the new block, through the last of
+/// the new block) and generates a compaction event.
+pub async fn run_compaction_for_sliding_window(
+    config: &EventsCompactionConfig,
+    agent: &BaseAgent,
+    session_events: &[Event],
+    skip_token_compaction: bool,
+) -> Result<Option<Event>, CompactionTriggerError> {
+    let events = adk_events::rewind::apply_rewinds(session_events);
+    if events.is_empty() {
+        return Ok(None);
+    }
+
+    let has_token_threshold_config =
+        config.token_threshold.is_some() && config.event_retention_size.is_some();
+    if !skip_token_compaction && has_token_threshold_config {
+        if let Some(event) =
+            run_compaction_for_token_threshold(config, agent, session_events).await?
+        {
+            return Ok(Some(event));
+        }
+    }
+
+    let (Some(compaction_interval), Some(overlap_size)) =
+        (config.compaction_interval, config.overlap_size)
+    else {
+        return Ok(None);
+    };
+
+    let last_compacted_end_timestamp = events
+        .iter()
+        .rev()
+        .find_map(|event| event.actions.compaction.as_ref().map(|c| c.end_timestamp))
+        .unwrap_or(0.0);
+
+    let mut unique_invocation_ids: Vec<String> = Vec::new();
+    let mut invocation_latest_timestamps: HashMap<String, f64> = HashMap::new();
+    for event in &events {
+        if event.invocation_id.is_empty() || event.actions.compaction.is_some() {
+            continue;
+        }
+        let latest = invocation_latest_timestamps
+            .entry(event.invocation_id.clone())
+            .or_insert_with(|| {
+                unique_invocation_ids.push(event.invocation_id.clone());
+                0.0
+            });
+        if event.timestamp > *latest {
+            *latest = event.timestamp;
+        }
+    }
+
+    let new_invocation_ids: Vec<&String> = unique_invocation_ids
+        .iter()
+        .filter(|id| invocation_latest_timestamps[*id] > last_compacted_end_timestamp)
+        .collect();
+
+    if (new_invocation_ids.len() as i64) < compaction_interval {
+        return Ok(None);
+    }
+
+    let end_inv_id = *new_invocation_ids.last().unwrap();
+    let first_new_inv_id = new_invocation_ids[0];
+    let first_new_inv_idx = unique_invocation_ids
+        .iter()
+        .position(|id| id == first_new_inv_id)
+        .unwrap();
+
+    let start_idx = (first_new_inv_idx as i64 - overlap_size).max(0) as usize;
+    let start_inv_id = &unique_invocation_ids[start_idx];
+
+    let last_event_idx = events
+        .iter()
+        .rposition(|event| &event.invocation_id == end_inv_id);
+
+    let mut events_to_compact: Vec<Event> = Vec::new();
+    if let Some(last_event_idx) = last_event_idx {
+        if let Some(first_event_start_inv_idx) = events
+            .iter()
+            .position(|event| &event.invocation_id == start_inv_id)
+        {
+            events_to_compact = events[first_event_start_inv_idx..=last_event_idx]
+                .iter()
+                .filter(|event| event.actions.compaction.is_none())
+                .cloned()
+                .collect();
+            events_to_compact = longest_self_contained_prefix(&events_to_compact);
+        }
+    }
+
+    if events_to_compact.is_empty() {
+        return Ok(None);
+    }
+
+    let summarizer = ensure_compaction_summarizer(config, agent)?;
+    Ok(summarizer.maybe_summarize_events(&events_to_compact).await)
+}
+
+/// The real [`adk_runners::runner::CompactionTrigger`] implementation —
+/// wires [`run_compaction_for_sliding_window`] into a `Runner`. Errors
+/// (a `ContentsError` from prompt-token estimation, or a
+/// `NotAnLlmAgent` summarizer-resolution error) are swallowed as "no
+/// compaction this round," matching this operation's best-effort
+/// nature and this port's established silent-degradation posture where
+/// no error/logging channel exists to report through.
+pub struct RealCompactionTrigger;
+
+impl adk_runners::runner::CompactionTrigger for RealCompactionTrigger {
+    fn run<'a>(
+        &'a self,
+        config: &'a EventsCompactionConfig,
+        agent: &'a BaseAgent,
+        session_events: &'a [Event],
+        skip_token_compaction: bool,
+    ) -> adk_agents::services::BoxFuture<'a, Option<Event>> {
+        Box::pin(async move {
+            run_compaction_for_sliding_window(config, agent, session_events, skip_token_compaction)
+                .await
+                .ok()
+                .flatten()
+        })
+    }
+}
+
+/// Attaches [`RealCompactionTrigger`] to `runner` — the natural call
+/// site is right after [`adk_runners::runner::Runner::from_app`],
+/// since only an `App`-sourced `Runner` ever has an
+/// `events_compaction_config` to act on.
+pub fn with_real_compaction_trigger(
+    runner: adk_runners::runner::Runner,
+) -> adk_runners::runner::Runner {
+    runner.with_compaction_trigger(Arc::new(RealCompactionTrigger))
 }
 
 #[cfg(test)]
@@ -751,5 +955,369 @@ mod tests {
                 .as_deref(),
             Some("after2")
         );
+    }
+
+    // --- run_compaction_for_token_threshold / run_compaction_for_sliding_window ---
+
+    struct StubLlm {
+        response: adk_models::llm_response::LlmResponse,
+    }
+
+    impl adk_models::base_llm::BaseLlm for StubLlm {
+        fn model(&self) -> &str {
+            "stub-model"
+        }
+
+        fn type_name(&self) -> &'static str {
+            "StubLlm"
+        }
+
+        fn generate_content_async<'a>(
+            &'a self,
+            _llm_request: &'a adk_models::llm_request::LlmRequest,
+            _stream: bool,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            Vec<adk_models::llm_response::LlmResponse>,
+                            adk_models::base_llm::BaseLlmError,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            let response = self.response.clone();
+            Box::pin(async move { Ok(vec![response]) })
+        }
+    }
+
+    fn llm_flow_agent_with_summary(summary_text: &str) -> BaseAgent {
+        let llm_agent = adk_agents::llm_agent::LlmAgent::new(
+            adk_agents::llm_agent::ModelRef::Name("gemini-2.0-flash".to_string()),
+        );
+        let response = adk_models::llm_response::LlmResponse {
+            content: Some(Content::new("model", vec![Part::text(summary_text)])),
+            ..Default::default()
+        };
+        let llm_flow =
+            crate::llm_flow::LlmFlow::with_model(llm_agent, Arc::new(StubLlm { response }));
+        BaseAgent::new("root", llm_flow).unwrap()
+    }
+
+    fn invocation_event(invocation_id: &str, timestamp: f64) -> Event {
+        let mut event = Event::new(invocation_id, "user", NodeInfo::new(""));
+        event.content = Some(Content::user_text("hi"));
+        event.timestamp = timestamp;
+        event
+    }
+
+    fn token_threshold_config() -> EventsCompactionConfig {
+        EventsCompactionConfig {
+            token_threshold: Some(1),
+            event_retention_size: Some(0),
+            ..Default::default()
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn token_threshold_returns_none_when_neither_trigger_is_configured() {
+        let config = EventsCompactionConfig::default();
+        let agent = llm_flow_agent_with_summary("summary");
+        let events = vec![invocation_event("inv-1", 1.0)];
+        assert!(run_compaction_for_token_threshold(&config, &agent, &events)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[rusty_tokio::test]
+    async fn token_threshold_returns_none_when_below_the_threshold() {
+        let config = EventsCompactionConfig {
+            token_threshold: Some(1_000_000),
+            event_retention_size: Some(0),
+            ..Default::default()
+        };
+        let agent = llm_flow_agent_with_summary("summary");
+        let events = vec![invocation_event("inv-1", 1.0)];
+        assert!(run_compaction_for_token_threshold(&config, &agent, &events)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[rusty_tokio::test]
+    async fn token_threshold_triggers_a_compaction_event_when_above_the_threshold() {
+        let mut event = invocation_event("inv-1", 1.0);
+        event.usage_metadata = Some(Value::Map(vec![(
+            "promptTokenCount".to_string(),
+            Value::Int(1_000_000),
+        )]));
+        let config = token_threshold_config();
+        let agent = llm_flow_agent_with_summary("the summary");
+
+        let compaction_event = run_compaction_for_token_threshold(&config, &agent, &[event])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            compaction_event
+                .actions
+                .compaction
+                .unwrap()
+                .compacted_content
+                .parts[0]
+                .text
+                .as_deref(),
+            Some("the summary")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn token_threshold_returns_none_when_there_are_no_candidates_to_compact() {
+        let mut event = invocation_event("inv-1", 1.0);
+        event.usage_metadata = Some(Value::Map(vec![(
+            "promptTokenCount".to_string(),
+            Value::Int(1_000_000),
+        )]));
+        // retention_size >= candidate count -> nothing left to compact.
+        let config = EventsCompactionConfig {
+            token_threshold: Some(1),
+            event_retention_size: Some(5),
+            ..Default::default()
+        };
+        let agent = llm_flow_agent_with_summary("summary");
+        assert!(
+            run_compaction_for_token_threshold(&config, &agent, &[event])
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn token_threshold_errors_when_the_agent_isnt_llm_backed() {
+        let mut event = invocation_event("inv-1", 1.0);
+        event.usage_metadata = Some(Value::Map(vec![(
+            "promptTokenCount".to_string(),
+            Value::Int(1_000_000),
+        )]));
+        let config = token_threshold_config();
+        let agent = BaseAgent::new("root", adk_agents::base_agent::NoopBehavior).unwrap();
+
+        match run_compaction_for_token_threshold(&config, &agent, &[event]).await {
+            Err(CompactionTriggerError::Summarizer(
+                EnsureCompactionSummarizerError::NotAnLlmAgent,
+            )) => {}
+            other => panic!("expected a Summarizer(NotAnLlmAgent) error, got {other:?}"),
+        }
+    }
+
+    fn sliding_window_config(
+        compaction_interval: i64,
+        overlap_size: i64,
+    ) -> EventsCompactionConfig {
+        EventsCompactionConfig {
+            compaction_interval: Some(compaction_interval),
+            overlap_size: Some(overlap_size),
+            ..Default::default()
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn sliding_window_returns_none_for_no_events() {
+        let config = sliding_window_config(1, 0);
+        let agent = llm_flow_agent_with_summary("summary");
+        assert!(
+            run_compaction_for_sliding_window(&config, &agent, &[], false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn sliding_window_returns_none_when_neither_trigger_mode_is_configured() {
+        let config = EventsCompactionConfig::default();
+        let agent = llm_flow_agent_with_summary("summary");
+        let events = vec![invocation_event("inv-1", 1.0)];
+        assert!(
+            run_compaction_for_sliding_window(&config, &agent, &events, false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn sliding_window_returns_none_when_not_enough_new_invocations() {
+        let config = sliding_window_config(3, 0);
+        let agent = llm_flow_agent_with_summary("summary");
+        let events = vec![
+            invocation_event("inv-1", 1.0),
+            invocation_event("inv-2", 2.0),
+        ];
+        assert!(
+            run_compaction_for_sliding_window(&config, &agent, &events, false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn sliding_window_triggers_when_enough_new_invocations_have_completed() {
+        let config = sliding_window_config(2, 0);
+        let agent = llm_flow_agent_with_summary("window summary");
+        let events = vec![
+            invocation_event("inv-1", 1.0),
+            invocation_event("inv-2", 2.0),
+        ];
+
+        let compaction_event = run_compaction_for_sliding_window(&config, &agent, &events, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            compaction_event
+                .actions
+                .compaction
+                .unwrap()
+                .compacted_content
+                .parts[0]
+                .text
+                .as_deref(),
+            Some("window summary")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn sliding_window_prefers_token_threshold_when_configured_and_triggered() {
+        let mut event = invocation_event("inv-1", 1.0);
+        event.usage_metadata = Some(Value::Map(vec![(
+            "promptTokenCount".to_string(),
+            Value::Int(1_000_000),
+        )]));
+        let mut config = sliding_window_config(1, 0);
+        config.token_threshold = Some(1);
+        config.event_retention_size = Some(0);
+        let agent = llm_flow_agent_with_summary("token summary");
+
+        let compaction_event = run_compaction_for_sliding_window(&config, &agent, &[event], false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            compaction_event
+                .actions
+                .compaction
+                .unwrap()
+                .compacted_content
+                .parts[0]
+                .text
+                .as_deref(),
+            Some("token summary")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn sliding_window_skip_token_compaction_bypasses_the_token_threshold_check() {
+        // Token-threshold IS configured and would trigger, but
+        // skip_token_compaction=true bypasses it; sliding window isn't
+        // configured either, so nothing triggers.
+        let mut event = invocation_event("inv-1", 1.0);
+        event.usage_metadata = Some(Value::Map(vec![(
+            "promptTokenCount".to_string(),
+            Value::Int(1_000_000),
+        )]));
+        let config = EventsCompactionConfig {
+            token_threshold: Some(1),
+            event_retention_size: Some(0),
+            ..Default::default()
+        };
+        let agent = llm_flow_agent_with_summary("summary");
+
+        assert!(
+            run_compaction_for_sliding_window(&config, &agent, &[event], true)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    // --- with_real_compaction_trigger (end-to-end Runner wiring) ---
+
+    fn compacting_app(runner_agent: BaseAgent) -> adk_agents::app::App {
+        adk_agents::app::App::new("test-app", runner_agent)
+            .unwrap()
+            .with_events_compaction_config(EventsCompactionConfig {
+                compaction_interval: Some(1),
+                overlap_size: Some(0),
+                ..Default::default()
+            })
+    }
+
+    #[rusty_tokio::test]
+    async fn with_real_compaction_trigger_appends_a_compaction_event_after_a_turn() {
+        use adk_agents::services::SessionService as _;
+        let session_service = Arc::new(adk_agents::services::InMemorySessionService::new());
+        let agent = llm_flow_agent_with_summary("the summary");
+        let app = compacting_app(agent);
+        let runner =
+            adk_runners::runner::Runner::from_app(app, None, session_service.clone()).unwrap();
+        let runner = with_real_compaction_trigger(runner).with_auto_create_session(true);
+
+        runner
+            .run_async("user", "s1", Content::user_text("hi"))
+            .await
+            .unwrap();
+
+        let session = session_service
+            .get_session("test-app", "user", "s1")
+            .await
+            .unwrap();
+        let compaction_event = session
+            .events
+            .iter()
+            .find(|event| event.actions.compaction.is_some())
+            .expect("expected a compaction event to have been appended");
+        assert_eq!(
+            compaction_event
+                .actions
+                .compaction
+                .as_ref()
+                .unwrap()
+                .compacted_content
+                .parts[0]
+                .text
+                .as_deref(),
+            Some("the summary")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn without_the_trigger_wired_compaction_never_runs_even_if_configured() {
+        use adk_agents::services::SessionService as _;
+        let session_service = Arc::new(adk_agents::services::InMemorySessionService::new());
+        let agent = llm_flow_agent_with_summary("the summary");
+        let app = compacting_app(agent);
+        // No `with_real_compaction_trigger` call this time.
+        let runner = adk_runners::runner::Runner::from_app(app, None, session_service.clone())
+            .unwrap()
+            .with_auto_create_session(true);
+
+        runner
+            .run_async("user", "s1", Content::user_text("hi"))
+            .await
+            .unwrap();
+
+        let session = session_service
+            .get_session("test-app", "user", "s1")
+            .await
+            .unwrap();
+        assert!(!session
+            .events
+            .iter()
+            .any(|event| event.actions.compaction.is_some()));
     }
 }

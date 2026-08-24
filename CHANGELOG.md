@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-flows::apps_compaction::{run_compaction_for_token_threshold,
+  run_compaction_for_sliding_window}` (C0293 DONE) — the two
+  post-invocation compaction trigger entrypoints, ported from
+  `apps/compaction.py`. `Runner` (C0871/C0872 DONE) gets a new
+  `events_compaction_config` field (populated only via `Runner::from_app`,
+  matching `context_cache_config`'s existing sourcing rule) and a
+  `CompactionTrigger` trait-object extension point
+  (`Runner::with_compaction_trigger`), called after every produced
+  event has already been appended and just before returning from
+  `run_async_with_config`. **Load-bearing architecture note**: this
+  port's crate layering (`adk-tools`/`adk-flows` both depend on
+  `adk-runners`, not the reverse) makes it impossible for
+  `adk-runners` to call the real trigger logic directly without a
+  crate-graph cycle — `adk_flows::apps_compaction::with_real_compaction_trigger`
+  (in the same file, which already depends on `adk-runners`) wires the
+  real implementation in; a `Runner` built via `from_app` alone has
+  compaction configured but inert until that wiring is applied. 13 new
+  tests (11 for the decision logic, 2 end-to-end for the wiring). New
+  dependency: `adk-flows` now depends on `adk-runners` (no cycle —
+  `adk-runners` depends on neither `adk-flows` nor `adk-tools`).
+### Added
 - `adk-runners::Runner::rewind_async` (C0891/C0894 DONE) + new
   `crates/adk-runners/src/rewind.rs`
   (`compute_state_delta_for_rewind`/`compute_artifact_delta_for_rewind`,

@@ -22,6 +22,45 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `apps/compaction.py`/`runners.py`: post-invocation compaction trigger (C0293, C0871, C0872)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the last piece of `apps/compaction.py` and wires it into
+`Runner` — closing out the compaction feature this session's earlier
+PRs built the pure logic for.
+
+- **Added:** `adk_flows::apps_compaction::{run_compaction_for_token_threshold,
+  run_compaction_for_sliding_window}` — the two trigger entrypoints,
+  narrowed to `Option<Event>` (the source's `AsyncGenerator[Event, None]`
+  never yields more than one) and to take `agent`/`config`/raw session
+  events directly rather than an `App`. Neither performs the append
+  itself — the caller does, the same split `Runner::rewind_async`
+  (prior PR) already established.
+- **Added:** `adk_runners::runner::{Runner::events_compaction_config,
+  Runner::with_compaction_trigger, CompactionTrigger}` — a new config
+  field (sourced only via `Runner::from_app`, matching
+  `context_cache_config`'s rule) and a trait-object extension point
+  for the actual trigger logic, called right after every produced
+  event has already been appended and just before `run_async_with_config`
+  returns.
+- **Load-bearing architecture note, disclosed:** this port's crate
+  layering — `adk-tools` and `adk-flows` both depend on `adk-runners`,
+  never the reverse — means `adk-runners` itself cannot call
+  `run_compaction_for_sliding_window` without creating a crate-graph
+  cycle. `adk_flows::apps_compaction::with_real_compaction_trigger`
+  (added alongside the trigger functions, in a crate that already
+  depends on `adk-runners`) wires the real implementation into any
+  `Runner`. A `Runner` built via `from_app` alone has compaction
+  *configured* but stays inert until that wiring is applied — the same
+  "overridable behavior → injected trait object" pattern this crate
+  already uses for `ArtifactService`/`SessionService`.
+- **Scope:** new dependency — `adk-flows` now depends on `adk-runners`
+  (verified no cycle: `adk-runners` depends on neither `adk-flows` nor
+  `adk-tools`). 13 new tests (11 for the decision logic, 2 end-to-end
+  for the `Runner` wiring).
+
+---
+
 ## PR #TBD — `runners.py`: `Runner::rewind_async` (C0891, C0892, C0893, C0894)
 **2026-08-24** · (link added once this PR is opened)
 
