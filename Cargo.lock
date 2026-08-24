@@ -119,6 +119,7 @@ dependencies = [
  "adk-errors",
  "adk-events",
  "adk-genai",
+ "adk-platform",
  "rusty_err",
  "rusty_serde",
  "rusty_tokio",

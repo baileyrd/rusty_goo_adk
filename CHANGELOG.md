@@ -5,6 +5,34 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-runners::Runner::run` (C0877/C0878/C0879/C0880 DONE) — a
+  synchronous wrapper around `run_async_with_config`, ported from
+  `runners.py`'s local-testing/convenience-only `Runner.run(...)`.
+  `Runner` now derives `Clone` (every field is a cheap `Arc`/value clone)
+  so `run` can move an owned copy onto a background OS thread via
+  `adk_platform::thread::create_thread` (C0005, new `adk-runners` →
+  `adk-platform` dependency) running its own `rusty_tokio::Runtime` —
+  verified callable from inside an already-running `rusty_tokio` runtime
+  without deadlocking. Disclosed narrowing: the source bridges events one
+  at a time through a blocking `queue.Queue`; this port's
+  `run_async_with_config` already collapses to a single batched
+  `Result<Vec<Event>, RunnerError>` (an already-established narrowing),
+  so `run` collapses to one background computation whose whole result
+  becomes available at once. A panic on the background thread (this
+  port's only abnormal-termination case — no `Exception`/`BaseException`/
+  `SystemExit`/`CancelledError` hierarchy to distinguish) is caught by
+  `join()` and re-wrapped into `RunnerError::AgentRun` naming the panic
+  payload, rather than re-panicking the calling thread. C0880 also closes
+  a small pre-existing gap: `run_async_with_config` didn't accept
+  `state_delta` at all before this batch — added as a new
+  `Option<HashMap<String, Value>>` parameter, applied onto the appended
+  user event's `actions.state_delta` when non-empty (mirroring
+  `_append_new_message_to_session`'s own truthiness check), forwarded
+  straight through from `run`. Also fixed a stale evidence note on C0886
+  (compaction was closed in an earlier PR this session but its "not
+  ported" wording never got updated) and a stale module-doc line
+  (`run` was still listed under "not ported this batch"). 5 new tests.
+### Added
 - `adk-runners::Runner::run_async_with_config` (C0918 N/A-by-existing-design,
   C0919 partial DONE) — now also patches `context_cache_config`/
   `resumability_config`/`events_compaction_config` onto the

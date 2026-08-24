@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 adk-agents = { path = "../adk-agents" }
+adk-platform = { path = "../adk-platform" }
 adk-errors = { path = "../adk-errors" }
 adk-events = { path = "../adk-events" }
 adk-genai = { path = "../adk-genai" }
