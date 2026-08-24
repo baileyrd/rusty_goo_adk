@@ -22,5 +22,6 @@
 
 pub mod append_tools;
 pub mod base_tool;
+pub mod base_toolset;
 pub mod tool_confirmation;
 pub mod tool_context;
