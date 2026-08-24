@@ -3,12 +3,15 @@
 //!
 //! **Forward-pull**: `is_gemini_model`/`extract_model_name`
 //! (`utils/model_name_utils.py`) and `get_google_llm_variant`/
-//! `is_enterprise_mode_enabled` (`utils/variant_utils.py`,
-//! `utils/env_utils.py`) aren't their own manifest rows (`utils/` isn't a
-//! phase of its own) but `BaseLlm.capabilities`'s deprecated name-based
-//! fallback needs them, so they're pulled forward here — small,
-//! self-contained, env-var/regex-based utilities, same rationale as
-//! `sessions.state.State` in Phase 2.
+//! `is_enterprise_mode_enabled`/`is_env_enabled` (`utils/variant_utils.py`,
+//! `utils/env_utils.py`, C0796) aren't inventoried under a `utils/`
+//! phase of their own, but `BaseLlm.capabilities`'s deprecated
+//! name-based fallback needs them, so they're pulled forward here —
+//! small, self-contained, env-var/regex-based utilities, same
+//! rationale as `sessions.state.State` in Phase 2. (`is_env_enabled`/
+//! `is_enterprise_mode_enabled` do have their own manifest row,
+//! C0796 — this doc originally said otherwise; corrected once that
+//! row's evidence was filled in.)
 
 use rusty_serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -198,6 +201,63 @@ mod tests {
         assert!(is_env_enabled(Some("1"), "0"));
         assert!(!is_env_enabled(Some("false"), "0"));
         assert!(!is_env_enabled(None, "0"));
+    }
+
+    // Serializes tests that mutate GOOGLE_GENAI_USE_ENTERPRISE/
+    // GOOGLE_GENAI_USE_VERTEXAI, process-wide env state.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn is_enterprise_mode_enabled_reads_the_preferred_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("GOOGLE_GENAI_USE_VERTEXAI");
+            std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "true");
+        }
+        let result = is_enterprise_mode_enabled();
+        unsafe {
+            std::env::remove_var("GOOGLE_GENAI_USE_ENTERPRISE");
+        }
+        assert!(result);
+    }
+
+    #[test]
+    fn is_enterprise_mode_enabled_prefers_enterprise_over_the_deprecated_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "false");
+            std::env::set_var("GOOGLE_GENAI_USE_VERTEXAI", "true");
+        }
+        let result = is_enterprise_mode_enabled();
+        unsafe {
+            std::env::remove_var("GOOGLE_GENAI_USE_ENTERPRISE");
+            std::env::remove_var("GOOGLE_GENAI_USE_VERTEXAI");
+        }
+        assert!(!result);
+    }
+
+    #[test]
+    fn is_enterprise_mode_enabled_falls_back_to_the_deprecated_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("GOOGLE_GENAI_USE_ENTERPRISE");
+            std::env::set_var("GOOGLE_GENAI_USE_VERTEXAI", "1");
+        }
+        let result = is_enterprise_mode_enabled();
+        unsafe {
+            std::env::remove_var("GOOGLE_GENAI_USE_VERTEXAI");
+        }
+        assert!(result);
+    }
+
+    #[test]
+    fn is_enterprise_mode_enabled_defaults_to_false() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("GOOGLE_GENAI_USE_ENTERPRISE");
+            std::env::remove_var("GOOGLE_GENAI_USE_VERTEXAI");
+        }
+        assert!(!is_enterprise_mode_enabled());
     }
 
     #[test]

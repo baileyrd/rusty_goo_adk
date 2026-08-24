@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Close out C0796 (`env_utils.py`)
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** 4 new tests for `is_enterprise_mode_enabled`'s
+  `GOOGLE_GENAI_USE_ENTERPRISE`-vs.-deprecated-`GOOGLE_GENAI_USE_VERTEXAI`
+  precedence. Both `is_env_enabled`/`is_enterprise_mode_enabled` were
+  already ported in an earlier Phase 3 forward-pull batch (needed by
+  `BaseLlm.capabilities`'s deprecated name-based fallback) but never
+  linked back to their manifest row, and `is_enterprise_mode_enabled`
+  itself had no dedicated test until now.
+- **Disclosed adaptation:** `is_env_enabled` here takes an
+  already-looked-up value rather than the source's env-var *name* —
+  every call site in this port already has its own value in hand.
+  `adk-features::feature_registry`'s own `is_env_enabled` is a
+  separate, intentionally undeduplicated local copy (per its own
+  module doc) that does take a name directly, for its dynamically
+  constructed `ADK_ENABLE_<NAME>` variable.
+
+Manifest row C0796 updated to `DONE`. `CHANGELOG.md` and
+`RELEASE_NOTES.md` updated.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (4 new tests in `adk-models`, 216 total, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `content_utils` shared module (`adk-genai`)
 **2026-08-24** · (link added once this PR is opened)
 
