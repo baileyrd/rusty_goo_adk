@@ -5,6 +5,21 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::bash_tool::ExecuteBashTool` (Phase 8, C0418, partial) —
+  runs a validated bash command in a workspace directory via
+  `rusty_tokio::process::Command` (no shell, matching the source's own
+  `create_subprocess_exec`); mandatory confirmation gate on every
+  invocation regardless of policy; command-prefix allowlist and
+  blocked-operator validation; stdout/stderr capture (replicating the
+  source's own "empty bytes → placeholder text" quirk) and Python's
+  negative-on-signal `returncode` convention. 15 new tests, covering
+  13 of the source's own `test_bash_tool.py` cases in spirit.
+  Disclosed narrowings (module doc, at length): no `setrlimit`
+  resource-limit enforcement (no `libc` binding — the policy fields
+  don't exist rather than existing unenforced), a timeout kills only
+  the immediate child not its process group (no `killpg` equivalent),
+  no partial-output capture on timeout, and a hand-rolled
+  POSIX-ish `shlex.split` stand-in.
 - `adk-tools::agent_tool::AgentTool` (Phase 8, C0406, partial) — wraps a
   `BaseAgent` as a callable tool: spins up an isolated
   `InMemorySessionService` session (forwarding the parent's

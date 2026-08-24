@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `ExecuteBashTool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::bash_tool::ExecuteBashTool` (C0418, partial) —
+  runs a validated bash command in a workspace directory via
+  `rusty_tokio::process::Command` (no shell — matches the source's own
+  `create_subprocess_exec`, so shell operators like `|`/`;`/`&&` are
+  never interpreted specially by either port). Ports the command
+  validation (prefix allowlist, blocked operators), the mandatory
+  confirmation gate (every invocation requires confirmation regardless
+  of policy, matching the source exactly), stdout/stderr capture
+  (replicating the source's own "empty bytes → `<no _ captured>`
+  placeholder" quirk), and Python's negative-on-signal `returncode`
+  convention. 15 new tests, covering 13 of the source's own
+  `test_bash_tool.py` cases in spirit (confirmation request/reject/
+  confirm, prefix allowlist, blocked operators, timeout, nonzero exit,
+  stderr capture, cwd).
+- **Disclosed narrowings (module doc, at length):** the source's
+  `BashToolPolicy.max_memory_bytes`/`max_file_size_bytes`/
+  `max_child_processes`/implicit `RLIMIT_CORE` suppression are
+  enforced via a `preexec_fn` calling POSIX `setrlimit()`; this port
+  has no `libc`/`setrlimit` binding, and adding one wasn't judged
+  worth it for three calls, so those fields don't exist on this port's
+  `BashToolPolicy` at all (a config field with no enforcement behind
+  it would be worse than no field). A timeout kills only the immediate
+  child (`Command::kill_on_drop`) rather than the source's whole
+  process group (`os.killpg`) — this port's `Child` has no
+  `killpg`-equivalent, so a grandchild the command spawned can survive
+  a timeout. A timeout's response carries no partial stdout/stderr —
+  the source re-invokes `communicate()` after killing to capture
+  whatever was buffered; this port's `Child::wait_with_output`
+  consumes the child as one unit with no drain-then-kill-then-redrain
+  split. `shlex.split` is replicated with a hand-rolled POSIX-ish word
+  splitter (quotes + backslash escaping), not the full shlex grammar.
+
 ## PR #TBD — `AgentTool`
 **2026-08-24** · (link added once this PR is opened)
 

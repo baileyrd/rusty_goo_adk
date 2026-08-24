@@ -24,6 +24,7 @@ pub mod agent_tool;
 pub mod append_tools;
 pub mod base_tool;
 pub mod base_toolset;
+pub mod bash_tool;
 pub mod example_tool;
 pub mod exit_loop_tool;
 pub mod function_tool;
