@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools`: `FunctionTool` (Phase 8 batch 3, C0404 partial, C0405
+  done) — wraps a Rust closure as a `BaseTool`. Since Rust has no
+  runtime function-signature reflection, `FunctionTool::new` takes an
+  already-built `FunctionDeclaration` and an explicit `required_args`
+  list instead of deriving either from the wrapped closure, which
+  always takes `(&BTreeMap<String, Value>, &mut ToolContext)` — no
+  context-parameter auto-detection, no Pydantic-style argument
+  coercion, no sync/async runner distinction (disclosed at length in
+  the module doc). The `require_confirmation` gate (bool or async
+  predicate) is fully ported, needing a small addition to
+  `adk-agents::context::Context`: a `tool_confirmation`/
+  `set_tool_confirmation` field (kept as an opaque `Value`, not a
+  typed `ToolConfirmation`, to avoid a crate cycle).
 - `adk-tools`: `BaseToolset` (Phase 8 batch 2, C0403, partial) — the
   base trait for a tool collection: `tool_filter`/`tool_name_prefix` as
   trait methods (not fields), a `ToolFilter` enum standing in for the
