@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-runners::Runner::from_app` (C0846/C0849 DONE) — an additive
+  second constructor building a `Runner` from a resolved `App`,
+  deriving `context_cache_config`/`resumability_config`/`plugins` from
+  it rather than accepting them as direct arguments (matching the
+  source's "never accepted as direct constructor args" rule for the
+  first two). `Runner::new`'s already-shipped signature is untouched.
+  `app_name` defaults to `app.name`, with an optional override
+  parameter matching the source's `app_name or app.name`. Also closes
+  out C0847/C0848/C0850 as N/A (agent-origin inference and the
+  deprecated back-compat wrapper have nothing to port in this shape)
+  and corrects the module doc's stale "`App` type... N/A here" claim.
+  6 new tests. No new dependency.
+### Added
 - `adk-agents::app::{App, validate_app_name, AppError}` (C0279/C0280
   DONE) — the top-level container binding a root agent + app-wide
   settings (`plugins`, `events_compaction_config`,
