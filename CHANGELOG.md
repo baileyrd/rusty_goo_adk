@@ -5,6 +5,12 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- 4 new tests for `adk-models::capabilities::is_enterprise_mode_enabled`
+  (Phase 16, C0796) covering its `GOOGLE_GENAI_USE_ENTERPRISE` vs.
+  deprecated `GOOGLE_GENAI_USE_VERTEXAI` precedence — the function
+  itself was already ported in an earlier Phase 3 forward-pull batch
+  but had no dedicated test and was never linked back to its manifest
+  row until now.
 - `adk-genai::content_utils::{extract_text_from_content, to_user_content,
   ToUserContentInput, SKIP_THOUGHT_SIGNATURE_VALIDATOR}` (Phase 2,
   C0927/C0928/C0929) — ported from `google.adk.utils.content_utils`.
