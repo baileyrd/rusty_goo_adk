@@ -5,6 +5,15 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::transfer_to_agent_tool::{transfer_to_agent,
+  TransferToAgentTool}` (Phase 8, C0436, DONE) — the bare function
+  sets `EventActions.transfer_to_agent`; the class variant wraps a
+  `FunctionTool` and adds a JSON-schema `enum` constraint to the
+  `agent_name` parameter, restricting choices to valid agents and
+  preventing the model from hallucinating a target. Unblocks the
+  `TransferToAgentTool`-building half of C0171 (`agent_transfer.rs`)
+  that its own module doc disclosed as deferred until `BaseTool`
+  existed. 4 new tests.
 - `adk-tools::{load_memory_tool, preload_memory_tool, memory_entry_utils}`
   (Phase 8, C0423/C0424, DONE) — `LoadMemoryTool`/`load_memory` (wraps
   the already-real `Context::search_memory` in a `FunctionTool`,

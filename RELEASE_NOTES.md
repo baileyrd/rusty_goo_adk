@@ -22,6 +22,25 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `TransferToAgentTool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::transfer_to_agent_tool::{transfer_to_agent,
+  TransferToAgentTool}` (C0436, DONE). The bare `transfer_to_agent`
+  function sets `EventActions.transfer_to_agent` (already real,
+  C0018). `TransferToAgentTool` wraps a `FunctionTool` and builds a
+  JSON-schema `agent_name` parameter with an `enum` constraint from
+  the given agent names — restricting choices to valid agents,
+  preventing the model from hallucinating an invalid target.
+- **Unblocks:** the `TransferToAgentTool`-building half of C0171
+  (`adk-flows::agent_transfer`) that its own module doc already
+  disclosed as deferred "until `BaseTool` existed." Actually attaching
+  a built instance into `LlmRequest.config.tools` is left for a
+  follow-up batch — it needs the still-unbuilt "resolve
+  `InvocationContext.agent` to a concrete `LlmAgent`" wiring every
+  other Phase 4 processor is blocked on too.
+- 4 new tests.
+
 ## PR #TBD — `LoadMemoryTool`, `PreloadMemoryTool`
 **2026-08-24** · (link added once this PR is opened)
 
