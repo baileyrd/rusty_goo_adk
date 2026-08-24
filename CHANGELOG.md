@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::unsafe_local_code_executor::UnsafeLocalCodeExecutor`
+  (C0385), ported from `google.adk.code_executors.unsafe_local_code_executor`
+  — bare, zero-sandboxed subprocess code execution (same host/creds/
+  network/filesystem access as this process). The embedded `_RUNNER`
+  Python script, `__main__`-guard detection, and `stateful`/
+  `optimize_data_file` rejection are all ported exactly; 6 new tests
+  include real end-to-end subprocess execution (stdout capture, a
+  traceback-on-error case, and a real 1-second timeout kill). This
+  completes the `code_executors/` area's non-cloud-backend scope
+  (C0383-C0385, C0390-C0391); `ContainerCodeExecutor`/`GkeCodeExecutor`/
+  cloud executors still need a new SDK dependency decision.
+  Disclosed adaptations: `sys.executable` becomes a configurable
+  `python_executable` command (default `"python3"`) since this port was
+  never a Python interpreter itself — running this executor still
+  genuinely requires a Python interpreter on the host; the process-
+  group SIGTERM→grace→SIGKILL sequence narrows to an immediate
+  `Child::kill()`, the same disclosed `killpg`-equivalent gap already
+  established by `bash_tool.rs` (C0418); stdin/stdout/stderr are
+  handled by three dedicated OS threads since `execute_code` is
+  synchronous (matching the source's own non-`async` signature).
 - `adk-tools::built_in_code_executor::BuiltInCodeExecutor` (C0384) and
   `adk-tools::code_executor_context::CodeExecutorContext` (C0390),
   ported from `google.adk.code_executors.{built_in_code_executor,

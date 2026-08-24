@@ -50,4 +50,5 @@ pub mod set_model_response_tool;
 pub mod tool_confirmation;
 pub mod tool_context;
 pub mod transfer_to_agent_tool;
+pub mod unsafe_local_code_executor;
 pub mod url_context_tool;

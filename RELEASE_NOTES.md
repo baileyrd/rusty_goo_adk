@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `UnsafeLocalCodeExecutor` (C0385) — completes `code_executors/`'s non-cloud scope
+**2026-08-24** · (link added once this PR is opened)
+
+Closes out the `code_executors/` area's local (non-cloud-backend)
+scope. `ContainerCodeExecutor`/`GkeCodeExecutor`/cloud executors still
+need a new SDK dependency decision and stay flagged `REQUIRED`.
+
+- **Added:** `adk-tools::unsafe_local_code_executor::UnsafeLocalCodeExecutor`
+  — bare, zero-sandboxed subprocess code execution (same host/creds/
+  network/filesystem access as this process, matching the source
+  exactly). The embedded `_RUNNER` Python script (byte-for-byte
+  identical, including the frame-stripped traceback printing),
+  `__main__`-guard detection, and `stateful`/`optimize_data_file`
+  rejection are all ported exactly. 6 new tests, including real
+  end-to-end subprocess execution: stdout capture, a traceback-on-error
+  case, and a real 1-second timeout kill.
+- **Disclosed adaptation:** `sys.executable` (the source re-invokes
+  itself) becomes a configurable `python_executable` command (default
+  `"python3"` on `PATH`) — this port was never a Python interpreter, so
+  running this executor still genuinely requires a real Python
+  interpreter installed on the host, inherent to the capability itself.
+- **Disclosed adaptation:** `PYTHONPATH` isn't fabricated from a
+  nonexistent `sys.path` equivalent — left to inherit whatever the
+  parent process already has.
+- **Disclosed adaptation:** the process-group SIGTERM→5s-grace→SIGKILL
+  sequence narrows to an immediate `Child::kill()` (SIGKILL only,
+  immediate child only) — the same disclosed `killpg`-equivalent gap
+  already established by `bash_tool.rs` (C0418), not a new one.
+- **Disclosed adaptation:** stdin/stdout/stderr are handled by three
+  dedicated OS threads (mirroring what Python's `subprocess.communicate()`
+  does internally), since `execute_code` is a synchronous method,
+  matching the source's own non-`async` signature.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-tools +6 new tests, including real subprocess execution, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `code_executors/`: `BuiltInCodeExecutor` + `CodeExecutorContext` (C0384, C0390)
 **2026-08-24** · (link added once this PR is opened)
 
