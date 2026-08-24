@@ -5,6 +5,32 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::app_configs::{ResumabilityConfig, EventsCompactionConfig,
+  EventsCompactionConfigError, BaseEventsSummarizer}` (C0283/C0284/C0285
+  DONE). 18 new tests. Ports `ResumabilityConfig`'s `is_resumable` field,
+  `EventsCompactionConfig`'s full validator (both-or-neither per trigger
+  pair, at-least-one-trigger-mode, plus the `Field(gt=0)`/`Field(ge=0)`
+  constraints pydantic enforces ahead of it), and the `BaseEventsSummarizer`
+  trait. `InvocationContext::resumability_config`/`::events_compaction_config`
+  upgraded from a narrowed stub/opaque placeholder to the real types. Also
+  the first real call site for `adk_features::legacy_feature_decorator
+  ::warn_experimental` (C0797's guard function, landed but unwired).
+  `summarizer: Optional[BaseEventsSummarizer]` (an arbitrary, non-pydantic
+  field in the source) becomes `Option<Arc<dyn BaseEventsSummarizer>>`,
+  with no `Serialize`/`Deserialize` derive on `EventsCompactionConfig` at
+  all (`Debug`/`Clone` implemented by hand instead). New dependency:
+  `adk-features` for `adk-agents` (existing zero-dependency internal
+  crate, new usage site, no cycle).
+### Fixed
+- `adk-tools::environment_simulation_config`'s tests: four tests
+  (`environment_simulation_config_rejects_empty_tool_simulation_configs`,
+  `::rejects_duplicate_tool_names`, `::rejects_disabled_feature`,
+  `::accepts_a_valid_config`) raced each other under the default parallel
+  test runner via `TemporaryFeatureOverride`'s process-wide override map,
+  causing an intermittent failure. Serialized with a local `TEST_LOCK`
+  mutex, same pattern `adk_features::feature_registry`'s own tests already
+  use.
+### Added
 - `adk-tools::environment_simulation_config::{InjectedError, InjectionConfig,
   MockStrategy, ToolSimulationConfig, EnvironmentSimulationConfig}` (C0486
   DONE). 13 new tests. Ports every validator: injected-error-xor-injected-

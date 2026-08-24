@@ -395,7 +395,7 @@ mod tests {
 
         let mut ctx = parent_ctx();
         ctx.resumability_config =
-            Some(crate::invocation_context::ResumabilityConfigStub { is_resumable: true });
+            Some(crate::app_configs::ResumabilityConfig { is_resumable: true });
         ctx.agent = Some(looped.clone());
 
         let events = LoopAgent::new()
