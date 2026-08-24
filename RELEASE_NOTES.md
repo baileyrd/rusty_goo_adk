@@ -22,6 +22,38 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `BaseLlm::as_any` downcast + real `interactions_processor` wiring (C0174)
+**2026-08-24** · (link added once this PR is opened)
+
+Extends the `AsAny` downcast pattern PR #104 established for
+`AgentBehavior` to `BaseLlm`, and uses it to close a disclosed gap in
+`LlmFlow::preprocess`.
+
+- **Added:** `adk_models::base_llm::AsAny` — lets `LlmFlow` detect
+  whether its resolved `Arc<dyn BaseLlm>` is a `Gemini`, without
+  `adk-models` needing to know about `adk-flows`. Purely additive: every
+  existing `BaseLlm` implementor needs zero changes.
+- **Closed:** `interactions_processor` (C0174 DONE) — `LlmFlow::preprocess`
+  now gates on the downcast plus `Gemini::use_interactions_api`, calling
+  `interactions::find_previous_interaction_state` to set
+  `LlmRequest::previous_interaction_id` when the branch-aware lookup
+  finds one. This wiring needed no `InvocationContext.agent`-resolution
+  fix (unlike other Phase 4 processors) — `LlmFlow` already owns
+  concrete `self.llm_agent`/`self.model` fields directly.
+- **Corrected** 2 stale module docs (`llm_flow.rs`, `interactions.rs`)
+  that described this as blocked on "no downcasting mechanism," now
+  that one exists.
+- **Disclosed, still correctly deferred:** `preserve_function_call_ids`
+  (C0181) is *not* unlocked by this same mechanism — it needs detecting
+  Anthropic/LiteLLM/OpenAIResponsesLlm backends, three of which don't
+  exist in this port at all yet (only `Gemini`/`Ollama` do), so the
+  downcast alone has nothing to downcast to for that row.
+- **Scope:** no new dependency. 4 new tests (3 in `adk-flows` covering
+  the gate-on/gate-off/non-Gemini cases, 1 `AsAny` regression test in
+  `adk-models`).
+
+---
+
 ## PR #TBD — `tools/vertex_ai_search_tool.py`: `VertexAiSearchTool` (C0433)
 **2026-08-24** · (link added once this PR is opened)
 

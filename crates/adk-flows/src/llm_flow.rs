@@ -17,12 +17,12 @@
 //!     multi-step "call model, run tools, call model again" loop has
 //!     nothing to loop on yet. `run_one_step` is exactly one model call;
 //!     [`AgentBehavior::run_async_impl`] calls it once and returns.
-//!   - **No `interactions_processor` wiring**: gating it needs to know
-//!     whether the resolved model is a `Gemini` with `use_interactions_api`
-//!     set — undetectable through the type-erased `Arc<dyn BaseLlm>` this
-//!     port resolves to (no downcasting mechanism). `crate::interactions`
-//!     itself is fully ported and usable once a caller can supply that
-//!     bit some other way.
+//!   - **`interactions_processor` (C0174), now wired**: `preprocess` gates
+//!     on `self.model.as_ref().as_any().downcast_ref::<Gemini>()` (the
+//!     `AsAny` downcast mechanism `adk-models::base_llm` now provides,
+//!     mirroring `AgentBehavior::as_any`'s already-reviewed pattern in
+//!     `adk-agents`) plus [`Gemini::use_interactions_api`]
+//!     (`adk_models::gemini`) — both real fields, no longer blocked.
 //!   - **No telemetry spans, before/after/on-error model callback
 //!     dispatch** (C0154, C0155): `LlmAgent.before_model_callback`/
 //!     `after_model_callback` exist as real fields but dispatching them
@@ -32,11 +32,13 @@
 //!   - **No live mode** (C0161-C0167): [`AgentBehavior::run_live_impl`]
 //!     returns [`LlmFlowError::LiveNotImplemented`].
 //!   - **`preserve_function_call_ids`** is always `false` — the source's
-//!     policy (Anthropic/LiteLLM/OpenAIResponsesLlm/Interactions-API
-//!     Gemini) has the same undetectable-through-the-trait-object problem
-//!     as `interactions_processor`, and none of those backends exist in
-//!     this port yet anyway (see `contents.rs`'s own disclosure for
-//!     C0181).
+//!     policy needs detecting Anthropic/LiteLLM/OpenAIResponsesLlm/
+//!     Interactions-API-Gemini backends. Unlike `interactions_processor`
+//!     above, the downcast mechanism alone doesn't close this: three of
+//!     those four backends don't exist in this port at all yet (only
+//!     `Gemini`/`Ollama` do), so there's nothing to downcast *to* for
+//!     them — still correctly deferred (see `contents.rs`'s own
+//!     disclosure for C0181).
 //!   - **`ctx.user_content`** stays an opaque `Value` placeholder (see
 //!     `invocation_context.rs`'s own module doc), so it's never forwarded
 //!     into [`crate::contents::get_contents`]'s `user_content` parameter
@@ -69,6 +71,7 @@ use crate::contents::{get_contents, get_current_turn_contents, ContentsError};
 use crate::context_cache::{apply_context_cache, ContextCacheError};
 use crate::identity::apply_identity;
 use crate::instructions::{build_instructions, InstructionsError};
+use crate::interactions::find_previous_interaction_state;
 use crate::processor::BoxFuture;
 use crate::{basic, basic::BasicRequestError};
 
@@ -252,6 +255,25 @@ impl LlmFlow {
         build_instructions(&self.llm_agent, &readonly_ctx, &mut request)?;
 
         let events = ctx.get_events(false, false);
+
+        // C0174: interactions_processor — gate on the resolved model
+        // being a Gemini with `use_interactions_api` set. `self.model`
+        // is already resolved once at construction (this struct's own
+        // disclosed memoization adaptation), so this downcasts it
+        // directly rather than re-resolving via `canonical_model`.
+        if let Some(gemini) = self
+            .model
+            .as_ref()
+            .as_any()
+            .downcast_ref::<adk_models::gemini::Gemini>()
+        {
+            if gemini.use_interactions_api {
+                let (previous_interaction_id, _environment_id) =
+                    find_previous_interaction_state(&events, &agent_name, ctx.branch.as_deref());
+                request.previous_interaction_id = previous_interaction_id;
+            }
+        }
+
         let is_single_turn = self.llm_agent.mode == Some(AgentMode::SingleTurn);
         let preserve_function_call_ids = false;
         let include_thoughts_from_other_agents = run_config.include_thoughts_from_other_agents;
@@ -418,6 +440,21 @@ mod tests {
             .build()
     }
 
+    /// Same as [`ctx_for`], but the session already carries one prior
+    /// event from `agent_name` with `interaction_id` set — the shape
+    /// [`find_previous_interaction_state`] scans for.
+    fn ctx_with_prior_interaction(agent_name: &str, interaction_id: &str) -> InvocationContext {
+        let mut session = Session::new("app", "user", "s1");
+        let mut prior_event = Event::new("inv-0", agent_name, NodeInfo::new("root"));
+        prior_event.interaction_id = Some(interaction_id.to_string());
+        session.events.push(prior_event);
+
+        let agent = BaseAgent::new(agent_name, adk_agents::base_agent::NoopBehavior).unwrap();
+        InvocationContextBuilder::new("inv-1", session)
+            .agent(agent)
+            .build()
+    }
+
     // --- finalize_model_response_event ---
 
     #[test]
@@ -460,6 +497,45 @@ mod tests {
         assert_eq!(event.avg_logprobs, Some(-0.5));
         assert_eq!(event.interaction_id.as_deref(), Some("interaction-1"));
         assert_eq!(event.environment_id.as_deref(), Some("env-1"));
+    }
+
+    // --- interactions_processor gating (C0174) ---
+
+    #[rusty_tokio::test]
+    async fn preprocess_sets_previous_interaction_id_for_a_gemini_using_interactions_api() {
+        let mut gemini = adk_models::gemini::Gemini::new("gemini-2.0-flash");
+        gemini.use_interactions_api = true;
+        let llm_agent = LlmAgent::new(ModelRef::Name("gemini-2.0-flash".to_string()));
+        let flow = LlmFlow::with_model(llm_agent, Arc::new(gemini));
+        let ctx = ctx_with_prior_interaction("my_agent", "prev-interaction");
+
+        let request = flow.preprocess(&ctx).await.unwrap();
+        assert_eq!(
+            request.previous_interaction_id.as_deref(),
+            Some("prev-interaction")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn preprocess_leaves_previous_interaction_id_unset_when_use_interactions_api_is_false() {
+        let gemini = adk_models::gemini::Gemini::new("gemini-2.0-flash");
+        let llm_agent = LlmAgent::new(ModelRef::Name("gemini-2.0-flash".to_string()));
+        let flow = LlmFlow::with_model(llm_agent, Arc::new(gemini));
+        let ctx = ctx_with_prior_interaction("my_agent", "prev-interaction");
+
+        let request = flow.preprocess(&ctx).await.unwrap();
+        assert_eq!(request.previous_interaction_id, None);
+    }
+
+    #[rusty_tokio::test]
+    async fn preprocess_leaves_previous_interaction_id_unset_for_a_non_gemini_model() {
+        // FakeLlm doesn't downcast to Gemini at all, regardless of any
+        // field it might otherwise have.
+        let flow = flow_with_response(LlmResponse::default());
+        let ctx = ctx_with_prior_interaction("my_agent", "prev-interaction");
+
+        let request = flow.preprocess(&ctx).await.unwrap();
+        assert_eq!(request.previous_interaction_id, None);
     }
 
     // --- LlmFlow turn ---
