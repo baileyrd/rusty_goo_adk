@@ -5,6 +5,21 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::forwarding_artifact_service::ForwardingArtifactService`
+  (C0489 partial) — routes a nested `AgentTool` `Runner`'s artifact
+  reads/writes back through the parent tool context's own real
+  artifact backend, closing a gap `agent_tool.rs`'s module doc has
+  disclosed since C0406: the nested run previously had no artifact
+  service at all. Disclosed adaptation: this port's synchronous,
+  `&self`-only `ArtifactService` trait can't hold a live mutable
+  borrow of the parent `Context` across the nested run (unlike the
+  source, which awaits the parent's own async `save_artifact`
+  inline), so saved versions accumulate in a shared map and merge into
+  the parent's `artifact_delta` action once the nested run completes —
+  the same post-hoc-merge idiom `agent_tool.rs` already uses for state
+  deltas. 8 new tests (6 in the new module, 2 end-to-end in
+  `agent_tool`). No new dependency.
+### Added
 - `adk-runners::Runner::from_app` (C0846/C0849 DONE) — an additive
   second constructor building a `Runner` from a resolved `App`,
   deriving `context_cache_config`/`resumability_config`/`plugins` from

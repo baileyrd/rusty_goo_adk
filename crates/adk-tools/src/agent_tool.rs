@@ -13,9 +13,6 @@
 //!   uses the generic `{"request": string}` parameter shape (the
 //!   source's own no-input-schema fallback), and `run_async` never
 //!   schema-validates the merged response text.
-//! - `ForwardingArtifactService` (routes the nested run's artifact
-//!   reads/writes back through the parent's) isn't built — the nested
-//!   `Runner` runs with no artifact service.
 //! - `InMemoryMemoryService` is Phase 6, not built — the nested `Runner`
 //!   runs with no memory service.
 //! - Plugin propagation (`include_plugins`) needs `Runner` to accept a
@@ -35,6 +32,12 @@
 //! the parent tool context as each event arrives, and merges the last
 //! response event's non-thought text parts into the tool's return value
 //! — falling back to the last error message when there's no usable text.
+//! Also installs a [`crate::forwarding_artifact_service
+//! ::ForwardingArtifactService`] (C0489 partial) on the nested `Runner`
+//! whenever the parent tool context has a real artifact service of its
+//! own, so the nested agent can read/write real artifacts — see that
+//! module's own doc for its disclosed post-hoc artifact-delta-merge
+//! adaptation, applied here the same way state deltas already are.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -46,6 +49,7 @@ use adk_runners::runner::Runner;
 use rusty_serde::value::Value;
 
 use crate::base_tool::{BaseTool, BoxFuture, ToolError};
+use crate::forwarding_artifact_service::ForwardingArtifactService;
 use crate::tool_context::ToolContext;
 
 fn part_to_text(part: &Part) -> String {
@@ -153,7 +157,12 @@ impl BaseTool for AgentTool {
                 .await
                 .map_err(|err| ToolError::NestedRunFailed(err.to_string()))?;
 
-            let runner = Runner::new(child_app_name, self.agent.clone(), session_service);
+            let forwarding_artifact_service =
+                ForwardingArtifactService::new(tool_context).map(Arc::new);
+            let mut runner = Runner::new(child_app_name, self.agent.clone(), session_service);
+            if let Some(forwarding_artifact_service) = &forwarding_artifact_service {
+                runner = runner.with_artifact_service(forwarding_artifact_service.clone());
+            }
 
             let events = runner
                 .run_async(&session.user_id, &session.id, content)
@@ -178,6 +187,13 @@ impl BaseTool for AgentTool {
                 if let Some(event_content) = &event.content {
                     last_content = Some(event_content.clone());
                 }
+            }
+
+            if let Some(forwarding_artifact_service) = &forwarding_artifact_service {
+                tool_context
+                    .actions_mut()
+                    .artifact_delta
+                    .extend(forwarding_artifact_service.take_artifact_delta());
             }
 
             runner.close().await;
@@ -209,6 +225,7 @@ mod tests {
     use adk_agents::base_agent::{AgentBehavior, NoopBehavior};
     use adk_agents::context::Context;
     use adk_agents::invocation_context::{InvocationContext, InvocationContextBuilder};
+    use adk_agents::services::ArtifactService;
     use adk_agents::session::Session;
     use adk_events::node_info::NodeInfo;
     use adk_events::Event;
@@ -295,5 +312,170 @@ mod tests {
         let result = tool.run_async(&args, &mut context).await.unwrap();
         assert_eq!(result, Value::String("hello from nested agent".to_string()));
         assert_eq!(context.state().get("nested_key"), Some(&Value::Bool(true)));
+    }
+
+    struct StubParentArtifactService {
+        stored: std::sync::Mutex<BTreeMap<String, Value>>,
+    }
+
+    impl StubParentArtifactService {
+        fn new() -> Self {
+            Self {
+                stored: std::sync::Mutex::new(BTreeMap::new()),
+            }
+        }
+    }
+
+    impl adk_agents::services::ArtifactService for StubParentArtifactService {
+        fn load_artifact(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+            filename: &str,
+            _version: Option<i64>,
+        ) -> Option<Value> {
+            self.stored.lock().unwrap().get(filename).cloned()
+        }
+
+        fn save_artifact(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+            filename: &str,
+            artifact: Value,
+            _custom_metadata: Option<BTreeMap<String, Value>>,
+        ) -> i64 {
+            self.stored
+                .lock()
+                .unwrap()
+                .insert(filename.to_string(), artifact);
+            3
+        }
+
+        fn get_artifact_version(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+            _filename: &str,
+            _version: Option<i64>,
+        ) -> Option<adk_agents::services::ArtifactVersion> {
+            None
+        }
+
+        fn list_artifact_keys(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+        ) -> Vec<String> {
+            self.stored.lock().unwrap().keys().cloned().collect()
+        }
+
+        fn delete_artifact(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+            filename: &str,
+        ) {
+            self.stored.lock().unwrap().remove(filename);
+        }
+
+        fn list_versions(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+            _filename: &str,
+        ) -> Vec<i64> {
+            Vec::new()
+        }
+
+        fn list_artifact_versions(
+            &self,
+            _app_name: &str,
+            _user_id: &str,
+            _session_id: &str,
+            _filename: &str,
+        ) -> Vec<adk_agents::services::ArtifactVersion> {
+            Vec::new()
+        }
+    }
+
+    fn ctx_with_artifact_service(
+        service: Arc<dyn adk_agents::services::ArtifactService + Send + Sync>,
+    ) -> Context {
+        let mut invocation_context =
+            InvocationContextBuilder::new("inv-1", Session::new("app", "user", "s1")).build();
+        invocation_context.artifact_service = Some(service);
+        Context::new(invocation_context)
+    }
+
+    struct SavesAnArtifact;
+
+    impl AgentBehavior for SavesAnArtifact {
+        fn run_async_impl<'a>(
+            &'a self,
+            ctx: &'a mut InvocationContext,
+        ) -> TestFuture<'a, Result<Vec<Event>, adk_agents::base_agent::AgentRunError>> {
+            Box::pin(async move {
+                let version = ctx.artifact_service.as_ref().unwrap().save_artifact(
+                    &ctx.session.app_name,
+                    &ctx.session.user_id,
+                    &ctx.session.id,
+                    "nested.txt",
+                    Value::String("nested contents".to_string()),
+                    None,
+                );
+                let mut event =
+                    Event::new(ctx.invocation_id.clone(), "helper", NodeInfo::new("helper"));
+                event.content = Some(Content::new(
+                    "model",
+                    vec![Part::text(format!("saved v{version}"))],
+                ));
+                Ok(vec![event])
+            })
+        }
+
+        fn run_live_impl<'a>(
+            &'a self,
+            _ctx: &'a mut InvocationContext,
+        ) -> TestFuture<'a, Result<Vec<Event>, adk_agents::base_agent::AgentRunError>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn forwards_artifact_saves_to_the_parents_real_service_and_merges_the_delta() {
+        let agent = BaseAgent::new("helper", SavesAnArtifact).unwrap();
+        let tool = AgentTool::new(agent);
+        let parent_service = Arc::new(StubParentArtifactService::new());
+        let mut context = ctx_with_artifact_service(parent_service.clone());
+        let mut args = BTreeMap::new();
+        args.insert("request".to_string(), Value::String("hi".to_string()));
+
+        let _ = tool.run_async(&args, &mut context).await.unwrap();
+
+        assert_eq!(
+            parent_service.load_artifact("app", "user", "s1", "nested.txt", None),
+            Some(Value::String("nested contents".to_string()))
+        );
+        assert_eq!(context.actions().artifact_delta.get("nested.txt"), Some(&3));
+    }
+
+    #[rusty_tokio::test]
+    async fn runs_normally_when_the_parent_has_no_artifact_service() {
+        let agent = BaseAgent::new("helper", RepliesWithText).unwrap();
+        let tool = AgentTool::new(agent);
+        let mut context = ctx();
+        let mut args = BTreeMap::new();
+        args.insert("request".to_string(), Value::String("hi".to_string()));
+
+        let result = tool.run_async(&args, &mut context).await.unwrap();
+        assert_eq!(result, Value::String("hello from nested agent".to_string()));
+        assert!(context.actions().artifact_delta.is_empty());
     }
 }

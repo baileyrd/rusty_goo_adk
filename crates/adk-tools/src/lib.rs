@@ -115,6 +115,20 @@
 //! no tool-scoped `before_tool_callback` type (`adk_agents::llm_agent
 //! ::LlmCallback` takes `&mut Context` only, no `tool`/`args`) to wire
 //! `create_callback`'s output into regardless. No new dependency.
+//!
+//! **`ForwardingArtifactService` batch**: [`forwarding_artifact_service`]
+//! (`ForwardingArtifactService`, C0489 partial) — ported from
+//! `tools/_forwarding_artifact_service.py`, closing the disclosed gap
+//! `agent_tool.rs` has carried since C0406: [`agent_tool::AgentTool
+//! ::run_async`] now installs one on the nested `Runner` whenever the
+//! parent tool context has a real artifact service, so a nested agent
+//! can read/write real artifacts instead of running with none. See the
+//! new module's own doc for the disclosed post-hoc-merge adaptation
+//! (this port's synchronous `ArtifactService` trait can't hold a live
+//! mutable borrow of the parent `Context` across the nested run, so
+//! artifact-delta bookkeeping is deferred to a merge after the run
+//! completes — the same idiom `agent_tool.rs` already uses for state
+//! deltas). No new dependency.
 
 pub mod agent_tool;
 pub mod append_tools;
@@ -135,6 +149,7 @@ pub mod environment_toolset;
 pub mod example_tool;
 pub mod execute_tool;
 pub mod exit_loop_tool;
+pub mod forwarding_artifact_service;
 pub mod function_tool;
 pub mod gemini_schema_util;
 pub mod get_user_choice_tool;

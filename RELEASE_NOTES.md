@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/_forwarding_artifact_service.py`: `ForwardingArtifactService` (C0489 partial)
+**2026-08-24** · (link added once this PR is opened)
+
+Gives a nested `AgentTool` run access to the parent's real artifact
+backend, closing a gap disclosed since `AgentTool` first landed.
+
+- **Added:** `adk_tools::forwarding_artifact_service
+  ::ForwardingArtifactService` — implements the port's `ArtifactService`
+  trait, routing every read/write straight through to the parent tool
+  context's own real backend under the parent's own
+  `app_name`/`user_id`/`session_id` (never the caller-supplied ones,
+  matching the source's `del app_name, user_id, session_id`).
+  `AgentTool::run_async` installs one on the nested `Runner` whenever
+  the parent has a real artifact service of its own.
+- **Disclosed:** the source updates the parent's `artifact_delta`
+  action synchronously, inline, by awaiting the parent `ToolContext`'s
+  own async `save_artifact` method (which needs `&mut self`). This
+  port's `ArtifactService` trait is fully synchronous and `&self`-only,
+  so a `ForwardingArtifactService` can't hold a live mutable borrow of
+  the parent `Context` across the whole nested run. Saved versions
+  instead accumulate in a shared map, merged into the parent's
+  `artifact_delta` once the nested run completes — the same
+  post-hoc-merge idiom `agent_tool.rs` already uses for state deltas.
+  Reads and the write itself still happen live against the parent's
+  real backend; only the delta bookkeeping is deferred.
+- **Scope:** no new dependency. 8 new tests (6 in the new module, 2
+  end-to-end in `agent_tool`).
+
+---
+
 ## PR #TBD — `runners.py`: `Runner::from_app` (C0846, C0847, C0848, C0849, C0850)
 **2026-08-24** · (link added once this PR is opened)
 
