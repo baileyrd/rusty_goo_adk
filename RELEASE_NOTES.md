@@ -22,6 +22,37 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `LoadArtifactsTool`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_tools::load_artifacts_tool::{LoadArtifactsTool,
+  as_safe_part_for_llm}` (C0425, partial) — lists artifacts and
+  injects them into the LLM request on demand. Ports MIME
+  normalization/classification (Gemini-supported-inline-prefix/type
+  checks, the SVG/XML unsupported-subtype exclusion), a hand-rolled
+  base64 decoder (standard-strict then URL-safe-lenient, mirroring the
+  source's own two-attempt fallback), text-like decoding, the
+  binary-placeholder fallback, and the full
+  list→instruction-inject→`load_artifacts`-function-response-detect→
+  per-artifact-load→append-to-`llm_request.contents` flow (including
+  the session-scoped-then-`user:`-prefixed cross-session fallback).
+  `tool_context.load_artifact`/`list_artifacts`'s opaque `Value`
+  results are parsed back into a typed `Part` via its own
+  `Deserialize` impl, the same pattern `ExampleTool`/
+  `PreloadMemoryTool` use for `user_content`.
+- **Disclosed narrowings (module doc, at length):** no DOCX regex
+  text extraction — needs a zip reader, and no such crate is a
+  workspace dependency; a `.docx` artifact falls through to the
+  generic binary-placeholder response instead of extracted text. No
+  spreadsheet parsing — needs a `pandas` equivalent this port has
+  none of, though this is disabled by default upstream too
+  (`enable_spreadsheet_parsing=False`), so it's the same
+  optional-dependency treatment the source itself gives it, not a
+  narrowing unique to this port. No `process_artifact` custom-callback
+  override — every artifact goes through the built-in safety
+  conversion.
+- 11 new tests.
+
 ## PR #TBD — `ExecuteBashTool`
 **2026-08-24** · (link added once this PR is opened)
 

@@ -29,6 +29,7 @@ pub mod example_tool;
 pub mod exit_loop_tool;
 pub mod function_tool;
 pub mod get_user_choice_tool;
+pub mod load_artifacts_tool;
 pub mod load_memory_tool;
 pub mod long_running_tool;
 pub mod memory_entry_utils;
