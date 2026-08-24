@@ -5,6 +5,32 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::auth_schemes::{SecuritySchemeType, AuthSchemeType, ApiKeyIn,
+  ApiKeyScheme, HttpScheme, OAuthFlow, OAuthFlows, OAuth2Scheme,
+  OpenIdConnectScheme, SecurityScheme, OpenIdConnectWithConfig,
+  CustomAuthScheme, AuthScheme, OAuthGrantType, ExtendedOAuth2}` (C0503
+  DONE, plus C0498's wrap-up), `adk-agents::auth_tool::{AuthConfig,
+  AuthToolArguments, stable_digest}` (C0504 DONE),
+  `adk-agents::auth_headers::build_auth_headers` (C0522 DONE), and
+  `adk-agents::{base_auth_provider::{AuthSchemeKind, BaseAuthProvider},
+  auth_provider_registry::AuthProviderRegistry}` (C0516 DONE). 37 new
+  tests. Closes out most of C0493's remaining unported top-level names
+  (only `AuthHandler`, C0506, stays open). `AuthScheme`'s two-level
+  union ports as nested `#[rusty_serde(untagged)]` enums;
+  `CustomAuthScheme`'s developer-extensibility is preserved via a
+  flattened `extra: Option<Value>` catch-all (not dropped, since
+  extensibility is this type's whole purpose); `AuthProviderRegistry`
+  keys by an `AuthSchemeKind` discriminant instead of the source's
+  `type[AuthScheme]` (a real narrowing — every custom scheme collapses
+  to one key, not one per exact subclass). Disclosed narrowing:
+  the OpenAPI spec's four distinct `OAuthFlow*` shapes collapse into one
+  lenient `OAuthFlow` struct; `build_auth_headers`'s API-key fallback
+  for a non-`APIKey` scheme (an unsound `hasattr`-guarded read in the
+  source, flagged there with `# type: ignore[union-attr]`) falls
+  through to `None` rather than reproducing a latent crash;
+  `stable_digest` isn't byte-identical to Python's digest (different
+  JSON serializers), only equally deterministic. New dependency: `sha2`
+  for `adk-agents` (already a workspace dependency, new usage site).
 - `adk-agents::app_configs::{ResumabilityConfig, EventsCompactionConfig,
   EventsCompactionConfigError, BaseEventsSummarizer}` (C0283/C0284/C0285
   DONE). 18 new tests. Ports `ResumabilityConfig`'s `is_resumable` field,

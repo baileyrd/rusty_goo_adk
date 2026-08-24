@@ -22,6 +22,45 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `auth/`: auth-scheme cluster — `AuthScheme`/`AuthConfig`/`build_auth_headers`/`AuthProviderRegistry` (C0503, C0504, C0522, C0516, C0498)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the OpenAPI-security-scheme side of `auth/`, building on the
+credential-scheme batch from an earlier PR. Closes out most of C0493's
+remaining unported top-level names — only `AuthHandler` (C0506) stays
+open.
+
+- **Added:** `adk_agents::auth_schemes::{SecuritySchemeType,
+  AuthSchemeType, ApiKeyIn, ApiKeyScheme, HttpScheme, OAuthFlow,
+  OAuthFlows, OAuth2Scheme, OpenIdConnectScheme, SecurityScheme,
+  OpenIdConnectWithConfig, CustomAuthScheme, AuthScheme, OAuthGrantType,
+  ExtendedOAuth2}` (C0503 DONE, plus C0498's wrap-up).
+- **Added:** `adk_agents::auth_tool::{AuthConfig, AuthToolArguments,
+  stable_digest}` (C0504 DONE) — including `AuthConfig`'s
+  `credential_key` auto-derivation and the dynamic-OAuth2-field-clearing
+  step before hashing a raw credential.
+- **Added:** `adk_agents::auth_headers::build_auth_headers` (C0522
+  DONE) — OAuth2/HTTP-bearer/HTTP-basic/HTTP-other/API-key header
+  construction.
+- **Added:** `adk_agents::{base_auth_provider::{AuthSchemeKind,
+  BaseAuthProvider}, auth_provider_registry::AuthProviderRegistry}`
+  (C0516 DONE) — pluggable custom-scheme auth-provider registration and
+  lookup.
+- **Disclosed narrowing:** the OpenAPI spec's four distinct
+  `OAuthFlow*` shapes collapse into one lenient `OAuthFlow` struct
+  (which of `OAuthFlows`'s four fields is populated still identifies
+  the grant type); `AuthProviderRegistry` keys by an `AuthSchemeKind`
+  discriminant rather than the source's `type[AuthScheme]` — every
+  custom scheme collapses to one key, not one per exact subclass;
+  `build_auth_headers`'s API-key fallback for a non-`APIKey` scheme (an
+  unsound `hasattr`-guarded read in the source) falls through to `None`
+  rather than reproducing a latent crash; `stable_digest` isn't
+  byte-identical to Python's digest, only equally deterministic.
+- **Scope:** one new dependency (`sha2` for `adk-agents` — already a
+  workspace dependency, new usage site). 37 new tests.
+
+---
+
 ## PR #TBD — `apps/_configs.py`: `ResumabilityConfig`/`EventsCompactionConfig`/`BaseEventsSummarizer` (C0283, C0284, C0285)
 **2026-08-24** · (link added once this PR is opened)
 

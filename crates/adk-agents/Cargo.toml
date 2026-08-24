@@ -15,6 +15,12 @@ adk-genai = { path = "../adk-genai" }
 # unwired until now). Zero-dependency leaf crate; no cycle (adk-features
 # depends on nothing).
 adk-features = { path = "../adk-features" }
+# `auth_tool` (C0504) needs `_stable_model_digest`'s SHA-256 hash of a
+# canonicalized credential/scheme fingerprint. `sha2` is already a
+# workspace dependency (`adk-models::gemini_context_cache_manager`, same
+# "internally-consistent hash, not byte-matched to Python" rationale) —
+# a new usage site, not a new sovereignty decision.
+sha2 = { workspace = true }
 rusty_serde = { workspace = true }
 rusty_tokio = { workspace = true }
 rusty_err = { workspace = true }
