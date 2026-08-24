@@ -10,13 +10,52 @@
 //! `async fn` (preserving the `.await`-able call shape callers already use)
 //! and simply call through. Revisit — trait methods become `async fn` too —
 //! once a real backend (network/disk I/O) lands in its own phase.
+//!
+//! **`SessionService` is the one exception, pulled forward**: `Runner`
+//! (`runners.py`, C0833-C0926) needs a real, working session backend to
+//! fetch/create/persist sessions across a turn — a marker trait can't
+//! serve that. So `SessionService` here is a genuine (if narrowed) port of
+//! `sessions.base_session_service.BaseSessionService`, plus
+//! [`InMemorySessionService`]. Both stay in this module, next to the
+//! trait, for the same reason `Session`/`State` are pulled forward into
+//! `adk-agents` rather than stubbed (see their own module docs): Phase 5's
+//! real `adk-sessions` crate will *replace* this wholesale, not extend it.
+//! Since `Arc<dyn SessionService>` is stored as a trait object
+//! (`InvocationContext`), its methods return a boxed [`BoxFuture`] rather
+//! than using native `async fn` (not object-safe) — the same pattern
+//! `adk_tools::base_tool::BaseTool` already uses for the same reason.
+//!
+//! **Narrowed, disclosed**: no app:/user: state-prefix scoping
+//! (`State.APP_PREFIX`/`USER_PREFIX`, `_session_util.extract_state_delta`,
+//! the source's cross-session shared `app_state`/`user_state` maps) —
+//! `Session`/`State` here have no prefix-scoping concept yet (a Phase 5
+//! concern of their own), so `create_session`'s `state` is stored as flat,
+//! session-scoped state only. No `get_user_state` (depends on the same
+//! app:/user: architecture). No `last_update_time` field on the
+//! placeholder `Session`, so `list_sessions` returns insertion order
+//! (grouped by user id, then session id) rather than the source's
+//! last-update-time sort. `append_event`'s `StaleSessionError` path is
+//! N/A for this in-memory backend — the source's own `InMemorySessionService`
+//! never raises it either (the docstring's warning is for a *persistent*
+//! backend detecting a concurrent write, which a simple in-memory map
+//! can't contend on). `GetSessionConfig` (`num_recent_events`/
+//! `after_timestamp` event trimming) isn't ported — `RunConfig.get_session_config`
+//! is already an opaque `Value` placeholder (its own disclosed scope cut),
+//! so `get_session` has nothing typed to apply yet.
 
+use adk_errors::already_exists::AlreadyExistsError;
 use adk_events::ui_widget::UiWidget;
+use adk_events::Event;
 use adk_platform::uuid::new_uuid;
 use rusty_serde::value::Value;
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Mutex;
 
 use crate::session::Session;
+
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Placeholder for `auth.auth_credential.AuthCredential` (Phase 9).
 pub type AuthCredential = Value;
@@ -29,10 +68,243 @@ pub type SearchMemoryResponse = Value;
 /// Placeholder for `memory.memory_entry.MemoryEntry` (Phase 6).
 pub type MemoryEntry = Value;
 
-/// Placeholder for `sessions.base_session_service.BaseSessionService`
-/// (Phase 5). Marker only — nothing in this batch calls through it yet;
-/// `InvocationContext` merely needs the field type to exist.
-pub trait SessionService {}
+const TEMP_STATE_PREFIX: &str = "temp:";
+
+/// Real (narrowed) port of `sessions.base_session_service.BaseSessionService`
+/// — see the module doc for why this one trait isn't a placeholder marker
+/// like its siblings, and what's deliberately cut.
+pub trait SessionService: Send + Sync {
+    /// Creates a new session, storing `state` (flat, session-scoped — see
+    /// the module doc) as its initial state. Errors if `session_id` is
+    /// given and already in use; generates a fresh id otherwise (mirroring
+    /// the source's `strip()`-then-fall-back-to-`new_uuid()` rule for a
+    /// blank/absent id).
+    fn create_session<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: &'a str,
+        state: Option<BTreeMap<String, Value>>,
+        session_id: Option<String>,
+    ) -> BoxFuture<'a, Result<Session, AlreadyExistsError>>;
+
+    /// Gets a session by id, or `None` if it doesn't exist.
+    fn get_session<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: &'a str,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, Option<Session>>;
+
+    /// Lists all sessions for a user (or, if `user_id` is `None`, every
+    /// user under `app_name`) with their `events` cleared, matching the
+    /// source's `ListSessionsResponse` contract.
+    fn list_sessions<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: Option<&'a str>,
+    ) -> BoxFuture<'a, Vec<Session>>;
+
+    /// Deletes a session. A no-op if it doesn't exist.
+    fn delete_session<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: &'a str,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, ()>;
+
+    /// Appends an event to a session, applying/trimming its `temp:`-scoped
+    /// state delta and merging the rest into session state — ported
+    /// directly from the source's own (non-abstract, shared-by-every-
+    /// backend) default implementation.
+    fn append_event<'a>(&'a self, session: &'a mut Session, event: Event) -> BoxFuture<'a, Event> {
+        Box::pin(async move { apply_session_event(session, event) })
+    }
+
+    /// Flushes any buffered events. A no-op for a non-buffering backend.
+    fn flush(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+}
+
+fn apply_session_event(session: &mut Session, mut event: Event) -> Event {
+    if event.partial.unwrap_or(false) {
+        return event;
+    }
+    for (key, value) in event.actions.state_delta.iter() {
+        if key.starts_with(TEMP_STATE_PREFIX) {
+            session.state.insert(key.clone(), value.clone());
+        }
+    }
+    event
+        .actions
+        .state_delta
+        .retain(|key, _| !key.starts_with(TEMP_STATE_PREFIX));
+    for (key, value) in event.actions.state_delta.iter() {
+        session.state.insert(key.clone(), value.clone());
+    }
+    session.events.push(event.clone());
+    event
+}
+
+/// `app_name -> user_id -> session_id -> Session`.
+type SessionsByAppAndUser = BTreeMap<String, BTreeMap<String, BTreeMap<String, Session>>>;
+
+/// An in-memory [`SessionService`] — for testing/development only, same
+/// as the source's own `InMemorySessionService`. See the module doc for
+/// what's narrowed relative to the source.
+#[derive(Default)]
+pub struct InMemorySessionService {
+    sessions: Mutex<SessionsByAppAndUser>,
+}
+
+impl InMemorySessionService {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl SessionService for InMemorySessionService {
+    fn create_session<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: &'a str,
+        state: Option<BTreeMap<String, Value>>,
+        session_id: Option<String>,
+    ) -> BoxFuture<'a, Result<Session, AlreadyExistsError>> {
+        Box::pin(async move {
+            let mut sessions = self.sessions.lock().unwrap();
+            let existing = sessions
+                .get(app_name)
+                .and_then(|by_user| by_user.get(user_id));
+            let session_id = match session_id.as_deref().map(str::trim) {
+                Some(id) if !id.is_empty() => {
+                    if existing.is_some_and(|s| s.contains_key(id)) {
+                        return Err(AlreadyExistsError::new(format!(
+                            "Session with id {id} already exists."
+                        )));
+                    }
+                    id.to_string()
+                }
+                _ => new_uuid().to_string(),
+            };
+            let session = Session {
+                id: session_id.clone(),
+                app_name: app_name.to_string(),
+                user_id: user_id.to_string(),
+                state: state.unwrap_or_default(),
+                events: Vec::new(),
+            };
+            sessions
+                .entry(app_name.to_string())
+                .or_default()
+                .entry(user_id.to_string())
+                .or_default()
+                .insert(session_id, session.clone());
+            Ok(session)
+        })
+    }
+
+    fn get_session<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: &'a str,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, Option<Session>> {
+        Box::pin(async move {
+            self.sessions
+                .lock()
+                .unwrap()
+                .get(app_name)
+                .and_then(|by_user| by_user.get(user_id))
+                .and_then(|by_session| by_session.get(session_id))
+                .cloned()
+        })
+    }
+
+    fn list_sessions<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: Option<&'a str>,
+    ) -> BoxFuture<'a, Vec<Session>> {
+        Box::pin(async move {
+            let sessions = self.sessions.lock().unwrap();
+            let Some(by_user) = sessions.get(app_name) else {
+                return Vec::new();
+            };
+            let mut result = Vec::new();
+            for (uid, by_session) in by_user {
+                if user_id.is_some_and(|wanted| wanted != uid) {
+                    continue;
+                }
+                for session in by_session.values() {
+                    let mut without_events = session.clone();
+                    without_events.events.clear();
+                    result.push(without_events);
+                }
+            }
+            result
+        })
+    }
+
+    fn delete_session<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: &'a str,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(by_session) = self
+                .sessions
+                .lock()
+                .unwrap()
+                .get_mut(app_name)
+                .and_then(|by_user| by_user.get_mut(user_id))
+            {
+                by_session.remove(session_id);
+            }
+        })
+    }
+
+    /// Overrides the shared default: `get_session`/`create_session` hand
+    /// callers their own copy of a session (mirroring the source's
+    /// `_copy_session`), so appending to that copy alone would never be
+    /// visible to a later `get_session` call. This mirrors the resulting
+    /// state/event onto the canonical stored session too — and, matching
+    /// the source, dedupes against the STORED session's events (by id and
+    /// full equality) so a re-delivered event isn't double-applied, and
+    /// silently returns the event unstored (rather than raising) if the
+    /// session's app/user/id isn't (or is no longer) in the store. The
+    /// source logs a warning in that last case; this port has no logging
+    /// framework adopted yet (the same disclosed substitution used
+    /// elsewhere in this migration), so it's silent instead.
+    fn append_event<'a>(&'a self, session: &'a mut Session, event: Event) -> BoxFuture<'a, Event> {
+        Box::pin(async move {
+            if event.partial.unwrap_or(false) {
+                return event;
+            }
+            let mut sessions = self.sessions.lock().unwrap();
+            let Some(storage_session) = sessions
+                .get_mut(&session.app_name)
+                .and_then(|by_user| by_user.get_mut(&session.user_id))
+                .and_then(|by_session| by_session.get_mut(&session.id))
+            else {
+                return event;
+            };
+            if storage_session
+                .events
+                .iter()
+                .any(|existing| existing.id == event.id && *existing == event)
+            {
+                return event;
+            }
+
+            let trimmed = apply_session_event(session, event);
+            storage_session.state = session.state.clone();
+            storage_session.events.push(trimmed.clone());
+            trimmed
+        })
+    }
+}
 
 /// Placeholder for `artifacts.base_artifact_service.BaseArtifactService`
 /// (Phase 6).
@@ -170,5 +442,231 @@ mod tests {
     #[test]
     fn new_invocation_context_id_is_prefixed() {
         assert!(new_invocation_context_id().starts_with("e-"));
+    }
+
+    use adk_events::node_info::NodeInfo;
+    use adk_events::Event;
+
+    #[rusty_tokio::test]
+    async fn create_session_generates_an_id_when_none_is_given() {
+        let service = InMemorySessionService::new();
+        let session = service
+            .create_session("app", "user", None, None)
+            .await
+            .unwrap();
+        assert!(!session.id.is_empty());
+        assert_eq!(session.app_name, "app");
+        assert_eq!(session.user_id, "user");
+    }
+
+    #[rusty_tokio::test]
+    async fn create_session_rejects_a_duplicate_explicit_id() {
+        let service = InMemorySessionService::new();
+        service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+        let err = service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("s1"));
+    }
+
+    #[rusty_tokio::test]
+    async fn get_session_returns_none_when_missing() {
+        let service = InMemorySessionService::new();
+        assert!(service
+            .get_session("app", "user", "missing")
+            .await
+            .is_none());
+    }
+
+    #[rusty_tokio::test]
+    async fn get_session_round_trips_a_created_session() {
+        let service = InMemorySessionService::new();
+        service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+        let session = service.get_session("app", "user", "s1").await.unwrap();
+        assert_eq!(session.id, "s1");
+    }
+
+    #[rusty_tokio::test]
+    async fn list_sessions_filters_by_user_and_clears_events() {
+        let service = InMemorySessionService::new();
+        service
+            .create_session("app", "alice", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+        service
+            .create_session("app", "bob", None, Some("s2".to_string()))
+            .await
+            .unwrap();
+
+        let all = service.list_sessions("app", None).await;
+        assert_eq!(all.len(), 2);
+
+        let alice_only = service.list_sessions("app", Some("alice")).await;
+        assert_eq!(alice_only.len(), 1);
+        assert_eq!(alice_only[0].id, "s1");
+    }
+
+    #[rusty_tokio::test]
+    async fn delete_session_removes_it() {
+        let service = InMemorySessionService::new();
+        service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+        service.delete_session("app", "user", "s1").await;
+        assert!(service.get_session("app", "user", "s1").await.is_none());
+    }
+
+    #[rusty_tokio::test]
+    async fn delete_session_is_a_no_op_when_missing() {
+        let service = InMemorySessionService::new();
+        service.delete_session("app", "user", "missing").await;
+    }
+
+    #[rusty_tokio::test]
+    async fn append_event_persists_a_non_partial_event_and_updates_state() {
+        let service = InMemorySessionService::new();
+        let mut session = service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        let mut event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        event
+            .actions
+            .state_delta
+            .insert("k".to_string(), Value::String("v".to_string()));
+
+        service.append_event(&mut session, event).await;
+
+        assert_eq!(session.events.len(), 1);
+        assert_eq!(
+            session.state.get("k"),
+            Some(&Value::String("v".to_string()))
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn append_event_skips_persistence_for_a_partial_event() {
+        let service = InMemorySessionService::new();
+        let mut session = service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        let mut event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        event.partial = Some(true);
+
+        service.append_event(&mut session, event).await;
+        assert!(session.events.is_empty());
+    }
+
+    #[rusty_tokio::test]
+    async fn append_event_applies_temp_state_but_trims_it_from_the_persisted_event() {
+        let service = InMemorySessionService::new();
+        let mut session = service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        let mut event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        event.actions.state_delta.insert(
+            "temp:scratch".to_string(),
+            Value::String("ephemeral".to_string()),
+        );
+        event
+            .actions
+            .state_delta
+            .insert("permanent".to_string(), Value::String("kept".to_string()));
+
+        service.append_event(&mut session, event).await;
+
+        assert_eq!(
+            session.state.get("temp:scratch"),
+            Some(&Value::String("ephemeral".to_string()))
+        );
+        assert_eq!(
+            session.state.get("permanent"),
+            Some(&Value::String("kept".to_string()))
+        );
+        assert!(!session.events[0]
+            .actions
+            .state_delta
+            .contains_key("temp:scratch"));
+        assert!(session.events[0]
+            .actions
+            .state_delta
+            .contains_key("permanent"));
+    }
+
+    #[rusty_tokio::test]
+    async fn flush_is_a_no_op() {
+        let service = InMemorySessionService::new();
+        service.flush().await;
+    }
+
+    #[rusty_tokio::test]
+    async fn append_event_mirrors_onto_the_canonical_stored_session() {
+        let service = InMemorySessionService::new();
+        let mut session = service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        let event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        service.append_event(&mut session, event).await;
+
+        // A fresh get_session (a fresh copy) sees the appended event too —
+        // proof the mutation reached the canonical stored session, not
+        // just the caller's own copy.
+        let refetched = service.get_session("app", "user", "s1").await.unwrap();
+        assert_eq!(refetched.events.len(), 1);
+    }
+
+    #[rusty_tokio::test]
+    async fn append_event_dedupes_a_redelivered_event() {
+        let service = InMemorySessionService::new();
+        let mut session = service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        let mut event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        event
+            .actions
+            .state_delta
+            .insert("k".to_string(), Value::String("first".to_string()));
+
+        service.append_event(&mut session, event.clone()).await;
+        // Re-deliver the exact same event (same id, same fields).
+        service.append_event(&mut session, event).await;
+
+        let refetched = service.get_session("app", "user", "s1").await.unwrap();
+        assert_eq!(
+            refetched.events.len(),
+            1,
+            "a re-delivered event must not be double-applied"
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn append_event_returns_the_event_unstored_for_an_unknown_session() {
+        let service = InMemorySessionService::new();
+        let mut session = Session::new("app", "user", "never-created");
+        let event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        let returned = service.append_event(&mut session, event.clone()).await;
+        assert_eq!(returned.id, event.id);
+        // Nothing was stored: re-fetching finds nothing.
+        assert!(service
+            .get_session("app", "user", "never-created")
+            .await
+            .is_none());
     }
 }
