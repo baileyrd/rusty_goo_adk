@@ -24,6 +24,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "adk-eval"
+version = "0.1.0"
+dependencies = [
+ "adk-genai",
+ "rusty_serde",
+]
+
+[[package]]
 name = "adk-events"
 version = "0.1.0"
 dependencies = [

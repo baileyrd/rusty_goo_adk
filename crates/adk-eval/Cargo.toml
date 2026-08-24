@@ -1,0 +1,10 @@
+[package]
+name = "adk-eval"
+description = "Evaluation framework core, ported from google/adk-python's evaluation/ module (Phase 11)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+adk-genai = { path = "../adk-genai" }
+rusty_serde = { workspace = true }
