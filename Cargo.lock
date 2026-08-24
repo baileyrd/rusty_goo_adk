@@ -109,6 +109,7 @@ dependencies = [
  "adk-examples",
  "adk-genai",
  "adk-models",
+ "adk-runners",
  "rusty_err",
  "rusty_serde",
  "rusty_tokio",

@@ -20,6 +20,7 @@
 //! the same "processor as a free function, not a method" pattern
 //! `adk-flows` uses throughout.
 
+pub mod agent_tool;
 pub mod append_tools;
 pub mod base_tool;
 pub mod base_toolset;
