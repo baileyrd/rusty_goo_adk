@@ -59,6 +59,39 @@
 //! C0671's four Agent-Engine constants beyond `GOOGLE_CLOUD_AGENT_ENGINE_ID`
 //! have no consumer yet either — declared for the next batch that needs
 //! them. No new dependency.
+//!
+//! **Auth-service cluster batch**: [`base_credential_exchanger`]/
+//! [`credential_exchanger_registry`] (`BaseCredentialExchanger`/
+//! `CredentialExchangerRegistry`, C0523), [`base_credential_refresher`]/
+//! [`credential_refresher_registry`] (`BaseCredentialRefresher`/
+//! `CredentialRefresherRegistry`, C0525), [`in_memory_credential_service`]
+//! (`InMemoryCredentialService`, C0528), and
+//! [`session_state_credential_service`] (`SessionStateCredentialService`,
+//! C0529) — ported from `auth/exchanger/`, `auth/refresher/`, and
+//! `auth/credential_service/`. Both registries key directly on
+//! `AuthCredentialTypes` (an already-closed enum, unlike
+//! `AuthProviderRegistry`'s `type[AuthScheme]`), needing only new `Hash`/
+//! `PartialOrd`/`Ord` derives on that enum to serve as a `HashMap` key.
+//! Implementing this cluster required widening two long-stale
+//! placeholders in [`services`]: `AuthConfig` (was `Value`) now re-exports
+//! [`auth_tool::AuthConfig`] (same "widen a placeholder once a real
+//! consumer needs the structure" precedent as `RunConfig::telemetry`),
+//! and `CredentialService` grows from a synchronous, context-free trait
+//! into the real async, `Context`-taking interface (via this crate's
+//! `BoxFuture` convention) — safe because grep confirmed zero prior
+//! implementors or call sites existed for either. That widening changed
+//! `Context::save_credential`'s receiver from `&self` to `&mut self`
+//! (again zero external call sites, so zero blast radius) and split the
+//! trait's two methods on mutability — `load_credential` takes `&Context`,
+//! `save_credential` takes `&mut Context` — a distinction the source's
+//! single `callback_context: CallbackContext` parameter doesn't need to
+//! make explicit but Rust's stricter tracking surfaces naturally; not a
+//! narrowing. `Context::request_credential` now serializes `AuthConfig`
+//! via `rusty_serde::json::to_value` before storing it in
+//! `EventActions::requested_auth_configs` (still `Value`-typed there,
+//! deliberately left out of scope to widen this batch), which is why
+//! `auth_tool::AuthConfig` also grows `Serialize`/`Deserialize` derives.
+//! No new dependency.
 
 pub mod active_streaming_tool;
 pub mod agent_optimizer;
@@ -71,10 +104,15 @@ pub mod auth_schemes;
 pub mod auth_tool;
 pub mod base_agent;
 pub mod base_auth_provider;
+pub mod base_credential_exchanger;
+pub mod base_credential_refresher;
 pub mod context;
 pub mod context_cache_config;
+pub mod credential_exchanger_registry;
+pub mod credential_refresher_registry;
 pub mod file_artifact_service;
 pub mod in_memory_artifact_service;
+pub mod in_memory_credential_service;
 pub mod in_memory_memory_service;
 pub mod invocation_context;
 pub mod live_request;
@@ -90,6 +128,7 @@ pub mod schema_version;
 pub mod sequential_agent;
 pub mod services;
 pub mod session;
+pub mod session_state_credential_service;
 pub mod session_util;
 pub mod state;
 pub mod streaming_mode;

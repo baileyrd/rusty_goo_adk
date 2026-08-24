@@ -35,7 +35,7 @@
 use sha2::{Digest, Sha256};
 
 use rusty_serde::value::Value;
-use rusty_serde::Serialize;
+use rusty_serde::{Deserialize, Serialize};
 
 use crate::auth_credential::AuthCredential;
 use crate::auth_schemes::AuthScheme;
@@ -70,7 +70,12 @@ pub fn stable_digest<T: Serialize>(value: &T) -> String {
 /// `auth.auth_tool.AuthConfig` — the auth config sent by a tool asking
 /// the client to collect auth credentials; ADK and the client fill in
 /// the response together.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Serialize`/`Deserialize` added in the credential-service batch
+/// (C0527-C0529) — `Context::request_credential` needs to store this in
+/// `EventActions.requested_auth_configs` (`adk-events`, `Value`-typed and
+/// out of scope to widen here) as an opaque `Value`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// The auth scheme used to collect credentials.
     pub auth_scheme: AuthScheme,

@@ -1,22 +1,26 @@
 //! Placeholder service traits for capabilities C0061-C0064, forward-referencing
 //! phases not yet built: `BaseArtifactService`/`ArtifactVersion` (Phase 6),
-//! `BaseSessionService` (Phase 5), `BaseMemoryService` (Phase 6),
-//! `BaseCredentialService`/`AuthConfig` (Phase 9).
+//! `BaseSessionService` (Phase 5), `BaseMemoryService` (Phase 6).
 //!
-//! **`SearchMemoryResponse`/`MemoryEntry`/`AuthCredential` are the
-//! exceptions**, pulled forward the same way `SessionService` is (see
-//! below): they're real structs, not opaque placeholders — the first
-//! two because `adk-tools`'s `LoadMemoryTool`/`PreloadMemoryTool`
-//! (C0423/C0424) need their actual field shape, and `AuthCredential`
-//! because `crate::auth_credential` (C0494-C0497/C0499) ports the real
-//! type directly. `BaseMemoryService`/`BaseCredentialService`
-//! themselves — the traits that would *produce* real values of these
-//! types — are still unimplemented placeholder traits below; only
-//! their return-type shapes are real.
+//! **`SearchMemoryResponse`/`MemoryEntry`/`AuthCredential`/`AuthConfig`/
+//! `CredentialService` are the exceptions**, pulled forward the same way
+//! `SessionService` is (see below): they're real structs/a real trait,
+//! not opaque placeholders — the first two because `adk-tools`'s
+//! `LoadMemoryTool`/`PreloadMemoryTool` (C0423/C0424) need their actual
+//! field shape, `AuthCredential`/`AuthConfig` because `crate::auth_credential`/
+//! `crate::auth_tool` (C0494-C0497/C0499, C0504) port the real types
+//! directly, and `CredentialService` itself (C0527) because
+//! `InMemoryCredentialService`/`SessionStateCredentialService` (C0528/
+//! C0529) need a real, working interface to implement — a synchronous
+//! marker trait can't serve that, the same reasoning `SessionService`'s
+//! own promotion already established. `BaseMemoryService` is still an
+//! unimplemented placeholder trait below; only its return-type shapes
+//! are real.
 //!
 //! **Disclosed adaptation**: the source's service methods are `async def`.
-//! Since no concrete backend exists yet (nothing here performs real I/O),
-//! these placeholder traits are synchronous; `Context`'s own methods stay
+//! Since no concrete backend exists yet for the remaining placeholders
+//! (nothing here performs real I/O for them), those placeholder traits
+//! stay synchronous; `Context`'s own methods stay
 //! `async fn` (preserving the `.await`-able call shape callers already use)
 //! and simply call through. Revisit — trait methods become `async fn` too —
 //! once a real backend (network/disk I/O) lands in its own phase.
@@ -75,8 +79,13 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// this batch — see `auth_credential.rs`'s module doc for the "widen a
 /// placeholder to a real type" precedent this follows).
 pub use crate::auth_credential::AuthCredential;
-/// Placeholder for `auth.auth_tool.AuthConfig` (Phase 9).
-pub type AuthConfig = Value;
+/// `auth.auth_tool.AuthConfig` — widened from a bare `Value` placeholder
+/// to the real type once `crate::auth_tool` (C0504) shipped it, the same
+/// "widen a placeholder once a real consumer needs the structure"
+/// precedent as `AuthCredential` above. Real consumer: this module's own
+/// [`CredentialService`] trait (C0527), which needs `credential_key`/
+/// `exchanged_auth_credential` to be actual fields, not opaque JSON.
+pub use crate::auth_tool::AuthConfig;
 /// `artifacts.base_artifact_service.ArtifactVersion` — metadata
 /// describing a specific version of an artifact. Promoted from an
 /// opaque `Value` placeholder to a real struct (Phase 6,
@@ -466,11 +475,39 @@ pub trait MemoryService {
     fn search_memory(&self, app_name: &str, user_id: &str, query: &str) -> SearchMemoryResponse;
 }
 
-/// Placeholder for `auth.credential_service.base_credential_service.BaseCredentialService`
-/// (Phase 9).
-pub trait CredentialService {
-    fn save_credential(&self, auth_config: &AuthConfig);
-    fn load_credential(&self, auth_config: &AuthConfig) -> Option<AuthCredential>;
+/// C0527: `auth.credential_service.base_credential_service.BaseCredentialService`
+/// — abstract interface for loading/saving tool credentials to/from a
+/// backend credential store. Widened from a synchronous, no-context
+/// placeholder to the real async, `Context`-taking interface (no
+/// implementor existed anywhere in this port yet, so this widening
+/// breaks nothing) — the same "widen a placeholder once a real consumer
+/// needs the structure" precedent as `AuthConfig` above.
+/// `Arc<dyn CredentialService>` is stored as a trait object
+/// (`InvocationContext::credential_service`), so methods return a boxed
+/// [`BoxFuture`] rather than using native `async fn` (not object-safe) —
+/// the same pattern `SessionService`/`adk_tools::base_tool::BaseTool`
+/// already use for the same reason.
+///
+/// **`callback_context` mutability, adapted**: the source's
+/// `callback_context: CallbackContext` parameter is the same reference
+/// for both methods. This port narrows `load_credential` to `&Context`
+/// (read-only — `SessionStateCredentialService` only reads state) and
+/// widens `save_credential` to `&mut Context` (`SessionStateCredentialService`
+/// needs `state_mut()` to write) — Rust's stricter mutability tracking
+/// surfacing a distinction the source's dynamic typing doesn't need to
+/// make explicit.
+pub trait CredentialService: Send + Sync {
+    fn load_credential<'a>(
+        &'a self,
+        auth_config: &'a AuthConfig,
+        callback_context: &'a Context,
+    ) -> BoxFuture<'a, Option<AuthCredential>>;
+
+    fn save_credential<'a>(
+        &'a self,
+        auth_config: &'a AuthConfig,
+        callback_context: &'a mut Context,
+    ) -> BoxFuture<'a, ()>;
 }
 
 /// C0353-C0354, C0357 (partial — see the module doc): `BasePlugin`, the

@@ -64,8 +64,11 @@ use std::collections::BTreeMap;
 
 use rusty_serde::{Deserialize, Serialize};
 
-/// `auth.auth_credential.AuthCredentialTypes` (C0494).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// `auth.auth_credential.AuthCredentialTypes` (C0494). `Hash`/`Ord` added
+/// for use as a registry key (`credential_exchanger_registry.rs`/
+/// `credential_refresher_registry.rs`, C0523/C0525's `type[AuthScheme]`
+/// → tagged-key adaptation, same pattern as `AuthProviderRegistry`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AuthCredentialTypes {
     #[rusty_serde(rename = "apiKey")]
     ApiKey,
