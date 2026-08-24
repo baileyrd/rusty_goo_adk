@@ -1,15 +1,18 @@
 //! Placeholder service traits for capabilities C0061-C0064, forward-referencing
 //! phases not yet built: `BaseArtifactService`/`ArtifactVersion` (Phase 6),
 //! `BaseSessionService` (Phase 5), `BaseMemoryService` (Phase 6),
-//! `BaseCredentialService`/`AuthCredential`/`AuthConfig` (Phase 9).
+//! `BaseCredentialService`/`AuthConfig` (Phase 9).
 //!
-//! **`SearchMemoryResponse`/`MemoryEntry` are the one exception**, pulled
-//! forward the same way `SessionService` is (see below): they're real
-//! structs, not opaque placeholders, because `adk-tools`'s
-//! `LoadMemoryTool`/`PreloadMemoryTool` (C0423/C0424) need their actual
-//! field shape. `BaseMemoryService` itself — the trait that would
-//! *produce* real values of these types — is still an unimplemented
-//! placeholder trait below; only its return-type shapes are real.
+//! **`SearchMemoryResponse`/`MemoryEntry`/`AuthCredential` are the
+//! exceptions**, pulled forward the same way `SessionService` is (see
+//! below): they're real structs, not opaque placeholders — the first
+//! two because `adk-tools`'s `LoadMemoryTool`/`PreloadMemoryTool`
+//! (C0423/C0424) need their actual field shape, and `AuthCredential`
+//! because `crate::auth_credential` (C0494-C0497/C0499) ports the real
+//! type directly. `BaseMemoryService`/`BaseCredentialService`
+//! themselves — the traits that would *produce* real values of these
+//! types — are still unimplemented placeholder traits below; only
+//! their return-type shapes are real.
 //!
 //! **Disclosed adaptation**: the source's service methods are `async def`.
 //! Since no concrete backend exists yet (nothing here performs real I/O),
@@ -68,8 +71,10 @@ use crate::session::Session;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Placeholder for `auth.auth_credential.AuthCredential` (Phase 9).
-pub type AuthCredential = Value;
+/// `auth.auth_credential.AuthCredential` (C0493-C0497/C0499, real as of
+/// this batch — see `auth_credential.rs`'s module doc for the "widen a
+/// placeholder to a real type" precedent this follows).
+pub use crate::auth_credential::AuthCredential;
 /// Placeholder for `auth.auth_tool.AuthConfig` (Phase 9).
 pub type AuthConfig = Value;
 /// Placeholder for `artifacts.base_artifact_service.ArtifactVersion` (Phase 6).

@@ -10,6 +10,7 @@
 //! rows stay deferred pending Phase 3/4/7/8.
 
 pub mod active_streaming_tool;
+pub mod auth_credential;
 pub mod base_agent;
 pub mod context;
 pub mod context_cache_config;

@@ -5,6 +5,24 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::auth_credential::{AuthCredentialTypes, HttpCredentials,
+  HttpAuth, TokenEndpointAuthMethod, OAuth2Auth,
+  ServiceAccountCredential, ServiceAccount, AuthCredential}` (Phase 9,
+  C0494/C0495/C0496/C0497/C0499, mostly DONE) — the credential-scheme
+  data models from `auth.auth_credential`, starting Phase 9. Widens
+  `adk_agents::services::AuthCredential` from a `Value` placeholder to
+  this real struct (same "widen from placeholder" precedent as
+  `MemoryEntry`/`SearchMemoryResponse`, C0423). `ServiceAccount::new`
+  is fallible, running the source's `_validate_config` validator's
+  exact two checks. Disclosed: `extra="allow"` (arbitrary preserved-
+  but-redacted extra keys) has no Rust analogue — an unmodeled key is
+  silently dropped, not preserved; non-repr secret fields have no
+  redaction surface to port since this port's `Debug` isn't used to
+  serialize these structs anywhere. Not this batch: `AuthScheme`/
+  `OpenIdConnectWithConfig` (C0498, a separate source file) and the
+  `auth/__init__.py` re-export-asymmetry behavior itself (C0493 —
+  this port has no crate-root re-export layer for any module, so the
+  asymmetry has no distinguishing analogue). 12 new tests.
 - `adk-tools::remote_mcp_server::{RemoteMcpServer, HeaderProvider}`
   (Phase 8, C0491, partial) — the declarative model for a server-side
   MCP server used by the Managed Agents API (`url`/`name`/`headers`/

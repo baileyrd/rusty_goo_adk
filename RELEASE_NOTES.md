@@ -22,6 +22,46 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Auth credential schemes (Phase 9 start)
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_agents::auth_credential::{AuthCredentialTypes,
+  HttpCredentials, HttpAuth, TokenEndpointAuthMethod, OAuth2Auth,
+  ServiceAccountCredential, ServiceAccount, AuthCredential}`
+  (C0494/C0495/C0496/C0497/C0499) — the credential-scheme data models
+  ported from `google.adk.auth.auth_credential`, starting this repo's
+  Phase 9 (auth). Widens `adk_agents::services::AuthCredential` from
+  its former `Value` placeholder to the real struct here, the same
+  "widen from placeholder once a real consumer needs the shape"
+  precedent as `MemoryEntry`/`SearchMemoryResponse` (C0423).
+- **Adaptation:** `ServiceAccount::new` is a fallible constructor
+  running the source's `_validate_config` `model_validator`'s exact
+  two checks (a credential is required unless
+  `use_default_credential`; `audience` is required when
+  `use_id_token`), returning `Result<Self, ServiceAccountError>` in
+  place of Pydantic's constructor-time `ValueError` — both reject the
+  same invalid states with the same messages.
+- **Disclosed narrowing, shared by every struct in this batch:** the
+  source's `extra="allow"` lets callers attach arbitrary unmodeled
+  keys, preserved (redacted in `repr`) rather than dropped. A Rust
+  struct has a fixed field set — an unmodeled key round-tripped
+  through one of these structs is silently dropped, not
+  preserved-but-redacted. Non-repr secret fields (`Field(repr=False)`)
+  have no redaction surface to port either: this port's derived
+  `Debug` isn't used to serialize/log these structs anywhere yet.
+- **Not this batch:** `AuthScheme`/`OpenIdConnectWithConfig` (C0498)
+  live in the separate `auth_schemes.py`, left for their own batch —
+  `OAuth2Auth` already carries every field the OpenID Connect scheme
+  reuses, so nothing here is blocked on that follow-up. The
+  `auth/__init__.py` re-export-asymmetry behavior itself (C0493) isn't
+  addressed either: this port's crates never re-export any module's
+  contents at the crate root for *any* module, so the specific
+  "some names get a shortcut, others don't" asymmetry the source
+  exhibits has no distinguishing analogue to replicate here.
+- 12 new tests.
+
+---
+
 ## PR #TBD — `RemoteMcpServer`
 **2026-08-24** · (link added once this PR is opened)
 
