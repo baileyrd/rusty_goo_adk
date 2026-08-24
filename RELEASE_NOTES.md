@@ -22,6 +22,69 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 8 batch 1: `adk-tools` — `BaseTool`, `ToolContext`, `ToolConfirmation`, `append_tools`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** a new `adk-tools` crate, the start of Phase 8
+  (`google.adk.tools`). Placed parallel to `adk-flows` (same dependency
+  level: `adk-agents` + `adk-genai` + `adk-models`), not nested inside
+  it or merged into `adk-models` — a literal `LlmRequest.append_tools`
+  *method* would need `adk-models` to depend on `adk-tools` for
+  `BaseTool` while `adk-tools` needs `LlmRequest` from `adk-models`, a
+  crate-graph cycle. `append_tools` is a free function instead, the
+  same "processor as a free function, not a method" pattern `adk-flows`
+  already uses throughout.
+  - `BaseTool` (C0402, partial): the trait every tool implements.
+    Every source instance attribute (`name`/`description`/
+    `is_long_running`/`custom_metadata`/`response_scheduling`) becomes
+    a trait method, not a field — matching
+    `adk_models::base_llm::BaseLlm`'s established precedent. Not
+    ported: `from_config` (needs `ToolArgsConfig`, C0417, not built)
+    and the `SelfTool` generic-return pattern (no Rust equivalent for a
+    trait method returning `Self` through a trait object).
+  - `ToolContext` (C0415, partial): `pub type ToolContext =
+    adk_agents::context::Context` — the source's alias is the whole
+    capability, since this port's `Context` (Phase 2) already covers
+    it. Not ported: the lazy `AuthCredential`/`AuthHandler`/
+    `AuthConfig` back-compat re-exports (Phase 9, not built).
+  - `ToolConfirmation`/`from_response_dict` (C0416, done): parses
+    either a direct dict or the ADK client's wrapped
+    `{'response': '<json string>'}` format.
+  - `LlmRequest.append_tools`/`merge_declarations` (C0116, done):
+    merges each tool's `FunctionDeclaration` into the one
+    `functionDeclarations`-carrying entry in `config.tools`, without
+    disturbing unrelated built-in-tool marker entries (Google Search,
+    etc). `config.tools` stays the pre-existing opaque `Value`
+    placeholder rather than a typed `Vec<Tool>` — narrowing it is a
+    natural follow-up once more of Phase 8 exists to justify it.
+- **Added:** `FunctionDeclaration` to `adk-genai` — real `name`/
+  `description` (needed for `append_tools`'s dedup-by-name logic),
+  opaque `parameters`/`parameters_json_schema`/`response`/
+  `response_json_schema` (ADK's own code only forwards these, never
+  inspects their shape).
+- **Adaptation, disclosed:** a default trait method can't coerce
+  `&Self` into `&dyn BaseTool` (`E0277`, `Self` not `Sized` — the only
+  fix the compiler suggests, `where Self: Sized`, would make the
+  method uncallable through a trait object at all, which dynamic
+  dispatch here requires). Resolved by giving `append_tools` an
+  object-free core, `merge_declarations`, that takes plain
+  `(String, FunctionDeclaration)` pairs; `BaseTool`'s default
+  `process_llm_request` calls it directly on `self.name()`/
+  `self.get_declaration()` (always legal on `&Self`) instead of ever
+  constructing a trait object.
+- **Adaptation, disclosed:** the source only *logs* a warning on a
+  duplicate tool name within one `append_tools` call (last wins); no
+  logging framework is adopted in this port yet
+  (`functions_utils.rs`/`contents.rs` disclose the same substitution),
+  so `append_tools`/`merge_declarations` return the shadowed names
+  instead — both declarations are still advertised to the model
+  either way. The source's `tools_dict` (name → `BaseTool` map,
+  excluded from serialization) isn't tracked — nothing in this port
+  yet consumes it (function-call dispatch, C0191, needs `BaseTool`
+  resolution this batch doesn't wire).
+- 15 new tests (`adk-tools`), 2 new tests (`adk-genai`'s
+  `FunctionDeclaration`). Full workspace gate green.
+
 ## PR #TBD — Phase 4 batch 15: `_get_agent_to_run` — transfer target resolution
 **2026-08-24** · (link added once this PR is opened)
 

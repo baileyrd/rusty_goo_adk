@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools` crate (Phase 8 batch 1): `BaseTool` (C0402, partial —
+  `from_config`/`SelfTool` deferred pending C0417), `ToolContext` (C0415,
+  partial — `Context` type alias; Auth back-compat re-exports deferred to
+  Phase 9), `ToolConfirmation`/`from_response_dict` (C0416, done), and
+  `LlmRequest.append_tools`/`merge_declarations` (C0116, done). New crate
+  sits alongside `adk-flows` (depends on `adk-agents`+`adk-genai`+
+  `adk-models`) rather than nesting inside it, since `append_tools` needs
+  `LlmRequest` while `BaseTool` needs `Context` — avoiding a crate-graph
+  cycle by keeping `append_tools` a free function rather than a real
+  `LlmRequest` method, the same "processor as a free function" pattern
+  `adk-flows` already uses throughout. Adds `FunctionDeclaration` to
+  `adk-genai` (real `name`/`description`, opaque `parameters`/`response`
+  schemas) needed for `append_tools`'s dedup-by-name logic.
 - Standard governance file set (repo-config): README, ARCHITECTURE, CONTRIBUTING,
   CODE_OF_CONDUCT, SECURITY, RELEASE_NOTES, ADR seed, PR/issue templates,
   `.gitattributes`.
