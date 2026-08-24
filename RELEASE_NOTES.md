@@ -22,6 +22,40 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `runners.py`: run-level plugin wiring (C0353, C0357, C0886, C0895-C0899)
+**2026-08-24** · (link added once this PR is opened)
+
+Wires `Runner` up to a real `PluginManager` and ports `_exec_with_plugin`/
+`_handle_new_message`/`_append_new_message_to_session`'s run-level plugin
+harness — the last major gap `Runner`'s own module doc had flagged as a
+follow-up since the plugin system itself first landed.
+
+- **Added:** `Runner::with_plugin` (register a plugin, erroring on a
+  duplicate name) and a new `Runner::run_async_with_config` (accepts a
+  per-call `RunConfig`; `Runner::run_async` now delegates to it with a
+  default).
+- **Closed:** C0353 (all 5 run-level `BasePlugin` hooks now have real call
+  sites) and C0357 (`on_run_error_callback` now has one too) as DONE.
+- **Closed:** C0886's remaining plugin-wrapping gap — compaction is now the
+  only thing left open on that row.
+- **Added:** `should_append_event` (C0895, partial — only the non-live half
+  is reachable, `Runner` has no live-mode path yet), `merge_output_event`
+  (C0896 DONE), and the deprecated blob-saving path
+  (`Runner::maybe_save_input_blobs_as_artifacts`, C0898/C0899 DONE).
+- **Changed:** `Runner::close` now also closes every registered plugin.
+- **Disclosed:** `on_event_callback` in this port returns a full
+  replacement `Event`, not a partial-update object gated by the source's
+  `model_fields_set`, so `merge_output_event` merges by restoring
+  `id`/`invocation_id`/`timestamp` and a blank `author` rather than
+  field-by-field; `RunConfig` has no constructor-vs-mutation distinction
+  to preserve for C0899's read guard (a plain public-field struct, same
+  as every other config type in this crate); the source's
+  `DeprecationWarning` for the blob-saving path has no Rust equivalent
+  (no warnings/logging framework adopted).
+- **Scope:** no new dependency. 10 new tests.
+
+---
+
 ## PR #TBD — `auth/{exchanger,refresher,credential_service}/`: auth-service cluster (C0523, C0525, C0527, C0528, C0529)
 **2026-08-24** · (link added once this PR is opened)
 
