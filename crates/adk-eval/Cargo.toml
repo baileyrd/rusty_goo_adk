@@ -13,3 +13,8 @@ adk-platform = { path = "../adk-platform" }
 rusty_serde = { workspace = true }
 rusty_err = { workspace = true }
 unicode-general-category = "1.1.0"
+# `rubric_based_evaluator` (C0601, partial) needs real regex matching for
+# `DefaultAutoRaterResponseParser`'s 4 line-anchored patterns -- already a
+# workspace dependency (adk-flows/adk-tools/adk-agents/adk-models), new
+# usage site only, same bar as those adoptions.
+regex = { workspace = true }

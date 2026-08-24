@@ -50,6 +50,30 @@
 //! far) never read any of these, matching the source's own `del
 //! conversation_scenario, "not supported for per-invocation evaluation"`.
 //!
+//! **Seventh batch**: [`llm_as_judge_utils`] (`Label`, text-extraction/
+//! score/JSON-serialization helpers, C0947 — a genuine inventory gap
+//! discovered and added to the manifest mid-window, not folded into any
+//! other row) and [`rubric_based_evaluator`] (`RubricResponse`,
+//! `AutoRaterResponseParser`/`DefaultAutoRaterResponseParser`,
+//! `PerInvocationResultsAggregator`/
+//! `MajorityVotePerInvocationResultsAggregator`,
+//! `InvocationResultsSummarizer`/`MeanInvocationResultsSummarizer`,
+//! `normalize_text`, C0601 — partial, the source's
+//! `RubricBasedEvaluator` class itself stays unbuilt, needing C0600's
+//! still-deferred `LlmAsJudge` harness). Neither needs that harness
+//! itself — same reasoning as the C0612 criterion types and C0632
+//! persona system. `evaluator::PerInvocationResult::rubric_scores`/
+//! `EvaluationResult::overall_rubric_scores` widen from opaque `Value`
+//! to real `Vec<eval_rubrics::RubricScore>` this batch, now that a real
+//! consumer (`rubric_based_evaluator`'s aggregators) needs the
+//! structure — same "widen once a real consumer needs it" pattern as
+//! `Invocation.rubrics`/`.app_details`. Adds `regex` (already a
+//! workspace dependency, new usage site) for
+//! `DefaultAutoRaterResponseParser`'s line-anchored patterns, rewriting
+//! the source's two lookbehind patterns as ordinary capture groups
+//! (Rust's `regex` crate has no lookbehind support) — disclosed in that
+//! module's own doc.
+//!
 //! **Sixth batch**: [`base_eval_service`] (`BaseEvalService`/
 //! `EvaluateConfig`/`InferenceConfig`/`InferenceRequest`/
 //! `InferenceResult`/`EvaluateRequest`, C0616), [`custom_metric_evaluator`]
@@ -156,6 +180,7 @@ pub mod eval_sets_manager_utils;
 pub mod evaluator;
 pub mod final_response_match_v1;
 pub mod in_memory_eval_sets_manager;
+pub mod llm_as_judge_utils;
 pub mod local_eval_set_results_manager;
 pub mod local_eval_sets_manager;
 pub mod metric_evaluator_registry;
@@ -164,6 +189,7 @@ pub mod path_validation;
 mod porter_stemmer;
 pub mod pre_built_personas;
 pub mod rouge;
+pub mod rubric_based_evaluator;
 pub mod static_user_simulator;
 pub mod trajectory_evaluator;
 pub mod user_simulator;

@@ -6,6 +6,7 @@ use rusty_serde::{Deserialize, Serialize};
 
 use crate::eval_case::Invocation;
 pub use crate::eval_metrics::EvalStatus;
+use crate::eval_rubrics::RubricScore;
 
 /// `evaluator._validate_invocation_lengths` — rejects invocation lists
 /// that cannot be paired without truncation.
@@ -29,9 +30,13 @@ pub fn validate_invocation_lengths(
 /// C0600: `evaluator.PerInvocationResult` — metric evaluation score per
 /// invocation.
 ///
-/// **Adaptation**: `rubric_scores` (`eval_rubrics.RubricScore`, C0607,
-/// still `REQUIRED`) stays an opaque `Value` placeholder — see the crate
-/// root doc.
+/// **Widened**: `rubric_scores` was an opaque `Value` placeholder while
+/// `eval_rubrics.RubricScore` (C0607) was still `REQUIRED`; now that
+/// it's `DONE` and `rubric_based_evaluator`'s aggregators (C0601,
+/// partial) are real consumers that need the real structure, this
+/// widens to `Option<Vec<RubricScore>>` — the same "widen once a real
+/// consumer needs it" pattern already used for `Invocation.rubrics`/
+/// `.app_details`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[rusty_serde(rename_all = "camelCase")]
 pub struct PerInvocationResult {
@@ -43,10 +48,11 @@ pub struct PerInvocationResult {
     #[rusty_serde(default)]
     pub eval_status: EvalStatus,
     #[rusty_serde(default)]
-    pub rubric_scores: Option<rusty_serde::value::Value>,
+    pub rubric_scores: Option<Vec<RubricScore>>,
 }
 
-/// C0600: `evaluator.EvaluationResult`.
+/// C0600: `evaluator.EvaluationResult`. See [`PerInvocationResult`]'s doc
+/// for `overall_rubric_scores`' widening from opaque `Value`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[rusty_serde(rename_all = "camelCase")]
 pub struct EvaluationResult {
@@ -57,7 +63,7 @@ pub struct EvaluationResult {
     #[rusty_serde(default)]
     pub per_invocation_results: Vec<PerInvocationResult>,
     #[rusty_serde(default)]
-    pub overall_rubric_scores: Option<rusty_serde::value::Value>,
+    pub overall_rubric_scores: Option<Vec<RubricScore>>,
 }
 
 /// C0600 (partial): `evaluator.Evaluator` — a metrics evaluator
