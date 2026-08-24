@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-genai::content_utils::{extract_text_from_content, to_user_content,
+  ToUserContentInput, SKIP_THOUGHT_SIGNATURE_VALIDATOR}` (Phase 2,
+  C0927/C0928/C0929) — ported from `google.adk.utils.content_utils`.
+  `extract_text_from_content` ported exactly; `to_user_content`'s
+  runtime `isinstance` dispatch becomes an explicit
+  `ToUserContentInput` enum (`Content`/`Text`/`Value`), with the
+  source's `BaseModel`/dict/list/anything-else branches all folding
+  into the `Value` variant, non-string values formatted as compact
+  JSON rather than Python's `str()`/`repr()` (disclosed, low-severity).
+  `SKIP_THOUGHT_SIGNATURE_VALIDATOR` is ported as a constant, ahead of
+  its own caller (`ReflectAndRetryToolCallsPlugin`, not built).
+  Consolidates `is_audio_part`/`filter_audio_parts` — previously a
+  private duplicate local to `adk-models::gemini_llm_connection`
+  (C0136) — into this shared module as the single source of truth.
+  These three functions had no manifest rows at all before this
+  batch; found and added per the boundary contract. 13 new tests.
 - `adk-agents::session_util::{decode_model, extract_state_delta,
   make_json_safe_state, extract_json_safe_state_delta}` (Phase 5,
   C0209 partial) plus `State::{APP_PREFIX, USER_PREFIX, TEMP_PREFIX}`

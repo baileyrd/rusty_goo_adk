@@ -2,3 +2,4 @@
 //! doc for why this crate exists and what it deliberately does not model.
 
 pub mod content;
+pub mod content_utils;

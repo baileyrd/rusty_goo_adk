@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `content_utils` shared module (`adk-genai`)
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_genai::content_utils::{extract_text_from_content,
+  to_user_content, ToUserContentInput,
+  SKIP_THOUGHT_SIGNATURE_VALIDATOR}` (C0927/C0928/C0929), ported from
+  `google.adk.utils.content_utils`.
+- **Consolidation:** `is_audio_part`/`filter_audio_parts` (C0136) were
+  already ported, but as a private duplicate local to
+  `adk-models::gemini_llm_connection` — `content_utils.py` itself
+  wasn't in scope yet when that earlier batch needed just those two
+  functions. Moved here as the single source of truth;
+  `gemini_llm_connection.rs` now calls through to this module instead
+  of keeping its own copy.
+- **Newly found, previously uninventoried:** `extract_text_from_content`/
+  `to_user_content`/`SKIP_THOUGHT_SIGNATURE_VALIDATOR` had no manifest
+  rows at all before this batch — only 2 of `content_utils.py`'s 5
+  exports were ever inventoried. Per the boundary contract, a
+  capability missing from the original inventory still gets tracked
+  once found — added as C0927/C0928/C0929, appended rather than
+  renumbering the existing sequential range. Also corrects the
+  manifest's stale "832 rows, C0001-C0832" footer comment, which
+  predated several later append batches.
+- **Adaptation (`to_user_content`):** the source's runtime `isinstance`
+  dispatch across `Content`/`str`/`BaseModel`/`dict`/`list`/anything
+  else becomes an explicit `ToUserContentInput` enum — Rust has no
+  runtime `isinstance`, and callers already know which shape they hold.
+  A `BaseModel` input becomes whatever the caller's own typed struct
+  serializes to via `rusty_serde::json::to_value` first, matching the
+  "the boundary already deals in `Value`" convention used throughout
+  this port.
+- **Disclosed, low-severity:** the source's "anything else →
+  `str(value)`" catch-all has no Rust equivalent; non-string,
+  non-`Content` values are formatted as compact JSON instead (e.g. a
+  bool renders `true`/`false` rather than Python's `True`/`False`).
+- **Disclosed, ahead of its own caller:** `SKIP_THOUGHT_SIGNATURE_VALIDATOR`'s
+  sole source consumer (`ReflectAndRetryToolCallsPlugin`) isn't built
+  in this workspace yet.
+- 13 new tests.
+
+---
+
 ## PR #TBD — Fix `InMemoryArtifactService` malformed-input handling; close out C0259/C0260/C0261
 **2026-08-24** · (link added once this PR is opened)
 
