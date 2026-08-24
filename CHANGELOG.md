@@ -5,6 +5,32 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- Starts Phase 7 (`plugins/`): `adk-agents::services::BasePlugin` — a
+  real plugin trait replacing the old hardcoded-`None` `PluginManager`
+  stub. Agent-level hooks (`before_agent_callback`/`after_agent_callback`,
+  C0354, done) are wired into `BaseAgent::run_async`/`run_live` for
+  real, fixing a latent bug along the way: those methods previously
+  constructed a fresh, always-empty `PluginManager` locally instead of
+  reading the actual one off the passed-in `InvocationContext`, so a
+  configured `PluginManager` would have silently never run. Run-level
+  hooks (`on_user_message_callback`/`before_run_callback`/
+  `on_event_callback`/`after_run_callback`, C0353) and the
+  notification-only hooks (`on_agent_error_callback`/`on_run_error_callback`,
+  C0357) are defined and dispatchable but only `on_agent_error_callback`
+  has a call site yet — the rest need `adk-runners::Runner`'s own
+  wiring, a follow-up batch. `PluginManager` gets real `register_plugin`/
+  `get_plugin`/`set_skip_closing_plugins` (C0359, done), first-non-None
+  short-circuit dispatch with registration-order/plugin-before-agent
+  precedence (C0358, done), and a sequential (matching the source's
+  actual, not documented, behavior) `close()` (C0361, partial — no
+  per-plugin timeout/failure-aggregation yet, since no plugin
+  implementation exists that can fail to close). Model-level
+  (`before_model_callback`/etc, C0355) and tool-level
+  (`before_tool_callback`/etc, C0356) hooks are deferred — they'd need
+  `adk-agents` to depend on `adk-models`/`adk-tools`, which already
+  depend on `adk-agents`, the same crate-graph constraint
+  `LlmRequest::append_tools` (C0116) already disclosed. 13 new tests
+  across `adk-agents`.
 - New `adk-runners` crate: `Runner` (C0840-C0845/C0873/C0884/C0886/
   C0888/C0924, all partial except C0888 done) — the core execution
   engine's "legacy" (plain `BaseAgent`, single always-non-resumable

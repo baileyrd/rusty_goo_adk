@@ -22,6 +22,67 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Start Phase 7 batch 1: a real `BasePlugin` + `PluginManager`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Scoping note:** Phase 7 (`plugins/`, the workflow/node graph engine,
+  `App`, deprecated-but-active `SequentialAgent`/`ParallelAgent`/
+  `LoopAgent`, `RemoteA2aAgent`, YAML agent config — 103 capability
+  rows) is the largest remaining phase. The graph/node/task-delegation
+  engine alone is a multi-batch undertaking; a real plugin system, by
+  contrast, is self-contained, already has a real (if stubbed)
+  consumer in `BaseAgent`, and was explicitly disclosed as a gap by
+  both `adk-tools::FunctionTool`'s and `adk-runners::Runner`'s own
+  module docs. So this batch starts there.
+- **Added:** `adk_agents::services::BasePlugin` — replaces the old
+  hardcoded `PluginManager` stub (whose hooks took no parameters and
+  always returned `None`) with a real trait: agent-level hooks
+  (`before_agent_callback`/`after_agent_callback`, C0354, done),
+  run-level hooks (`on_user_message_callback`/`before_run_callback`/
+  `on_event_callback`/`after_run_callback`, C0353, partial — defined
+  and dispatchable, no call site wired yet), and notification-only
+  hooks (`on_agent_error_callback`/`on_run_error_callback`, C0357,
+  partial — only the agent-level one has a call site so far). Every
+  hook defaults to a no-op, matching the source's own `pass`-bodied
+  `BasePlugin` base class.
+- **Added:** a real `PluginManager` (C0358-C0361) — `register_plugin`
+  (rejects a duplicate name), `get_plugin`, `set_skip_closing_plugins`;
+  dispatch runs registered plugins in registration order, and for the
+  short-circuiting hooks the first plugin to return `Some(..)` stops
+  the rest and its value propagates; the notification-only hooks
+  always run every plugin regardless. `close()` closes plugins
+  sequentially, matching the source's *actual* implementation (a
+  deliberate choice to avoid anyio/MCP task-local-context issues), not
+  its docstring's claim of running them concurrently — this port's own
+  capability manifest already flagged that inconsistency as one to
+  resolve, not replicate blindly.
+- **Fixed a latent bug:** `BaseAgent::run_async`/`run_live` previously
+  constructed a fresh, always-empty `PluginManager` locally on every
+  call instead of reading the real one off the passed-in
+  `InvocationContext` (`ctx.plugin_manager`) — meaning a `PluginManager`
+  configured anywhere upstream (e.g. by a `Runner`) would have silently
+  never run. Both methods now use `ctx.plugin_manager`, and a new
+  end-to-end test (`run_async_honors_a_plugin_registered_on_the_invocation_context`)
+  proves a registered plugin's `before_agent_callback` actually fires
+  and can short-circuit the agent.
+- **Not ported:** model-level (`before_model_callback`/
+  `after_model_callback`/`on_model_error_callback`, C0355) and
+  tool-level (`before_tool_callback`/`after_tool_callback`/
+  `on_tool_error_callback`, C0356) hooks — typing these needs
+  `LlmRequest`/`LlmResponse` (`adk-models`) and `BaseTool`/`ToolContext`
+  (`adk-tools`), and `adk-tools` already depends on `adk-agents`, so
+  `adk-agents` depending back on either would be the same crate-graph
+  cycle `LlmRequest::append_tools` (C0116) already had to avoid. A
+  unified `BasePlugin` spanning all four hook levels needs its own home
+  above `adk-tools`/`adk-models`, deferred to a follow-up. Also not
+  ported: per-plugin `close()` timeout and failure aggregation (no
+  plugin implementation exists yet that can fail to close); wrapping a
+  panicking plugin hook the way the source wraps a raised exception
+  (this port's hooks return a value rather than raising, so there's no
+  exception channel to intercept — the same posture `AgentCallback`
+  closures already have).
+- 13 new tests (`adk-agents`, 131 total). Full workspace gate green.
+
 ## PR #TBD — Start `Runner` batch 2: the `Runner` struct + legacy `run_async`
 **2026-08-24** · (link added once this PR is opened)
 

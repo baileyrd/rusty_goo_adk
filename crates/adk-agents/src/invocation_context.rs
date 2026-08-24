@@ -376,6 +376,7 @@ pub struct InvocationContextBuilder {
     agent: Option<BaseAgent>,
     run_config: Option<RunConfig>,
     branch: Option<String>,
+    plugin_manager: Option<PluginManager>,
 }
 
 struct NoopSessionService;
@@ -433,6 +434,7 @@ impl InvocationContextBuilder {
             agent: None,
             run_config: None,
             branch: None,
+            plugin_manager: None,
         }
     }
 
@@ -448,6 +450,11 @@ impl InvocationContextBuilder {
 
     pub fn branch(mut self, branch: impl Into<String>) -> Self {
         self.branch = Some(branch.into());
+        self
+    }
+
+    pub fn plugin_manager(mut self, plugin_manager: PluginManager) -> Self {
+        self.plugin_manager = Some(plugin_manager);
         self
     }
 
@@ -472,7 +479,7 @@ impl InvocationContextBuilder {
             resumability_config: None,
             events_compaction_config: None,
             token_compaction_checked: false,
-            plugin_manager: PluginManager,
+            plugin_manager: self.plugin_manager.unwrap_or_default(),
             canonical_tools_cache: None,
             credential_by_key: BTreeMap::new(),
             custom_metadata: BTreeMap::new(),
