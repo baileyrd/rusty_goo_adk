@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::skill_toolset::{AdditionalTool, SkillToolsetConfig
+  ::additional_tools, SkillToolset::{resolve_additional_tools_from_state,
+  clone_with_updated_skills}}` (C0950 DONE, closing the gap discovered
+  last batch). 6 new tests. Ports the activated-skill → `adk_additional_tools`
+  name-set → candidate-tool resolution pipeline (from provided tools and
+  provided toolsets via `get_tools_with_prefix`), the core-tool-name-
+  collision skip, and `clone_with_updated_skills`'s exact field carry-
+  forward (faithfully including the source's own omission of
+  `tool_name_prefix`/`tool_filter` from the clone). Disclosed narrowing:
+  the source's `ToolUnion`'s bare-`Callable` branch (wrapped via
+  `FunctionTool(callable)`'s `inspect.signature` reflection) has no port
+  — `FunctionTool`'s own module doc already discloses this port has no
+  such runtime reflection, so `AdditionalTool` only models the two
+  Rust-expressible branches (`Tool`/`Toolset`). No new dependency.
 - `adk-tools::skill_registry::SkillRegistry` (C0395 DONE) +
   `adk-tools::skill_instructions_utils::inject_session_state` (C0401 DONE,
   a local duplicate of `adk_flows::instructions_utils::inject_session_state`

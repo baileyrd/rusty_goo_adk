@@ -22,6 +22,31 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/skill_toolset.py`: `SkillToolset.additional_tools` (C0950)
+**2026-08-24** · (link added once this PR is opened)
+
+Closes the `additional_tools`/`_resolve_additional_tools_from_state`/
+`clone_with_updated_skills` gap discovered while building the prior
+`SkillToolset` batch.
+
+- **Added:** `adk_tools::skill_toolset::{AdditionalTool,
+  SkillToolsetConfig::additional_tools,
+  SkillToolset::resolve_additional_tools_from_state,
+  SkillToolset::clone_with_updated_skills}` (C0950 DONE).
+- **Ported:** the activated-skill → `adk_additional_tools` name-set →
+  candidate-tool resolution pipeline (provided tools and provided
+  toolsets via `get_tools_with_prefix`), the core-tool-name-collision
+  skip, and `clone_with_updated_skills`'s exact field carry-forward —
+  including the source's own omission of `tool_name_prefix`/`tool_filter`
+  from the clone, reproduced faithfully rather than "fixed."
+- **Disclosed narrowing:** the source's `ToolUnion`'s bare-`Callable`
+  branch (`FunctionTool(callable)` via `inspect.signature` reflection)
+  has no port — `FunctionTool`'s own module doc already discloses this
+  port has no such runtime reflection.
+- **Scope:** no new dependency. 6 new tests.
+
+---
+
 ## PR #TBD — `tools/skill_toolset.py`: the SkillToolset stack (C0395, C0401, C0408-C0411), plus a discovered `additional_tools` gap
 **2026-08-24** · (link added once this PR is opened)
 
