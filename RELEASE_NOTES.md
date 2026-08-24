@@ -22,6 +22,75 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: `llm_as_judge_utils` + the rubric-evaluator's harness-independent parts (C0947, C0601)
+**2026-08-24** · (link added once this PR is opened)
+
+Closes out the inventory gap flagged last batch (`llm_as_judge_utils.py`
+had no manifest row at all) and, since it's the direct dependency of
+`rubric_based_evaluator.py`, ports that file's own harness-independent
+parts in the same PR.
+
+- **Added:** `adk_eval::llm_as_judge_utils::{Label, get_text_from_content,
+  get_text_from_invocation, get_eval_status, get_average_rubric_score,
+  get_tool_declarations_as_json_str,
+  get_tool_calls_and_responses_as_json_str,
+  get_grounding_metadata_as_json_str}` (C0947) — every function ported.
+- **Added:** `adk_eval::rubric_based_evaluator::{RubricResponse,
+  AutoRaterResponseParser, DefaultAutoRaterResponseParser,
+  PerInvocationResultsAggregator,
+  MajorityVotePerInvocationResultsAggregator,
+  InvocationResultsSummarizer, MeanInvocationResultsSummarizer,
+  normalize_text}` (C0601, partial) — the pluggable response parser
+  (nearest-preceding-property ID matching, robust to a dropped ID
+  line), the majority-vote aggregator, the mean-score summarizer, and
+  rubric-text normalization.
+- **Not this batch, still `REQUIRED`:** `RubricBasedEvaluator` itself —
+  extends `LlmAsJudge[RubricsBasedCriterion]` (C0600's still-deferred
+  harness) and returns `AutoRaterScore` (`llm_as_judge.py`, also
+  unbuilt). Neither of this batch's additions needs that harness to be
+  useful pure data/computation, the same reasoning already established
+  for the C0612 criterion types and the C0632 persona system.
+- **Widened:** `evaluator::PerInvocationResult::rubric_scores`/
+  `EvaluationResult::overall_rubric_scores`, from opaque `Value` to
+  real `Vec<eval_rubrics::RubricScore>` — the new aggregators are real
+  consumers that need the structure, same "widen once a real consumer
+  needs it" pattern already used for `Invocation.rubrics`/
+  `.app_details`.
+- **Verification:** cross-checked `get_text_from_content`'s
+  `Some("")`-vs-`None` truthiness edge case (parts present but none
+  carry non-empty text → `Some("")`, not `None`) and
+  `DefaultAutoRaterResponseParser`'s parsing across four cases
+  (well-formed response, missing-ID tolerance, mismatched-count
+  rejection, unparseable verdict) directly against the real source
+  logic, run standalone.
+- **Adaptation, disclosed:** `get_text_from_content` splits into two
+  functions by type (`get_text_from_content`/`get_text_from_invocation`)
+  since the source overloads one function over `Union[Content,
+  Invocation]` and Rust has no function overloading. `Label`'s
+  inconsistent per-variant `.value` shape (a 3-tuple for one member,
+  plain strings elsewhere) becomes a uniform `&'static [&'static str]`
+  for every variant — a strict improvement, not a narrowing.
+- **Adaptation, disclosed:** the source's `_RATIONALE_PATTERN`/
+  `_VERDICT_PATTERN` use zero-width lookbehind
+  (`(?<=Rationale: )(.*)`); Rust's `regex` crate has no lookbehind
+  support (a deliberate limitation for its linear-time guarantee), so
+  both become ordinary capture groups instead — behaviorally identical
+  here, since the source's own `re.findall` already returns group 1's
+  contents for both, never the lookbehind-inclusive group 0.
+- **Disclosed narrowing:** `normalize_text` skips the source's NFKC
+  normalization step — same gap `rouge.rs` already carries, no
+  `unicode-normalization`-equivalent crate is a dependency of
+  `adk-eval`. Both aggregators group rubric scores by `rubric_id` in a
+  `HashMap` rather than preserving dict insertion order — each
+  aggregated score is self-identifying by ID, so list order doesn't
+  affect correctness. `_ToolCallAndResponse.tool_response`'s
+  `Union[FunctionResponse, str]` narrows to an opaque `Value`.
+- **New dependency:** `regex` (already a workspace dependency, new
+  usage site in `adk-eval`).
+- 31 new tests.
+
+---
+
 ## PR #TBD — `evaluation/`: eval-service interface + metric-evaluator registry (C0599, C0603, C0616)
 **2026-08-24** · (link added once this PR is opened)
 

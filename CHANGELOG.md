@@ -5,6 +5,36 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-eval::llm_as_judge_utils::{Label, get_text_from_content,
+  get_text_from_invocation, get_eval_status, get_average_rubric_score,
+  get_tool_declarations_as_json_str,
+  get_tool_calls_and_responses_as_json_str,
+  get_grounding_metadata_as_json_str}` (C0947 DONE — closes the
+  inventory gap added last batch) +
+  `adk-eval::rubric_based_evaluator::{RubricResponse,
+  AutoRaterResponseParser, DefaultAutoRaterResponseParser,
+  PerInvocationResultsAggregator,
+  MajorityVotePerInvocationResultsAggregator,
+  InvocationResultsSummarizer, MeanInvocationResultsSummarizer,
+  normalize_text}` (C0601 partial — `RubricBasedEvaluator` itself stays
+  unbuilt, needing C0600's still-deferred `LlmAsJudge` harness and
+  `AutoRaterScore`). Neither needs that harness to be useful — same
+  reasoning as the C0612 criterion types and C0632 persona system.
+  Cross-verified `get_text_from_content`'s `Some("")`-vs-`None`
+  truthiness edge case and `DefaultAutoRaterResponseParser`'s parsing
+  (well-formed response, missing-ID tolerance, mismatched-count
+  rejection, unparseable verdict) directly against the real source
+  logic run standalone. Widened `evaluator::PerInvocationResult
+  ::rubric_scores`/`EvaluationResult::overall_rubric_scores` from
+  opaque `Value` to real `Vec<RubricScore>`, now that the new
+  aggregators are real consumers. Notable adaptations, disclosed in
+  each module's doc: `get_text_from_content` splits by type (no
+  function overloading in Rust); `Label`'s inconsistent per-variant
+  `.value` shape becomes uniform; the source's two lookbehind regex
+  patterns become ordinary capture groups (Rust's `regex` crate has no
+  lookbehind); `normalize_text` skips NFKC normalization (same gap
+  `rouge.rs` already carries). New dependency: `regex` (already a
+  workspace dependency, new usage site in `adk-eval`). 31 new tests.
 - `adk-eval::base_eval_service::{BaseEvalService, EvaluateConfig,
   InferenceConfig, InferenceRequest, InferenceStatus, InferenceResult,
   EvaluateRequest}` (C0616 DONE) + `adk-eval::custom_metric_evaluator::{
