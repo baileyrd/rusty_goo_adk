@@ -288,13 +288,13 @@ impl Context {
     // Credential methods (C0062)
     // ------------------------------------------------------------------
 
-    pub async fn save_credential(&self, auth_config: &AuthConfig) -> Result<(), ContextError> {
+    pub async fn save_credential(&mut self, auth_config: &AuthConfig) -> Result<(), ContextError> {
         let service = self
             .invocation_context
             .credential_service
-            .as_ref()
+            .clone()
             .ok_or(ContextError::CredentialServiceUnset)?;
-        service.save_credential(auth_config);
+        service.save_credential(auth_config, self).await;
         Ok(())
     }
 
@@ -305,9 +305,9 @@ impl Context {
         let service = self
             .invocation_context
             .credential_service
-            .as_ref()
+            .clone()
             .ok_or(ContextError::CredentialServiceUnset)?;
-        Ok(service.load_credential(auth_config))
+        Ok(service.load_credential(auth_config, self).await)
     }
 
     /// C0062: requests a credential for the current tool call. Requires
@@ -318,9 +318,14 @@ impl Context {
             .function_call_id
             .clone()
             .ok_or(ContextError::RequestCredentialNeedsFunctionCallId)?;
+        // `EventActions.requested_auth_configs` (`adk-events`) is `Value`-typed
+        // and out of scope for this batch to widen — serialize the now-real
+        // `AuthConfig` on the way in, same as this crate's other
+        // real-struct-into-a-`Value`-typed-field sites.
+        let auth_config_value = rusty_serde::json::to_value(&auth_config).unwrap_or(Value::Null);
         self.event_actions
             .requested_auth_configs
-            .insert(function_call_id, auth_config);
+            .insert(function_call_id, auth_config_value);
         Ok(())
     }
 
@@ -471,10 +476,24 @@ mod tests {
         );
     }
 
+    fn test_auth_config() -> AuthConfig {
+        use crate::auth_schemes::{AuthScheme, CustomAuthScheme};
+
+        AuthConfig::new(
+            AuthScheme::Custom(CustomAuthScheme {
+                type_: "test".to_string(),
+                extra: None,
+            }),
+            None,
+            None,
+            Some("key".to_string()),
+        )
+    }
+
     #[test]
     fn request_credential_requires_function_call_id() {
         let mut ctx = context();
-        let err = ctx.request_credential(Value::Null).unwrap_err();
+        let err = ctx.request_credential(test_auth_config()).unwrap_err();
         assert!(matches!(
             err,
             ContextError::RequestCredentialNeedsFunctionCallId
@@ -485,8 +504,7 @@ mod tests {
     fn request_credential_stores_it_keyed_by_function_call_id() {
         let mut ctx = context();
         ctx.set_function_call_id(Some("fc-1".to_string()));
-        ctx.request_credential(Value::String("auth".to_string()))
-            .unwrap();
+        ctx.request_credential(test_auth_config()).unwrap();
         assert!(ctx.actions().requested_auth_configs.contains_key("fc-1"));
     }
 
@@ -574,10 +592,11 @@ mod tests {
 
     #[rusty_tokio::test]
     async fn credential_methods_raise_when_service_unset() {
-        let ctx = context();
-        let err = ctx.save_credential(&Value::Null).await.unwrap_err();
+        let mut ctx = context();
+        let auth_config = test_auth_config();
+        let err = ctx.save_credential(&auth_config).await.unwrap_err();
         assert!(matches!(err, ContextError::CredentialServiceUnset));
-        let err = ctx.load_credential(&Value::Null).await.unwrap_err();
+        let err = ctx.load_credential(&auth_config).await.unwrap_err();
         assert!(matches!(err, ContextError::CredentialServiceUnset));
     }
 

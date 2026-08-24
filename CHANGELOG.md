@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::{base_credential_exchanger::BaseCredentialExchanger,
+  credential_exchanger_registry::CredentialExchangerRegistry}` (C0523
+  DONE), `adk-agents::{base_credential_refresher::BaseCredentialRefresher,
+  credential_refresher_registry::CredentialRefresherRegistry}` (C0525
+  DONE), `adk-agents::in_memory_credential_service::
+  InMemoryCredentialService` (C0528 DONE), and
+  `adk-agents::session_state_credential_service::
+  SessionStateCredentialService` (C0529 DONE). 18 new tests. Both
+  registries key directly on `AuthCredentialTypes` (given new `Hash`/
+  `PartialOrd`/`Ord` derives) — already a closed enum, so no discriminant
+  adaptation was needed the way `AuthProviderRegistry`'s `type[AuthScheme]`
+  required. Implementing the two credential services required widening
+  two long-stale placeholders: `adk-agents::services::AuthConfig` (was
+  `Value`) now re-exports `auth_tool::AuthConfig`, and
+  `adk-agents::services::CredentialService` (C0527 DONE as a discovered
+  side effect) grows from a synchronous, context-free trait into a real
+  async, `Context`-taking one — safe since grep confirmed zero prior
+  implementors or call sites. `Context::save_credential`'s receiver
+  changes from `&self` to `&mut self` to match (also zero external call
+  sites). No new dependency.
+### Added
 - `adk-agents::telemetry_context::{ContentCapturingMode, TelemetryConfig,
   SemconvStabilityOptIn}` (C0651/C0652 DONE, plus 5 of C0670's 6 env-var
   constants) and `adk-agents::schema_version::resolve_schema_version`

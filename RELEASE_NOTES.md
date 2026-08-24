@@ -22,6 +22,49 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `auth/{exchanger,refresher,credential_service}/`: auth-service cluster (C0523, C0525, C0527, C0528, C0529)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the exchanger/refresher registries and the two concrete
+`CredentialService` implementations. Closes the long-standing
+`services::AuthConfig`/`services::CredentialService` placeholder gap as
+a discovered side effect — the abstract `BaseCredentialService`
+interface (C0527) had no real implementor until this batch gave it two.
+
+- **Added:** `adk_agents::{base_credential_exchanger::
+  BaseCredentialExchanger, credential_exchanger_registry::
+  CredentialExchangerRegistry}` (C0523 DONE).
+- **Added:** `adk_agents::{base_credential_refresher::
+  BaseCredentialRefresher, credential_refresher_registry::
+  CredentialRefresherRegistry}` (C0525 DONE).
+- **Added:** `adk_agents::in_memory_credential_service::
+  InMemoryCredentialService` (C0528 DONE) and
+  `adk_agents::session_state_credential_service::
+  SessionStateCredentialService` (C0529 DONE).
+- **Closed:** C0527 (`BaseCredentialService`) as a discovered side
+  effect — the trait pre-existed as a stale placeholder with zero real
+  implementors; this batch's two credential services are its first.
+- **Changed:** `adk_agents::services::AuthConfig` widens from a bare
+  `Value` placeholder to re-export `auth_tool::AuthConfig`.
+  `adk_agents::services::CredentialService` widens from a synchronous,
+  context-free trait to a real async, `Context`-taking one (via this
+  crate's `BoxFuture` convention) — safe since grep confirmed zero
+  prior implementors or call sites. `Context::save_credential`'s
+  receiver changes from `&self` to `&mut self` to match (also zero
+  external call sites). `AuthCredentialTypes` gains `Hash`/
+  `PartialOrd`/`Ord` derives so both registries can key on it directly
+  — it's already a closed enum, so (unlike `AuthProviderRegistry`'s
+  `type[AuthScheme]`) no discriminant-collapse adaptation was needed.
+- **Disclosed:** `InMemoryCredentialService` skips storing an explicit
+  absent-value marker on a `None` exchanged credential (its private
+  map has no other reader, so this is behaviorally identical through
+  the only observable interface); `SessionStateCredentialService`
+  preserves the source's explicit-`null`-overwrite instead, since
+  session state is externally observable.
+- **Scope:** no new dependency. 18 new tests.
+
+---
+
 ## PR #TBD — `telemetry/`: per-request config — `TelemetryConfig`/`resolve_schema_version` (C0651, C0652, C0670, C0671, C0679)
 **2026-08-24** · (link added once this PR is opened)
 
