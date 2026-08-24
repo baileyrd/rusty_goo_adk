@@ -7,6 +7,11 @@ publish.workspace = true
 
 [dependencies]
 adk-agents = { path = "../adk-agents" }
+# `code_executor_context` (C0390) needs a runtime clock for
+# `update_code_execution_result`'s timestamp -- an already-vetted
+# workspace dependency (every crate below this one in the graph already
+# depends on it), just a new direct usage site.
+adk-platform = { path = "../adk-platform" }
 adk-events = { path = "../adk-events" }
 adk-examples = { path = "../adk-examples" }
 adk-genai = { path = "../adk-genai" }

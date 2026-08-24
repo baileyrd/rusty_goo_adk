@@ -116,6 +116,7 @@ dependencies = [
  "adk-examples",
  "adk-genai",
  "adk-models",
+ "adk-platform",
  "adk-runners",
  "regex",
  "reqwest",
