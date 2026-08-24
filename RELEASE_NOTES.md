@@ -22,6 +22,49 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `utils/` sweep 2: `_dependency`/`_telemetry_context`/`_serialized_base_model`/`output_schema_utils`
+**2026-08-24** · (link added once this PR is opened)
+
+The remaining small `utils/` files, found continuing the same sweep as the
+previous PR. Four new manifest rows (C0935-C0938).
+
+- **Added:** `adk-errors::missing_extra::missing_extra` (C0935) —
+  the standard "install this extra" message for a missing optional
+  dependency. Returns a plain `String` (no caller in this workspace
+  needs it yet; none of the source's optional-dependency-gated
+  subsystems that call it are built here).
+- **Added:** `adk-platform::visual_builder_context::{is_visual_builder,
+  set_visual_builder}` (C0936) — forward-pulled into `adk-platform`
+  even though its source file is `utils/`, not `platform/`, since it's
+  the same shape of thing that crate already exists for.
+- **Disclosed adaptation:** the source's `contextvars.ContextVar` is
+  async-task-scoped; this port uses a `thread_local!` instead (only
+  thread-scoped), the same narrowing already disclosed for
+  `ClientLabelScope` (C0932).
+- **Added:** manifest row C0937 (`SerializedBaseModel`) — no new code;
+  this is a structural convention every applicable struct in this port
+  already satisfies via `#[rusty_serde(rename_all = "camelCase")]`
+  (16 files, cross-referenced in the row's evidence). Disclosed gap:
+  the source's `populate_by_name=True` (accepting the original
+  snake_case field name on input too) hasn't been verified to have an
+  equivalent here.
+- **Added:** `adk-models::output_schema_utils::can_use_output_schema_with_tools`
+  (C0938) — a deprecated wrapper delegating to
+  `gemini_output_schema_and_tools`. Python's `@deprecated` becomes
+  Rust's own `#[deprecated]` attribute (a genuinely close analog, both
+  static/type-checker-visible). Disclosed narrowing: the source's
+  `LiteLlm`-instance always-`True` special case is dropped, since
+  `LiteLlm` isn't ported in this workspace.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-errors +1, adk-platform +2, adk-models +1 new tests, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `utils/` sweep: `variant_utils`/`_json_utils`/`_client_labels_utils`/`_debug_output`/`vertex_ai_utils`
 **2026-08-24** · (link added once this PR is opened)
 

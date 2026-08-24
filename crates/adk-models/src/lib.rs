@@ -30,6 +30,7 @@ pub mod live_server_message;
 pub mod llm_request;
 pub mod llm_response;
 pub mod ollama;
+pub mod output_schema_utils;
 pub mod registry;
 pub mod streaming_utils;
 pub mod vertex_ai_utils;

@@ -25,6 +25,7 @@
 
 pub mod already_exists;
 pub mod input_validation;
+pub mod missing_extra;
 pub mod not_found;
 pub mod session_not_found;
 pub mod tool_execution;

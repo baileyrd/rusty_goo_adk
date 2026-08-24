@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-errors::missing_extra::missing_extra` (C0935), ported from
+  `google.adk.utils._dependency` — builds the standard "install this
+  extra" message for a missing optional dependency.
+- `adk-platform::visual_builder_context::{is_visual_builder,
+  set_visual_builder}` (C0936), ported from
+  `google.adk.utils._telemetry_context`'s `_is_visual_builder` context
+  flag. `contextvars.ContextVar`'s async-task scoping becomes a
+  `thread_local!` (disclosed narrowing to thread-scoping, same as
+  `ClientLabelScope`, C0932).
+- `adk-models::output_schema_utils::can_use_output_schema_with_tools`
+  (C0938), ported from `google.adk.utils.output_schema_utils` — a
+  deprecated wrapper delegating to `gemini_output_schema_and_tools`.
+  `@deprecated` becomes Rust's own `#[deprecated]` attribute. Disclosed
+  narrowing: the source's `LiteLlm`-instance always-`True` special case
+  is dropped, since `LiteLlm` isn't ported in this workspace.
+- Manifest row C0937 (`_serialized_base_model.SerializedBaseModel`)
+  added and marked `DONE`, linked to the pre-existing repo-wide
+  `#[rusty_serde(rename_all = "camelCase")]` convention across 16
+  files — a structural capability that needed no new code, just its
+  own tracked row and evidence.
 - `adk-genai::json_utils::safe_json_loads` (C0931), ported from
   `google.adk.utils._json_utils` — generic over the target `Deserialize`
   type (the source returns a dynamically-typed `Any`), returning a
