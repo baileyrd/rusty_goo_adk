@@ -5,6 +5,24 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::set_model_response_tool::SetModelResponseTool` (Phase 8,
+  C0437, partial) — the output-schema workaround letting a model set
+  its final structured response via a tool call when `output_schema`
+  and other tools coexist. Sets the already-real
+  `EventActions.set_model_response` field `output_schema.rs`'s
+  `get_structured_model_response` (C0178) reads back. Fundamental
+  adaptation, disclosed at length in the module doc: no Python-style
+  runtime type introspection or Pydantic-equivalent JSON-schema
+  validator exists in this port, so `output_schema` is taken as an
+  already-opaque `Value` used directly as the declaration's
+  `parameters`, and `run_async` uses an `items`/`response`-single-key
+  convention to approximate the source's
+  `BaseModel`/`list[BaseModel]`/raw-schema branches. The
+  `ValidationError`-triggered retry-with-feedback path isn't ported —
+  a real, disclosed capability gap. Unblocks the tool-existence half
+  of C0171/C0178's own disclosed gaps (request-processor wiring stays
+  deferred on the separate "resolve a concrete `LlmAgent`" blocker
+  every Phase 4 processor shares). 5 new tests.
 - `adk-tools::transfer_to_agent_tool::{transfer_to_agent,
   TransferToAgentTool}` (Phase 8, C0436, DONE) — the bare function
   sets `EventActions.transfer_to_agent`; the class variant wraps a
