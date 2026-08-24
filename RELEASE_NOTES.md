@@ -22,6 +22,39 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `runners.py`: `Runner::rewind_async` (C0891, C0892, C0893, C0894)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports session rewind — a forward-only append of a reversing delta
+event, never a destructive truncation of session history.
+
+- **Added:** `adk_runners::Runner::rewind_async(user_id, session_id,
+  rewind_before_invocation_id)` — gets-or-creates the session (honoring
+  `auto_create_session`, C0894), linear-scans for the target
+  invocation's first event, computes reversing state/artifact deltas,
+  and appends a single new user-authored event carrying them.
+  `adk_events::rewind::apply_rewinds` (already DONE) is what
+  interprets `rewind_before_invocation_id` downstream.
+- **Added:** new `crates/adk-runners/src/rewind.rs` —
+  `compute_state_delta_for_rewind` (C0892) replays state deltas
+  strictly before the rewind point to reconstruct state at that point
+  (an explicit `Value::Null` in a historical delta is a tombstone),
+  then diffs against current state; `compute_artifact_delta_for_rewind`
+  (C0893) restores each changed artifact as a brand-new version
+  (rewind never rewrites history), marking artifacts that didn't exist
+  yet at the rewind point as inaccessible via the same
+  `rusty_serde::json::to_value`-of-a-`Part` representation
+  `save_files_as_artifacts_plugin.rs` already established.
+- **Disclosed:** no `run_config`/`GetSessionConfig` parameter —
+  `Runner::get_or_create_session` doesn't thread one, the same
+  already-disclosed C0873 narrowing.
+- **Corrected:** `runner.rs`'s module doc previously listed
+  `rewind_async` among the pieces still needing infrastructure — it's
+  built now.
+- **Scope:** no new dependency. 14 new tests.
+
+---
+
 ## PR #TBD — `apps/compaction.py`: summarizer init + safe-window logic (C0290, C0291, C0292)
 **2026-08-24** · (link added once this PR is opened)
 

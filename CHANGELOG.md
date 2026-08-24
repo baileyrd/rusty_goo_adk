@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-runners::Runner::rewind_async` (C0891/C0894 DONE) + new
+  `crates/adk-runners/src/rewind.rs`
+  (`compute_state_delta_for_rewind`/`compute_artifact_delta_for_rewind`,
+  C0892/C0893 DONE) — rewinds a session to before a given invocation by
+  appending a single reversing-delta event (never a destructive
+  truncation of `session.events`); `adk_events::rewind::apply_rewinds`
+  (already DONE) is what interprets it downstream. The state-delta
+  helper replays history to reconstruct state at the rewind point,
+  treating an explicit `Value::Null` in a historical delta as a
+  tombstone; the artifact-delta helper restores changed artifacts as
+  brand-new versions (never rewriting history), marking a
+  never-existed-at-rewind-point artifact inaccessible via the same
+  `rusty_serde::json::to_value`-of-a-`Part` representation
+  `save_files_as_artifacts_plugin.rs` already established. Narrowed:
+  no `run_config`/`GetSessionConfig` parameter, the same already-
+  disclosed C0873 narrowing. Corrects `runner.rs`'s module doc, which
+  previously listed `rewind_async` among the not-yet-built pieces.
+  14 new tests (10 pure-function tests in `rewind.rs`, 4 in
+  `runner.rs`'s own test module verifying the wiring). No new
+  dependency.
+### Added
 - `adk-flows::apps_compaction::{ensure_compaction_summarizer,
   events_to_compact_for_token_threshold, longest_self_contained_prefix,
   safe_token_compaction_split_index}` (C0290/C0291/C0292 DONE) — the

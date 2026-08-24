@@ -17,10 +17,11 @@
 //!   Phase 7) — confirmed absent from this port. Every node/task-mode
 //!   code path (`_run_node_async`/`_run_node_live`, task-scope resolution,
 //!   resumability) is out of scope until that engine exists.
-//! - Live mode (`run_live`), `rewind_async`, `run_debug` — each needs its
-//!   own supporting infrastructure (live request queue wiring into
-//!   `InvocationContext`, artifact-versioned rewind deltas, etc.) beyond
-//!   this batch's scope.
+//! - Live mode (`run_live`), `run_debug` — each needs its own supporting
+//!   infrastructure (live request queue wiring into `InvocationContext`,
+//!   etc.) beyond this batch's scope. `rewind_async` (C0891-C0894) is
+//!   now built too — see [`crate::rewind`]'s own module doc for its two
+//!   delta helpers.
 //!
 //! What's left, and what this batch builds, is the "legacy" (plain
 //! `BaseAgent`, single always-non-resumable turn) execution path
@@ -155,6 +156,8 @@ pub enum RunnerError {
     NewMessageContainsFunctionCall,
     #[error("agent run failed: {0}")]
     AgentRun(String),
+    #[error("Invocation ID not found: {0}")]
+    InvocationNotFound(String),
 }
 
 /// C0896: mirrors `_get_output_event`. If `modified` is `None`, the
@@ -638,6 +641,55 @@ impl Runner {
     pub async fn close(&self) {
         self.session_service.flush().await;
         self.plugin_manager.close().await;
+    }
+
+    /// C0891/C0894: rewinds the session to before the given invocation
+    /// — gets-or-creates the session (honoring `auto_create_session`,
+    /// C0894), linear-scans for the first event matching
+    /// `rewind_before_invocation_id`, computes reversing state/artifact
+    /// deltas ([`crate::rewind::compute_state_delta_for_rewind`]/
+    /// [`crate::rewind::compute_artifact_delta_for_rewind`]), and
+    /// appends a single new user-authored event carrying them. Rewind
+    /// is a forward-only append of a reversing delta event, never a
+    /// destructive truncation of `session.events` —
+    /// `adk_events::rewind::apply_rewinds` (already DONE) interprets
+    /// that delta downstream.
+    pub async fn rewind_async(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        rewind_before_invocation_id: &str,
+    ) -> Result<(), RunnerError> {
+        let mut session = self.get_or_create_session(user_id, session_id).await?;
+
+        let rewind_event_index = session
+            .events
+            .iter()
+            .position(|event| event.invocation_id == rewind_before_invocation_id)
+            .ok_or_else(|| {
+                RunnerError::InvocationNotFound(rewind_before_invocation_id.to_string())
+            })?;
+
+        let state_delta =
+            crate::rewind::compute_state_delta_for_rewind(&session, rewind_event_index);
+        let artifact_delta = crate::rewind::compute_artifact_delta_for_rewind(
+            self.artifact_service.as_deref(),
+            &self.app_name,
+            &session,
+            rewind_event_index,
+        );
+
+        let mut rewind_event = Event::new(new_invocation_context_id(), "user", NodeInfo::new(""));
+        rewind_event.actions.rewind_before_invocation_id =
+            Some(rewind_before_invocation_id.to_string());
+        rewind_event.actions.state_delta = state_delta;
+        rewind_event.actions.artifact_delta = artifact_delta;
+
+        self.session_service
+            .append_event(&mut session, rewind_event)
+            .await;
+
+        Ok(())
     }
 }
 
@@ -1355,5 +1407,91 @@ mod tests {
         assert!(artifact_service
             .list_artifact_keys("app", "user", "s1")
             .is_empty());
+    }
+
+    #[rusty_tokio::test]
+    async fn rewind_async_appends_a_reversing_delta_event() {
+        let runner = runner(true);
+        runner
+            .run_async("user", "s1", Content::user_text("first"))
+            .await
+            .unwrap();
+        let target_invocation_id = runner
+            .session_service
+            .get_session("app", "user", "s1")
+            .await
+            .unwrap()
+            .events[0]
+            .invocation_id
+            .clone();
+        runner
+            .run_async("user", "s1", Content::user_text("second"))
+            .await
+            .unwrap();
+
+        runner
+            .rewind_async("user", "s1", &target_invocation_id)
+            .await
+            .unwrap();
+
+        let session = runner
+            .session_service
+            .get_session("app", "user", "s1")
+            .await
+            .unwrap();
+        let rewind_event = session.events.last().unwrap();
+        assert_eq!(rewind_event.author, "user");
+        assert_eq!(
+            rewind_event.actions.rewind_before_invocation_id.as_deref(),
+            Some(target_invocation_id.as_str())
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn rewind_async_errors_when_the_invocation_id_is_not_found() {
+        let runner = runner(true);
+        runner
+            .run_async("user", "s1", Content::user_text("hi"))
+            .await
+            .unwrap();
+
+        match runner
+            .rewind_async("user", "s1", "no-such-invocation")
+            .await
+        {
+            Err(RunnerError::InvocationNotFound(id)) => assert_eq!(id, "no-such-invocation"),
+            other => panic!("expected InvocationNotFound, got {}", other.is_ok()),
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn rewind_async_auto_creates_a_missing_session_then_still_reports_invocation_not_found() {
+        // C0894: proves auto-creation happened (no SessionNotFound) without
+        // masking the real error (an empty, freshly-created session has no
+        // invocation to match).
+        let runner = runner(true);
+
+        match runner
+            .rewind_async("user", "s1", "no-such-invocation")
+            .await
+        {
+            Err(RunnerError::InvocationNotFound(id)) => assert_eq!(id, "no-such-invocation"),
+            other => panic!("expected InvocationNotFound, got {}", other.is_ok()),
+        }
+        assert!(runner
+            .session_service
+            .get_session("app", "user", "s1")
+            .await
+            .is_some());
+    }
+
+    #[rusty_tokio::test]
+    async fn rewind_async_reports_a_missing_session_when_auto_create_is_off() {
+        let runner = runner(false);
+        let err = runner
+            .rewind_async("user", "s1", "some-invocation")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RunnerError::SessionNotFound(_)));
     }
 }
