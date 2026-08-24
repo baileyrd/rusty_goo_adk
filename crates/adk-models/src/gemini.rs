@@ -1839,4 +1839,49 @@ mod tests {
         }
         assert!(responses.last().unwrap().cache_metadata.is_some());
     }
+
+    // --- generate_content_async (BaseLlm trait method, C0102) ---
+    //
+    // `base_llm_generate_content_async_flattens_gemini_call_errors` and
+    // `base_llm_generate_content_async_streams_through_to_generate_content_stream`
+    // above already exercise this trait method directly (error-flattening
+    // for `stream=false`, and the `stream=true` partials-then-final-aggregate
+    // shape). The one gap: a `stream=false` *success* case, asserting the
+    // "exactly one response, not partial" half of the dual-mode contract.
+
+    #[rusty_tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_content_async_non_streaming_yields_exactly_one_non_partial_response() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+
+        let (base_url, server) = spawn_one_shot_server(
+            "HTTP/1.1 200 OK",
+            r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP"}]}"#,
+        );
+        let gemini = Gemini::new("gemini-2.5-flash").with_base_url(base_url);
+        let request = LlmRequest::new("gemini-2.5-flash");
+
+        let responses = BaseLlm::generate_content_async(&gemini, &request, false)
+            .await
+            .unwrap();
+        clear_auth_env_vars();
+        server.join().unwrap();
+
+        assert_eq!(responses.len(), 1);
+        // Not explicitly `Some(false)` — this port's `LlmResponse::create`
+        // leaves `partial` as whatever the wire response carried, which
+        // for a plain non-streaming response is unset; `None` reads as
+        // "not partial" throughout this port (e.g. `apply_no_content_error`'s
+        // own `!partial.unwrap_or(false)` check), the same
+        // `Optional[bool]`-falsy-on-`None` contract the source itself uses.
+        assert_eq!(responses[0].partial, None);
+        assert_eq!(
+            responses[0].content.as_ref().unwrap().parts[0]
+                .text
+                .as_deref(),
+            Some("hi")
+        );
+    }
 }

@@ -22,6 +22,39 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `base_llm_flow.py`/`base_llm.py`: postprocess no-content guards + streaming-contract evidence (C0156, C0102)
+**2026-08-24** · (link added once this PR is opened)
+
+Two small, unrelated gaps found while scoping the next batch, landed
+together since both are quick.
+
+- **Added:** `adk_flows::llm_flow::apply_no_content_error` — converts a
+  non-partial, non-streaming response that finished with STOP but
+  carries no content into a `MODEL_RETURNED_NO_CONTENT` error (an
+  otherwise-silent empty final response made actionable instead).
+  Excluded for SSE streaming, where a terminal finish-only chunk
+  legitimately follows content already streamed in earlier chunks. An
+  existing `error_message` is preserved over the default.
+- **Added:** `adk_flows::llm_flow::should_skip_empty_response` — skips
+  the model-response event entirely when a response carries no
+  content, no error code, no interruption, and no grounding metadata.
+  Both guards run in `postprocess`, in the source's own sequential
+  order: a response the no-content-error check rewrites into an error
+  is never skipped by the empty-response check afterward.
+- **Confirmed, not new work:** `Gemini::generate_content_async` (the
+  `BaseLlm` trait method, C0102's dual-mode streaming contract) was
+  already correctly implemented, and — checking the existing test
+  suite more carefully than the last scoping pass did — already
+  partly tested directly via the trait method (error-flattening for
+  `stream=false`, and the `stream=true` partials-then-final-aggregate
+  shape). The one real gap: a `stream=false` *success* case asserting
+  "exactly one response, not partial." Added that one test and closed
+  the manifest row's evidence.
+- **Scope:** 15 new tests total (14 for the `postprocess` guards, 1 for
+  `generate_content_async`).
+
+---
+
 ## PR #TBD — `functions.py`: multimodal tool-result extraction (C0195)
 **2026-08-24** · (link added once this PR is opened)
 
