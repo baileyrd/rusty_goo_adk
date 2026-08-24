@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/skill_toolset.py`: `RunSkillScriptTool`'s `code_executor` path, closing C0410
+**2026-08-24** · (link added once this PR is opened)
+
+Ports `_SkillScriptCodeExecutor` in full, closing out C0410 (previously
+partial — the `environment`-configured path only).
+
+- **Added:** `adk_tools::skill_toolset::SkillScriptCodeExecutor` — the
+  self-extracting Python wrapper generator (`.py` via `runpy.run_path`,
+  `.sh`/`.bash` via `subprocess.run` + JSON envelope), executed against
+  `BaseCodeExecutor::execute_code` via `rusty_tokio::spawn_blocking`.
+- **Added:** `python_str_literal`/`python_bytes_literal`/
+  `python_list_literal`/`python_dict_literal` — a Python `repr()`-
+  equivalent, cross-verified round-trip-correct against a real `python3`
+  interpreter.
+- **Added:** the `code_executor`/`environment` mutual-exclusivity check
+  the constructor was missing.
+- **Verified end-to-end** against real `python3`/`bash` interpreters: a
+  `.py` script reading `sys.argv` built from tool-call `args`, and a
+  `.sh` script whose JSON-enveloped stdout/stderr/returncode round-trip
+  correctly.
+- **Disclosed narrowing:** the Python-literal helpers are round-trip-
+  correct but not byte-identical to CPython's `repr()` (adaptive quote
+  selection); the source's `except SystemExit as e:` branch is dead code
+  for this port's only concrete `BaseCodeExecutor`
+  (`UnsafeLocalCodeExecutor`, always subprocess-based, with no exit-code
+  field on `CodeExecutionResult` to inspect).
+- **Scope:** no new dependency. 11 new tests.
+
+---
+
 ## PR #TBD — `tools/skill_toolset.py`: `SkillToolset.additional_tools` (C0950)
 **2026-08-24** · (link added once this PR is opened)
 

@@ -60,6 +60,22 @@
 //! only models the two Rust-expressible branches (`Tool`/`Toolset`). No
 //! new dependency.
 //!
+//! **`RunSkillScriptTool` code_executor batch**: closes out **C0410** in
+//! full — `skill_toolset::SkillScriptCodeExecutor` (the
+//! `_SkillScriptCodeExecutor` port: self-extracting Python wrapper
+//! generation for `.py`/`.sh`/`.bash` skill scripts, executed against
+//! `BaseCodeExecutor::execute_code` via `rusty_tokio::spawn_blocking`)
+//! plus `python_str_literal`/`python_bytes_literal`/`python_list_literal`/
+//! `python_dict_literal` (a `repr()`-equivalent, cross-verified round-
+//! trip-correct against a real `python3` interpreter in this module's
+//! own tests) and the `code_executor`/`environment` mutual-exclusivity
+//! check the constructor was missing. Also verified end-to-end against
+//! real `python3`/`bash` interpreters. Disclosed narrowing: the source's
+//! `except SystemExit as e:` branch is dead code for this port's only
+//! concrete `BaseCodeExecutor` (`UnsafeLocalCodeExecutor`, always
+//! subprocess-based) — see `skill_toolset`'s own module doc. No new
+//! dependency.
+//!
 //! **Environment batch**: [`base_environment`] (`BaseEnvironment`/
 //! `ExecutionResult`, C0948 — a genuine inventory gap discovered this
 //! batch, `environment/` having no manifest row at all despite four
