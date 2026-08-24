@@ -5,6 +5,17 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-runners::Runner::in_memory` (C0926 DONE) — `InMemoryRunner`,
+  narrowed from a `Runner` subclass to a constructor: pre-wires
+  `InMemorySessionService`/`InMemoryArtifactService`/`InMemoryMemoryService`
+  for testing and development, defaulting `app_name` to the literal
+  `"InMemoryRunner"`. `plugins`/`plugin_close_timeout` aren't forwarded
+  as separate parameters — already reachable through `Runner`'s existing
+  `.with_plugin`/`.with_plugin_close_timeout` builders. Also corrects a
+  stale module doc claiming `InMemoryArtifactService`/`InMemoryMemoryService`
+  were "neither built yet" — both have been for several batches. 2 new
+  tests. No new dependency.
+### Added
 - `adk-models::base_llm::{AsAny}` (new) — the same downcast mechanism
   `AgentBehavior::as_any` established in `adk-agents` (PR #104), now on
   `BaseLlm` too: lets `adk-flows::llm_flow::LlmFlow` detect whether its
