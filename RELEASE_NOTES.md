@@ -22,6 +22,63 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Phase 4 batch 14: `LlmFlow` — a real, working `AgentBehavior` for `LlmAgent`
+**2026-08-24** · (link added once this PR is opened)
+
+- **Added:** `adk_flows::llm_flow::LlmFlow` — the first concrete
+  `AgentBehavior` this port builds for an `LlmAgent`. Wired as a
+  `BaseAgent`'s behavior, it drives a real (if narrowed) non-live turn
+  end-to-end through `BaseAgent::run_async`:
+  - `preprocess` (C0150, partial): assembles the `LlmRequest` by running
+    `basic` → `identity` → `instructions` → contents (full history via
+    `get_contents`, or current-turn-only via `get_current_turn_contents`
+    per `LlmAgent.include_contents`) → `context_cache`, in the source's
+    own load-bearing order.
+  - `call_model` (C0153, partial): calls the resolved `BaseLlm`. `LlmFlow`
+    resolves its model once, at construction (`LlmFlow::new`), rather
+    than re-resolving through `canonical_model` on every call — a real
+    (if narrow) instance of the memoization cache `canonical_model.rs`'s
+    own module doc disclosed as missing. `LlmFlow::with_model` injects
+    any `Arc<dyn BaseLlm>` (a test double included) without touching the
+    process-wide model registry.
+  - `postprocess` (C0156, partial) + `finalize_model_response_event`
+    (**C0157, now fully DONE**): converts each `LlmResponse` into a
+    finalized `Event` — every field with a real `Event` counterpart is
+    shallow-copied only when non-`None`, matching the source exactly.
+    Adaptation: `finish_reason` narrows `LlmResponse`'s opaque `Value` to
+    `Event`'s `String` via `Value::as_str`; `cache_metadata` widens
+    `LlmResponse`'s real `CacheMetadata` back to `Event`'s opaque `Value`
+    via `to_value`, since `Event` holding the concrete type directly
+    would need an `adk-events`→`adk-models` crate-graph cycle (the same
+    constraint `event_compaction.rs`/`context_cache.rs` already disclose).
+- **Verified end-to-end**, not just unit-tested in isolation: a test
+  builds a real `BaseAgent` wired with `LlmFlow`, calls
+  `BaseAgent::run_async` against a fake `BaseLlm`, and asserts on the
+  resulting event — no stubs on the `AgentBehavior` seam itself.
+- **Scope, disclosed:** no multi-step tool-call loop (C0148, C0149,
+  C0151, C0152, C0158, C0159 — without `BaseTool`, Phase 8, a model is
+  never handed any tools, so it has nothing to call and the source's
+  "call model, run tools, call model again" loop has nothing to loop
+  on yet); no `interactions_processor` wiring or
+  `preserve_function_call_ids` policy (both need to detect whether the
+  resolved model is a Gemini-with-Interactions-API/Anthropic/LiteLLM
+  backend — undetectable through the type-erased `Arc<dyn BaseLlm>` this
+  port resolves to, no downcasting mechanism); no telemetry spans or
+  before/after/on-error model callback dispatch (C0154, C0155 —
+  `LlmAgent.before_model_callback`/`after_model_callback` exist as real
+  fields, but dispatching them needs a `Context`-based short-circuit
+  path like `BaseAgent`'s existing agent-level callbacks); no live mode
+  (C0161-C0167 — `run_live_impl` returns a clear
+  `LlmFlowError::LiveNotImplemented` rather than pretending).
+- Also needed a small error-system bridge: `rusty_err::Error` (this
+  port's own sovereign error trait) and `std::error::Error` are
+  deliberately separate traits, and `BaseAgent`'s `AgentRunError` is a
+  `Box<dyn std::error::Error + Send + Sync>` — a tiny `BoxedLlmFlowError`
+  wrapper (carrying just the rendered message) bridges an `LlmFlowError`
+  across that boundary, mirroring the shape `BaseAgent`'s own tests
+  already use for a boxed error.
+- 6 new tests. Full workspace gate green (165 passing in `adk-flows`).
+
 ## PR #TBD — Phase 4 batch 13: `functions.py` merge + client-id helpers
 **2026-08-23** · (link added once this PR is opened)
 
