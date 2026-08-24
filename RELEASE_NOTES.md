@@ -22,6 +22,52 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `features/`: feature-gating decorators as guard functions (C0647 partial, C0797 partial)
+**2026-08-24** · (link added once this PR is opened)
+
+Two feature-gating mechanisms in the source, both keyed off decorators
+Rust has no runtime equivalent for. Ported as plain guard functions —
+called manually at the top of a guarded function/constructor body
+instead of wrapping it automatically.
+
+- **Added:** `feature_decorator::check_feature_enabled` (C0647
+  partial) — the shared runtime check every one of the source's
+  `working_in_progress`/`experimental`/`stable` decorators performs
+  (raise unless the feature is enabled at call time). This port's
+  `feature_config` (from a prior batch, C0643-C0646) is already a
+  fixed, exhaustive `match` — every `FeatureName` carries exactly one
+  hardcoded stage, so there's no way for a caller to independently
+  assert a *different* stage the way choosing the wrong Python
+  decorator could. That makes the source's three-way split, and its
+  decoration-time stage-mismatch check, structurally moot here rather
+  than narrowed — collapsed into one guard function.
+- **Added:** `legacy_feature_decorator::{check_wip_or_bypass,
+  warn_experimental}` (C0797 partial) — `utils/feature_decorator.py`'s
+  own `working_in_progress`/`experimental`. **Verified, not assumed**:
+  reading both source files side by side confirms this is a genuine,
+  independent duplicate of `features/_feature_decorator.py` — no
+  `FeatureName`/registry involvement at all, just a message, a label,
+  and an environment-variable escape hatch (`ADK_ALLOW_WIP_FEATURES`/
+  `ADK_SUPPRESS_EXPERIMENTAL_FEATURE_WARNINGS`), checked at call time.
+  Ported exactly, including the env-var truthy set and default
+  messages verbatim; the source's message includes the decorated
+  object's `__name__` via runtime reflection this port has no
+  equivalent for, so `item_name` is an explicit caller-supplied
+  argument instead.
+- **Not done this batch:** wiring either guard into the source's actual
+  decorated call sites across the codebase — each is its own
+  not-yet-ported piece of production code, a separate, larger
+  undertaking. Both rows stay `REQUIRED` (marked `Partial`).
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-features +7 new tests; zero regressions elsewhere)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `evaluation/`: audio resampling + metric-catalog providers (C0604, C0625) — pure-computation leftovers
 **2026-08-24** · (link added once this PR is opened)
 
