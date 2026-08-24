@@ -36,11 +36,31 @@ pub enum BaseLlmError {
     CallFailed(String),
 }
 
+/// Blanket-implemented supertrait giving every `'static` type a
+/// trait-object-safe `as_any` — the same mechanism
+/// `adk-agents::base_agent::AgentBehavior`/`AsAny` already established
+/// (PR #104) for downcasting a type-erased `Box<dyn AgentBehavior>` back
+/// onto a concrete behavior. Here it lets `adk-flows::llm_flow::LlmFlow`
+/// detect whether its resolved `Arc<dyn BaseLlm>` is actually a `Gemini`
+/// (needed to gate `interactions_processor` on `Gemini::use_interactions_api`,
+/// C0174) without `adk-models` needing to know about `adk-flows` or vice
+/// versa. Purely additive: every existing `BaseLlm` implementor needs no
+/// changes, since `AsAny` is blanket-implemented for every `'static` type.
+pub trait AsAny: std::any::Any {
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T: std::any::Any> AsAny for T {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// The base trait for an LLM. `model`/`type_name` back
 /// [`BaseLlm::capabilities`]'s default (deprecated) name-based fallback —
 /// see the module doc for why `generate_content_async`'s real streaming
 /// behavior isn't exercised yet.
-pub trait BaseLlm: Send + Sync {
+pub trait BaseLlm: AsAny + Send + Sync {
     fn model(&self) -> &str;
 
     /// The Rust type name backing this model — the source's
@@ -171,6 +191,18 @@ mod tests {
     #[test]
     fn supported_models_defaults_to_empty() {
         assert!(StubLlm::supported_models().is_empty());
+    }
+
+    #[test]
+    fn as_any_downcasts_through_the_arc_trait_object_to_the_concrete_backend() {
+        // Same regression this migration already fixed once for
+        // `AgentBehavior::as_any` (adk-agents::base_agent, PR #104):
+        // `Arc<dyn BaseLlm>` is itself `Sized + 'static`, so a naive
+        // `AsAny` blanket impl also (over-broadly) matches the `Arc`
+        // itself unless callers deref to `&dyn BaseLlm` first via
+        // `.as_ref()`.
+        let llm: std::sync::Arc<dyn BaseLlm> = std::sync::Arc::new(stub("stub-model"));
+        assert!(llm.as_ref().as_any().downcast_ref::<StubLlm>().is_some());
     }
 
     #[test]

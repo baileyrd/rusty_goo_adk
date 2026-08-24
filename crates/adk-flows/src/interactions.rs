@@ -10,10 +10,11 @@
 //! ([`is_event_in_branch`], [`find_previous_interaction_state`]), not yet
 //! a real `BaseLlmRequestProcessor` reading through `InvocationContext` —
 //! same scope note as every other Phase 4 processor in this crate. The
-//! processor's own gating (`agent.canonical_model` is a Gemini with
-//! `use_interactions_api`) is exactly `crate::canonical_model`'s
-//! `canonical_model` plus `adk_models::gemini::Gemini::use_interactions_api`,
-//! both already built — a caller wires the two together.
+//! processor's own gating (the resolved model is a Gemini with
+//! `use_interactions_api`) is now wired: `crate::llm_flow::LlmFlow::preprocess`
+//! calls [`find_previous_interaction_state`] directly, gated by
+//! downcasting its already-resolved `self.model` onto `Gemini` via the
+//! `AsAny` mechanism `adk-models::base_llm` provides.
 
 use adk_events::Event;
 

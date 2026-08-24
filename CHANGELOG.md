@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-models::base_llm::{AsAny}` (new) — the same downcast mechanism
+  `AgentBehavior::as_any` established in `adk-agents` (PR #104), now on
+  `BaseLlm` too: lets `adk-flows::llm_flow::LlmFlow` detect whether its
+  resolved `Arc<dyn BaseLlm>` is a `Gemini` without `adk-models` needing
+  to know about `adk-flows`. Purely additive. A same-crate regression
+  test guards the same `.as_ref()`-before-downcast trap PR #104 already
+  caught once for `Box<dyn AgentBehavior>`.
+- `adk-flows::llm_flow::LlmFlow::preprocess` now wires
+  `interactions_processor` (C0174 DONE): gates on the downcast above
+  plus `Gemini::use_interactions_api`, calling
+  `interactions::find_previous_interaction_state` to set
+  `LlmRequest::previous_interaction_id` when set. Corrects 2 stale
+  module docs (`llm_flow.rs`, `interactions.rs`) that described this as
+  blocked on "no downcasting mechanism." 4 new tests (3 in `adk-flows`,
+  1 `AsAny` regression test in `adk-models`). No new dependency.
+### Added
 - `adk-tools::vertex_ai_search_tool::{VertexAiSearchTool, VertexAiSearchConfig}`
   (C0433 DONE) — a built-in Gemini retrieval tool bound to a Vertex AI
   Search data-store/search-engine (mutually exclusive, constructor
