@@ -5,6 +5,16 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-features::feature_decorator::check_feature_enabled` (C0647
+  partial) and `adk-features::legacy_feature_decorator::{check_wip_or_bypass,
+  warn_experimental}` (C0797 partial) — the `experimental`/
+  `working_in_progress`/`stable` decorator mechanisms, ported as plain
+  guard functions (Rust has no runtime decorators). Confirmed, not
+  assumed, that `utils/feature_decorator.py` is a genuine second,
+  independent feature-gating system (no registry involvement at all)
+  rather than the same mechanism reached two ways. Wiring either guard
+  into the source's actual decorated call sites across the codebase is
+  its own larger undertaking, not done this batch. 7 new tests.
 - `adk-eval::audio_utils` (C0625) — `resample_pcm16`/`to_live_input`/
   `parse_sample_rate`, a linear-interpolation PCM16 resampler (24kHz
   TTS → 16kHz Live API) and hand-rolled `rate=` mime-type parameter
