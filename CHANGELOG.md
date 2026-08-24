@@ -5,6 +5,17 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::{load_memory_tool, preload_memory_tool, memory_entry_utils}`
+  (Phase 8, C0423/C0424, DONE) — `LoadMemoryTool`/`load_memory` (wraps
+  the already-real `Context::search_memory` in a `FunctionTool`,
+  appends the "you have memory" instruction) and `PreloadMemoryTool`
+  (automatically searches memory each turn and injects matches as
+  transient user content, with the `Time: .../author: text`
+  rendering). Promotes `adk_agents::services::{MemoryEntry,
+  SearchMemoryResponse}` from opaque `Value` placeholders to real
+  structs matching the source's pydantic models — `BaseMemoryService`
+  itself stays an unbuilt Phase 6 trait; nothing produces real values
+  yet, only consumes the shape. 11 new tests.
 - New `adk-examples` crate (Phase 17, C0829/C0831/C0832, DONE) —
   `Example`/`BaseExampleProvider` (the few-shot-example extension
   point) and `example_util::{convert_examples_to_text,

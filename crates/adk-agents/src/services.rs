@@ -1,8 +1,15 @@
 //! Placeholder service traits for capabilities C0061-C0064, forward-referencing
 //! phases not yet built: `BaseArtifactService`/`ArtifactVersion` (Phase 6),
-//! `BaseSessionService` (Phase 5), `BaseMemoryService`/`SearchMemoryResponse`/
-//! `MemoryEntry` (Phase 6), `BaseCredentialService`/`AuthCredential`/
-//! `AuthConfig` (Phase 9).
+//! `BaseSessionService` (Phase 5), `BaseMemoryService` (Phase 6),
+//! `BaseCredentialService`/`AuthCredential`/`AuthConfig` (Phase 9).
+//!
+//! **`SearchMemoryResponse`/`MemoryEntry` are the one exception**, pulled
+//! forward the same way `SessionService` is (see below): they're real
+//! structs, not opaque placeholders, because `adk-tools`'s
+//! `LoadMemoryTool`/`PreloadMemoryTool` (C0423/C0424) need their actual
+//! field shape. `BaseMemoryService` itself — the trait that would
+//! *produce* real values of these types — is still an unimplemented
+//! placeholder trait below; only its return-type shapes are real.
 //!
 //! **Disclosed adaptation**: the source's service methods are `async def`.
 //! Since no concrete backend exists yet (nothing here performs real I/O),
@@ -49,6 +56,7 @@ use adk_events::Event;
 use adk_genai::content::Content;
 use adk_platform::uuid::new_uuid;
 use rusty_serde::value::Value;
+use rusty_serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -66,10 +74,37 @@ pub type AuthCredential = Value;
 pub type AuthConfig = Value;
 /// Placeholder for `artifacts.base_artifact_service.ArtifactVersion` (Phase 6).
 pub type ArtifactVersion = Value;
-/// Placeholder for `memory.base_memory_service.SearchMemoryResponse` (Phase 6).
-pub type SearchMemoryResponse = Value;
-/// Placeholder for `memory.memory_entry.MemoryEntry` (Phase 6).
-pub type MemoryEntry = Value;
+/// `memory.memory_entry.MemoryEntry` — one memory entry. Promoted from an
+/// opaque `Value` placeholder to a real struct (Phase 8,
+/// `LoadMemoryTool`/`PreloadMemoryTool`, C0423/C0424) now that a concrete
+/// consumer needs its fields — the same "widen a placeholder to a real
+/// type once a real consumer needs its structure" precedent already used
+/// for `EventCompaction.compacted_content` (Phase 4, C0185). The backing
+/// `BaseMemoryService` implementation itself is still Phase 6 — nothing
+/// here *produces* real `MemoryEntry` values yet, only consumes the
+/// shape.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MemoryEntry {
+    /// The main content of the memory.
+    pub content: Content,
+    #[rusty_serde(default)]
+    pub custom_metadata: BTreeMap<String, Value>,
+    #[rusty_serde(default)]
+    pub id: Option<String>,
+    #[rusty_serde(default)]
+    pub author: Option<String>,
+    /// ISO 8601-preferred timestamp string, forwarded to the LLM as-is.
+    #[rusty_serde(default)]
+    pub timestamp: Option<String>,
+}
+
+/// `memory.base_memory_service.SearchMemoryResponse`. See [`MemoryEntry`]
+/// for the same promoted-from-placeholder disclosure.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SearchMemoryResponse {
+    #[rusty_serde(default)]
+    pub memories: Vec<MemoryEntry>,
+}
 
 const TEMP_STATE_PREFIX: &str = "temp:";
 
