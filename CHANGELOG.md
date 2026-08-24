@@ -5,6 +5,29 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `adk-eval` crate: the pure-computation core of `google.adk.evaluation`
+  (Phase 11's first landing) — `eval_case::Invocation`/`IntermediateData`/
+  `InvocationEvents` + accessor helpers (C0605), `evaluator::Evaluator`
+  trait/`PerInvocationResult`/`EvaluationResult` (C0600, partial),
+  `eval_metrics::EvalMetric`/`EvalMetricResult`/
+  `EvalMetricResultPerInvocation`/`BaseCriterion`/`ToolTrajectoryCriterion`
+  (C0608, C0612 partial), and `trajectory_evaluator::TrajectoryEvaluator`
+  (C0588, DONE in full) — the `tool_trajectory_avg_score` metric,
+  comparing actual vs expected tool-call trajectories under EXACT/
+  IN_ORDER/ANY_ORDER match algorithms. 31 new tests. Depends only on
+  `adk-genai` + `rusty_serde` (bottom of the crate graph). Disclosed
+  narrowings: `EvalMetric`'s private `config_custom_function_path` is a
+  compile-time strengthening (no `Deserialize` support at all, not
+  `PrivateAttr`'s runtime guard) of the source's inbound-payload-spoofing
+  protection; `EvalStatus` serializes as its variant name rather than the
+  source's underlying bare-integer Pydantic-v2 enum value (no
+  cross-language consumer yet); `Invocation.rubrics`/`.app_details`/
+  `EvalMetric.criterion`/`Evaluator::evaluate_invocations`'s
+  `conversation_scenario` stay opaque `Value` placeholders (their real
+  types are C0606/C0607/C0610, each independently still `REQUIRED`, and
+  `TrajectoryEvaluator` never reads their structure). `LlmAsJudge` (the
+  generic LLM-judge-sampling harness) and all LLM-judge criterion types
+  are out of scope for this batch — no LLM-invocation path built on yet.
 - `adk-tools::unsafe_local_code_executor::UnsafeLocalCodeExecutor`
   (C0385), ported from `google.adk.code_executors.unsafe_local_code_executor`
   — bare, zero-sandboxed subprocess code execution (same host/creds/

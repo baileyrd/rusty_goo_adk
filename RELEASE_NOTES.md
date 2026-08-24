@@ -22,6 +22,79 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — Start `evaluation/` pure-scoring core: `TrajectoryEvaluator` + `Invocation`/`EvalMetric` (C0588, C0600 partial, C0605, C0608, C0612 partial)
+**2026-08-24** · (link added once this PR is opened)
+
+New `adk-eval` crate — the first landing in `google.adk.evaluation`
+(Phase 11), scoped to the pure-computation core needed to run
+`TrajectoryEvaluator` end-to-end with no LLM calls and no cloud
+dependency: `eval_case::Invocation` and its nested types (C0605),
+`evaluator::Evaluator` trait (C0600, partial), `eval_metrics::EvalMetric`/
+`EvalMetricResult`/`BaseCriterion`/`ToolTrajectoryCriterion` (C0608,
+C0612 partial), and `trajectory_evaluator::TrajectoryEvaluator` (C0588,
+DONE in full — the `tool_trajectory_avg_score` metric). Depends only on
+`adk-genai` + `rusty_serde`, at the bottom of the crate graph.
+
+- **Added:** `adk-eval::eval_case::{Invocation, IntermediateData,
+  InvocationEvent, InvocationEvents, IntermediateDataType}` plus
+  `get_all_tool_calls`/`get_all_tool_responses`/
+  `get_all_tool_calls_with_responses`. The source's
+  `Union[IntermediateData, InvocationEvents]` (no shared wire tag)
+  resolves via `Invocation::intermediate_data_type()`, which attempts a
+  JSON-round-trip parse into each shape in turn — centralized into one
+  method rather than repeated at every call site the way the source's
+  `isinstance` checks are.
+- **Added:** `adk-eval::evaluator::{Evaluator, PerInvocationResult,
+  EvaluationResult}` and `validate_invocation_lengths`. The `Evaluator`
+  trait is sync, not `async` — its one implementor this batch does no I/O.
+- **Added:** `adk-eval::eval_metrics::{EvalMetric, EvalMetricResult,
+  EvalMetricResultDetails, EvalMetricResultPerInvocation, EvalStatus,
+  BaseCriterion, MatchType, ToolTrajectoryCriterion}` and
+  `get_metric_threshold`.
+- **Added:** `adk-eval::trajectory_evaluator::TrajectoryEvaluator` — the
+  exact 3-branch constructor validation logic (threshold XOR
+  eval_metric-with-criterion), and all three match algorithms
+  (`are_tool_calls_exact_match`/`are_tool_calls_in_order_match`/
+  `are_tool_calls_any_order_match`) against the source's own documented
+  edge cases, built on a `calls_match` helper that deliberately compares
+  only `name`+`args` (unlike derived `PartialEq`, which also compares
+  `id`/`will_continue`).
+- **Disclosed, compile-time-strengthening adaptation:** `EvalMetric`'s
+  source `_config_custom_function_path` `PrivateAttr` (guards against an
+  inbound-payload spoofing that field) ports as a private struct field
+  with `#[rusty_serde(skip)]` — it structurally cannot be populated by
+  this port's derived `Deserialize` at all, a stronger guarantee than the
+  source's runtime-enforced `PrivateAttr`.
+- **Disclosed, cosmetic adaptation:** `EvalStatus` serializes as its
+  variant name (`"Passed"`/`"Failed"`/`"NotEvaluated"`) rather than the
+  source's underlying bare-integer Pydantic-v2 enum value, since no
+  cross-language consumer of this brand-new capability area exists yet.
+- **Disclosed narrowing:** `Invocation.rubrics`/`.app_details`,
+  `EvalMetric.criterion`, and `Evaluator::evaluate_invocations`'s
+  `conversation_scenario` parameter stay opaque `Value` placeholders —
+  their real types (`eval_rubrics.Rubric`/`RubricScore`,
+  `app_details.AppDetails`, `eval_case.ConversationScenario`) are each
+  their own still-`REQUIRED` manifest row (C0606/C0607/C0610), and
+  `TrajectoryEvaluator` never reads any of the three — the source itself
+  explicitly `del`s `conversation_scenario`, "not supported for
+  per-invocation evaluation."
+- **Not in scope this batch:** `LlmAsJudge[CriterionT]` (the generic
+  LLM-judge-sampling harness, needs a real LLM-invocation path) and its
+  criterion types (`LlmAsAJudgeCriterion`/`RubricsBasedCriterion`/
+  `HallucinationsCriterion`/`LlmBackedUserSimulatorCriterion`/
+  `JudgeModelOptions`), plus the metric-catalog metadata types
+  (`Interval`/`MetricValueInfo`/`MetricInfo`/`MetricInfoProvider`) — all
+  left `REQUIRED` (C0600/C0612 marked `Partial` in the manifest).
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-eval +31 new tests, all passing; zero regressions elsewhere)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `UnsafeLocalCodeExecutor` (C0385) — completes `code_executors/`'s non-cloud scope
 **2026-08-24** · (link added once this PR is opened)
 
