@@ -10,6 +10,7 @@ adk-agents = { path = "../adk-agents" }
 adk-events = { path = "../adk-events" }
 adk-genai = { path = "../adk-genai" }
 adk-models = { path = "../adk-models" }
+adk-runners = { path = "../adk-runners" }
 adk-tools = { path = "../adk-tools" }
 rusty_serde = { workspace = true }
 rusty_err = { workspace = true }
