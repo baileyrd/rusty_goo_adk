@@ -27,7 +27,10 @@ dependencies = [
 name = "adk-eval"
 version = "0.1.0"
 dependencies = [
+ "adk-errors",
  "adk-genai",
+ "adk-platform",
+ "rusty_err",
  "rusty_serde",
  "unicode-general-category",
 ]
