@@ -89,6 +89,7 @@ dependencies = [
 name = "adk-platform"
 version = "0.1.0"
 dependencies = [
+ "rusty_serde",
  "rusty_uuid",
 ]
 
