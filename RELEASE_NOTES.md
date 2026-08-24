@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/environment/`: the environment-toolset stack, plus a discovered `environment/` inventory gap (C0948, C0949, C0440-C0444)
+**2026-08-24** · (link added once this PR is opened)
+
+Closes an inventory gap a background scoping agent found (`environment/`
+had no manifest row despite 4 existing rows already depending on it),
+then builds the `EnvironmentToolset` stack on top of it in the same PR.
+
+- **Added:** `adk_tools::base_environment::{BaseEnvironment,
+  ExecutionResult, EnvironmentError}` (C0948 DONE, new gap-fill row) —
+  the abstract code-execution-environment contract.
+- **Added:** `adk_tools::local_environment::LocalEnvironment` (C0949
+  DONE) — subprocess-shell execution with timeout, blocking file I/O
+  offloaded to `rusty_tokio::spawn_blocking`, lexical path-escape
+  rejection, auto-created-vs-explicit working-directory lifecycle.
+- **Added:** `adk_tools::environment_toolset::EnvironmentToolset` (C0440
+  DONE) — bundles the four tools below, injects the environment-level
+  system instruction.
+- **Added:** `adk_tools::{execute_tool::ExecuteTool,
+  read_file_tool::ReadFileTool, edit_file_tool::EditFileTool,
+  write_file_tool::WriteFileTool}` (C0441-C0444 DONE).
+- **Scope:** no new dependency (`regex`/`rusty_tokio` already workspace
+  dependencies of `adk-tools`). 34 new tests. Notable adaptations:
+  `BaseEnvironment::is_initialized` becomes a required trait method
+  (Rust traits carry no data); `write_file`'s `str | bytes` union
+  collapses to `&[u8]` without losing behavior (the source's str branch
+  already disables newline translation); `LocalEnvironment`'s path
+  resolution is lexical, reusing the "path safety by construction"
+  pattern already established in `file_artifact_service.rs`; a timed-out
+  command carries no partial output, the same disclosed gap already
+  established in `bash_tool.rs`; `EnvironmentToolset`'s uncaught
+  initialize-failure becomes a panic rather than widening the already-
+  shipped, infallible `BaseToolset` trait.
+
+---
+
 ## PR #TBD — `evaluation/`: event→`Invocation` grouping + `AgentEvaluator`'s dataset/legacy-format helpers (C0623, C0619 partial, C0620)
 **2026-08-24** · (link added once this PR is opened)
 
