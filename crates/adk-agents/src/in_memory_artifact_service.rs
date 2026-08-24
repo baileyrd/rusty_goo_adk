@@ -518,6 +518,62 @@ mod tests {
         assert_eq!(version.mime_type.as_deref(), Some("image/png"));
     }
 
+    /// Parity test for capability C0266: an explicitly-empty saved
+    /// artifact (a bare default/empty-text `Part`) round-trips to `None`
+    /// on read, matching the source's empty-artifact sentinel.
+    #[test]
+    fn loading_an_empty_artifact_returns_none() {
+        let service = InMemoryArtifactService::new();
+        service.save_artifact("app", "user1", "s1", "f", text_artifact(""), None);
+        assert!(service
+            .load_artifact("app", "user1", "s1", "f", None)
+            .is_none());
+    }
+
+    /// Parity test for capability C0267: loading an artifact whose
+    /// content is an `artifact://` reference recursively resolves
+    /// through scope validation to the referenced artifact's data.
+    #[test]
+    fn load_artifact_resolves_an_artifact_reference() {
+        let service = InMemoryArtifactService::new();
+        service.save_artifact(
+            "app",
+            "user1",
+            "s1",
+            "report.pdf",
+            text_artifact("the real content"),
+            None,
+        );
+
+        let reference = Part {
+            file_data: Some(MediaBlobStub {
+                mime_type: Some("application/pdf".to_string()),
+                rest: Some(Value::Map(vec![(
+                    "fileUri".to_string(),
+                    Value::String(
+                        "artifact://apps/app/users/user1/sessions/s1/artifacts/report.pdf/versions/0"
+                            .to_string(),
+                    ),
+                )])),
+            }),
+            ..Default::default()
+        };
+        service.save_artifact(
+            "app",
+            "user1",
+            "s1",
+            "link.pdf",
+            rusty_serde::json::to_value(&reference).unwrap(),
+            None,
+        );
+
+        let loaded = service
+            .load_artifact("app", "user1", "s1", "link.pdf", None)
+            .unwrap();
+        let part: Part = rusty_serde::json::from_value(loaded).unwrap();
+        assert_eq!(part.text.as_deref(), Some("the real content"));
+    }
+
     #[test]
     fn custom_metadata_is_stored_on_the_version() {
         let service = InMemoryArtifactService::new();

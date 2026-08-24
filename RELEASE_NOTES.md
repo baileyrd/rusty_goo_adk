@@ -22,6 +22,53 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `FileArtifactService` (C0268-C0274, plus C0266/C0267 parity tests)
+**2026-08-24** · (link added once this PR is opened)
+
+A filesystem-backed `ArtifactService` implementation — this repo's
+second full `ArtifactService` backend, alongside `InMemoryArtifactService`.
+
+- **Added:** `adk-agents::file_artifact_service::FileArtifactService` —
+  full storage layout (`root/apps/{app}/users/{user}/[sessions/{sid}/]artifacts/{path}/versions/{version}/{filename}`
+  + sibling `metadata.json`), nested filenames, `user:`-namespace
+  sharing across sessions, `mkdir`-staging-directory atomic crash-safe
+  writes with rename-to-publish, path-traversal/rooted/drive-qualified
+  filename rejection, `metadata.json`-name collision protection, and
+  always-recomputed `canonical_uri`.
+- **Disclosed adaptation:** no `_umask_derived_file_mode` equivalent
+  needed — this port's atomic-write helper creates its temp file via
+  `std::fs::write`, which already gets the OS's normal umask-derived
+  permissions the way the source's `tempfile.mkstemp` (hardcoded 0600)
+  doesn't, so the mismatch that function exists to fix never arises.
+- **Disclosed adaptation:** path-traversal prevention is by lexical
+  construction (reject any `..` segment, then join with no filesystem
+  interaction) rather than the source's filesystem-resolving,
+  symlink-following `Path.resolve(strict=False)` re-check — Rust's
+  `canonicalize` needs the target to already exist, which a
+  not-yet-created artifact version usually doesn't. A stronger
+  guarantee for the traversal-prevention property specifically, though
+  it doesn't replicate the source's symlinked-scope-root behavior.
+- **Disclosed adaptation:** `canonical_uri` is a hand-rolled, purely
+  lexical `file://` URI builder for the same not-yet-existent-path
+  reason.
+- **Disclosed adaptation:** a small base64 codec is duplicated locally
+  — `adk-tools::load_artifacts_tool` already hand-rolled one, but
+  `adk-tools` depends on `adk-agents`, not the reverse, so reusing it
+  would need a crate-graph cycle.
+- **Also closed out:** C0266/C0267 (`InMemoryArtifactService`'s
+  empty-artifact sentinel and artifact-reference resolution) — both
+  were already implemented as part of C0265's original batch but had
+  no dedicated parity test; added one each.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-agents +18 new tests: 16 for `FileArtifactService`, 2 for C0266/C0267, all passing)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `CachePerformanceAnalyzer` (C0946)
 **2026-08-24** · (link added once this PR is opened)
 

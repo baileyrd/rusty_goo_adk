@@ -15,6 +15,7 @@ pub mod auth_credential;
 pub mod base_agent;
 pub mod context;
 pub mod context_cache_config;
+pub mod file_artifact_service;
 pub mod in_memory_artifact_service;
 pub mod in_memory_memory_service;
 pub mod invocation_context;

@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::file_artifact_service::FileArtifactService` (C0268-C0274),
+  ported from `google.adk.artifacts.file_artifact_service` — a
+  filesystem-backed `ArtifactService` implementation: full storage
+  layout (nested filenames, `user:`-namespace sharing across sessions),
+  `mkdir`-staging-directory atomic crash-safe writes with rename-to-
+  publish, path-traversal/rooted/drive-qualified filename rejection,
+  `metadata.json`-name collision protection, and always-recomputed
+  `canonical_uri`. Disclosed adaptations: no `_umask_derived_file_mode`
+  equivalent needed (this port's atomic-write helper already gets
+  umask-derived permissions the way the source's `mkstemp` doesn't);
+  path-traversal prevention is by lexical construction rather than
+  filesystem-resolving canonicalize (Rust's `canonicalize` needs the
+  target to already exist); `canonical_uri` is a hand-rolled, purely
+  lexical `file://` URI builder for the same reason; a small base64
+  codec is duplicated locally (can't reuse `adk-tools`'s own hand-rolled
+  one without a crate-graph cycle).
+- Also closed out C0266/C0267 (`InMemoryArtifactService`'s empty-
+  artifact sentinel and artifact-reference resolution) — both were
+  already implemented but had no dedicated parity test; added one each.
 - `adk-flows::cache_performance_analyzer::{CachePerformanceAnalyzer,
   CachePerformanceReport, CachePerformanceStats}` (C0946), ported from
   `google.adk.utils.cache_performance_analyzer` — analyzes
