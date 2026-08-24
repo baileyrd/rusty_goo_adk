@@ -20,6 +20,29 @@
 //! the same "processor as a free function, not a method" pattern
 //! `adk-flows` uses throughout.
 //!
+//! **Skills batch**: [`skill_registry`] (`SkillRegistry`, C0395),
+//! [`skill_instructions_utils`] (a local duplicate of `adk_flows
+//! ::instructions_utils::inject_session_state`, C0170 — needed for C0401,
+//! since `adk-flows` already depends on `adk-tools`), and [`skill_toolset`]
+//! (`SkillToolset`/`ListSkillsTool`/`SearchSkillsTool`/`LoadSkillTool`,
+//! C0408; `LoadSkillResourceTool`, C0409; `RunSkillScriptTool` partial,
+//! C0410 — the `environment`-configured path only, its `code_executor`
+//! path needing `_SkillScriptCodeExecutor`'s from-scratch Python-wrapper-
+//! generation design deferred to its own batch;
+//! `DEFAULT_SKILL_SYSTEM_INSTRUCTION`, C0411; C0401's `adk_inject_state`
+//! interpolation, exercised via `LoadSkillTool`). `skills_models::Resources`
+//! widens from `String`-only to a real `ResourceContent` (`Text`/`Bytes`)
+//! enum this batch, now that `LoadSkillResourceTool` is a real consumer
+//! needing the binary branch — see that module's own doc. See
+//! `skill_toolset`'s own module doc for its central architectural
+//! adaptation (a shared `Arc<SkillCoreState>` every tool clones a handle
+//! to, replacing the source's toolset-back-reference cycle — the same
+//! pattern the environment batch's `EnvironmentToolset` already
+//! established) and its other disclosed narrowings. New manifest row
+//! **C0950** (REQUIRED, not implemented this batch) covers a discovered
+//! gap: `SkillToolset.additional_tools`/`_resolve_additional_tools_from_state`/
+//! `clone_with_updated_skills`. No new dependency.
+//!
 //! **Environment batch**: [`base_environment`] (`BaseEnvironment`/
 //! `ExecutionResult`, C0948 — a genuine inventory gap discovered this
 //! batch, `environment/` having no manifest row at all despite four
@@ -73,6 +96,9 @@ pub mod read_file_tool;
 pub mod remote_mcp_server;
 pub mod request_input_tool;
 pub mod set_model_response_tool;
+pub mod skill_instructions_utils;
+pub mod skill_registry;
+pub mod skill_toolset;
 pub mod skills_models;
 pub mod skills_prompt;
 pub mod tool_confirmation;

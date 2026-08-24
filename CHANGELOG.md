@@ -5,6 +5,35 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-tools::skill_registry::SkillRegistry` (C0395 DONE) +
+  `adk-tools::skill_instructions_utils::inject_session_state` (C0401 DONE,
+  a local duplicate of `adk_flows::instructions_utils::inject_session_state`
+  C0170, avoiding a crate-graph cycle) +
+  `adk-tools::skill_toolset::{SkillToolset, SkillToolsetConfig,
+  ListSkillsTool, SearchSkillsTool, LoadSkillTool}` (C0408 DONE) +
+  `LoadSkillResourceTool` (C0409 DONE) + `RunSkillScriptTool` (C0410
+  partial — `environment`-configured path only, `code_executor` path
+  deferred to its own batch, needing `_SkillScriptCodeExecutor`'s
+  from-scratch Python-wrapper-generation design) +
+  `build_skill_system_instruction`/`default_skill_system_instruction`
+  (C0411 DONE). 30 new tests. Widened
+  `adk-tools::skills_models::Resources` from `String`-only to a real
+  `ResourceContent` (`Text`/`Bytes`) enum, now that
+  `LoadSkillResourceTool` is a real consumer needing the binary branch.
+  Central architectural adaptation, disclosed at length in
+  `skill_toolset`'s module doc: the source's tools each hold a live
+  back-reference to their owning toolset (a reference cycle Rust can't
+  replicate); this port pulls the shared mutable state into one
+  `SkillCoreState` behind an `Arc` every tool clones a handle to, the
+  same pattern `environment_toolset.rs` (C0440) already established.
+  Disclosed narrowing: the source's per-invocation skill-fetch cache
+  coalesces concurrent in-flight fetches via a shared `asyncio.Future`;
+  this port keeps the 16-turn FIFO caching behavior exactly but two
+  concurrent calls for an uncached skill each independently fetch,
+  rather than one awaiting the other. New manifest row **C0950**
+  (REQUIRED, not implemented) covers a discovered gap:
+  `SkillToolset.additional_tools`/`_resolve_additional_tools_from_state`/
+  `clone_with_updated_skills`. No new dependency.
 - `adk-tools::base_environment::{BaseEnvironment, ExecutionResult,
   EnvironmentError}` (C0948 DONE — a genuine inventory gap: `environment/`
   had no manifest row at all, despite 4 existing rows already referencing
