@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::telemetry_context::{ContentCapturingMode, TelemetryConfig,
+  SemconvStabilityOptIn}` (C0651/C0652 DONE, plus 5 of C0670's 6 env-var
+  constants) and `adk-agents::schema_version::resolve_schema_version`
+  (C0679 DONE, plus its own env-var constant closing out C0670, and the
+  `GOOGLE_CLOUD_AGENT_ENGINE_*` constants for C0671). 23 new tests.
+  `RunConfig::telemetry` widens from a bare `Value` placeholder to the
+  real `TelemetryConfig`. Ports every resolution property's full
+  precedence ladder (admin lock, per-request field, `OTEL_*` env var,
+  default) and `resolve_schema_version`'s env-override → Agent-Engine
+  auto-detect → default-1 precedence. Pure env-var-precedence logic
+  only — no OTel SDK/span/tracer machinery, a much larger still-unported
+  surface. No new dependency.
+### Fixed
+- `capability-manifest.md`: C0505 and C0798 were both fully covered by
+  already-merged work (C0504's `auth_tool.rs` batch and C0942's
+  `telemetry_config.rs` respectively) but were never cross-linked and
+  still read `REQUIRED`. Both now point at their real evidence — no new
+  code, a manifest-hygiene fix only.
+### Added
 - `adk-agents::agent_optimizer::AgentOptimizer` (C0636 DONE),
   `adk-agents::sampler::{Sampler, ExampleSet}`, and
   `adk-agents::optimization_data_types::{SamplingResult,

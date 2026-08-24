@@ -12,14 +12,17 @@
 //! placeholder, preserving field presence/optionality/defaults (what parity
 //! actually requires) without modeling the opaque schema.
 //!
-//! `TelemetryConfig` (P12) and `GetSessionConfig` (P5) are likewise
-//! placeholders pending their own phases.
+//! `GetSessionConfig` (P5) is likewise a placeholder pending its own
+//! phase. `telemetry` was a `TelemetryConfig` (P12) placeholder until
+//! C0651/C0652 landed a real type (`crate::telemetry_context
+//! ::TelemetryConfig`) — see that module's own doc.
 
 use rusty_serde::value::Value;
 use rusty_serde::{Deserialize, Serialize};
 use std::env;
 
 use crate::streaming_mode::StreamingMode;
+use crate::telemetry_context::TelemetryConfig;
 
 const DEFAULT_MAX_LLM_CALLS: i64 = 500;
 
@@ -98,9 +101,9 @@ pub struct RunConfig {
     pub max_llm_calls: i64,
     #[rusty_serde(default)]
     pub custom_metadata: Option<std::collections::BTreeMap<String, Value>>,
-    /// Per-request OpenTelemetry config override (P12 placeholder).
+    /// Per-request OpenTelemetry config override.
     #[rusty_serde(default)]
-    pub telemetry: Option<Value>,
+    pub telemetry: Option<TelemetryConfig>,
     /// Passed to the session service's `get_session` (P5 placeholder).
     #[rusty_serde(default)]
     pub get_session_config: Option<Value>,
