@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-flows::apps_compaction::{ensure_compaction_summarizer,
+  events_to_compact_for_token_threshold, longest_self_contained_prefix,
+  safe_token_compaction_split_index}` (C0290/C0291/C0292 DONE) — the
+  rest of `apps/compaction.py`'s pure logic, continuing the same file
+  PR #112 started. `ensure_compaction_summarizer` resolves an
+  `EventsCompactionConfig`'s summarizer (existing one, or a new
+  `LlmEventSummarizer` from the agent's already-resolved canonical
+  model via `LlmFlow::model`), reusing the `agent.as_any()
+  .downcast_ref::<LlmFlow>()` pattern `instructions.rs` already
+  established for recovering a concrete `LlmAgent`-backed behavior.
+  Disclosed: resolves-and-returns rather than mutating `config
+  .summarizer` in place (no interior mutability on this port's
+  `EventsCompactionConfig`) — in-place caching is left to whatever
+  wires C0293. `events_to_compact_for_token_threshold`/
+  `longest_self_contained_prefix`/`safe_token_compaction_split_index`
+  port in full, including the prior-compaction-summary seeding and the
+  responses-close-before-calls-open ordering. C0293 (the two
+  `Runner`-facing trigger entrypoints) deliberately left for a later,
+  larger batch needing real `App`/`Runner` wiring. 14 new tests. No
+  new dependency.
+### Added
 - `adk-flows::apps_compaction::{latest_compaction_event,
   estimate_prompt_token_count, latest_prompt_token_count}` (C0288
   partial, C0289 DONE) — dedup and token-estimation logic ported from
