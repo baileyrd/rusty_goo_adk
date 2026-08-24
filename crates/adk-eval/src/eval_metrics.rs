@@ -167,6 +167,112 @@ pub struct EvalMetricResultPerInvocation {
     pub eval_metric_results: Vec<EvalMetricResult>,
 }
 
+/// `eval_metrics.PrebuiltMetrics` — the metric-name enum every metric in
+/// this port (and every not-yet-built LLM-judge metric) is keyed by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "snake_case")]
+pub enum PrebuiltMetrics {
+    ToolTrajectoryAvgScore,
+    ResponseEvaluationScore,
+    ResponseMatchScore,
+    SafetyV1,
+    FinalResponseMatchV2,
+    RubricBasedFinalResponseQualityV1,
+    HallucinationsV1,
+    RubricBasedToolUseQualityV1,
+    PerTurnUserSimulatorQualityV1,
+    MultiTurnTaskSuccessV1,
+    MultiTurnTrajectoryQualityV1,
+    MultiTurnToolUseQualityV1,
+    RubricBasedMultiTurnTrajectoryQualityV1,
+}
+
+impl PrebuiltMetrics {
+    /// The wire-string value each source `PrebuiltMetrics` enum member
+    /// carries explicitly (e.g. `TOOL_TRAJECTORY_AVG_SCORE =
+    /// "tool_trajectory_avg_score"`), matched by hand rather than trusting
+    /// this port's own `snake_case` rename to independently land on the
+    /// same string for every variant (it does, verified by
+    /// `prebuilt_metrics_as_str_matches_the_derived_wire_value`, but a
+    /// literal match here doesn't depend on that derive continuing to
+    /// agree with it).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ToolTrajectoryAvgScore => "tool_trajectory_avg_score",
+            Self::ResponseEvaluationScore => "response_evaluation_score",
+            Self::ResponseMatchScore => "response_match_score",
+            Self::SafetyV1 => "safety_v1",
+            Self::FinalResponseMatchV2 => "final_response_match_v2",
+            Self::RubricBasedFinalResponseQualityV1 => "rubric_based_final_response_quality_v1",
+            Self::HallucinationsV1 => "hallucinations_v1",
+            Self::RubricBasedToolUseQualityV1 => "rubric_based_tool_use_quality_v1",
+            Self::PerTurnUserSimulatorQualityV1 => "per_turn_user_simulator_quality_v1",
+            Self::MultiTurnTaskSuccessV1 => "multi_turn_task_success_v1",
+            Self::MultiTurnTrajectoryQualityV1 => "multi_turn_trajectory_quality_v1",
+            Self::MultiTurnToolUseQualityV1 => "multi_turn_tool_use_quality_v1",
+            Self::RubricBasedMultiTurnTrajectoryQualityV1 => {
+                "rubric_based_multi_turn_trajectory_quality_v1"
+            }
+        }
+    }
+}
+
+/// Part of C0604/C0612: `eval_metrics.Interval` — a range of numeric
+/// values, e.g. `[0, 1]` or `(2, 3)` or `[-1, 6)`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct Interval {
+    pub min_value: f64,
+    #[rusty_serde(default)]
+    pub open_at_min: bool,
+    pub max_value: f64,
+    #[rusty_serde(default)]
+    pub open_at_max: bool,
+}
+
+impl Interval {
+    /// A closed `[min_value, max_value]` interval — the shape every
+    /// prebuilt metric in this port actually uses.
+    pub fn closed(min_value: f64, max_value: f64) -> Self {
+        Self {
+            min_value,
+            open_at_min: false,
+            max_value,
+            open_at_max: false,
+        }
+    }
+}
+
+/// Part of C0604/C0612: `eval_metrics.MetricValueInfo`.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct MetricValueInfo {
+    #[rusty_serde(default)]
+    pub interval: Option<Interval>,
+}
+
+/// Part of C0604/C0612: `eval_metrics.MetricInfo`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct MetricInfo {
+    pub metric_name: String,
+    #[rusty_serde(default)]
+    pub description: Option<String>,
+    pub metric_value_info: MetricValueInfo,
+}
+
+/// C0604: `eval_metrics.MetricInfoProvider` — interface for providing
+/// `MetricInfo`.
+pub trait MetricInfoProvider {
+    /// Returns `MetricInfo` for a given metric. The source's
+    /// `ResponseEvaluatorMetricInfoProvider` is the one implementor
+    /// that's actually fallible (constructed with a caller-supplied
+    /// metric name it may not recognize), so this returns a `Result`
+    /// rather than the source's `MetricInfo` (which just raises
+    /// `ValueError` on the same case).
+    fn get_metric_info(&self) -> Result<MetricInfo, String>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +325,50 @@ mod tests {
         assert!(json.contains("\"includeIntermediateResponsesInFinal\""));
         let back: ToolTrajectoryCriterion = rusty_serde::json::from_str(&json).unwrap();
         assert_eq!(criterion, back);
+    }
+
+    #[test]
+    fn prebuilt_metrics_as_str_matches_the_derived_wire_value() {
+        let all = [
+            PrebuiltMetrics::ToolTrajectoryAvgScore,
+            PrebuiltMetrics::ResponseEvaluationScore,
+            PrebuiltMetrics::ResponseMatchScore,
+            PrebuiltMetrics::SafetyV1,
+            PrebuiltMetrics::FinalResponseMatchV2,
+            PrebuiltMetrics::RubricBasedFinalResponseQualityV1,
+            PrebuiltMetrics::HallucinationsV1,
+            PrebuiltMetrics::RubricBasedToolUseQualityV1,
+            PrebuiltMetrics::PerTurnUserSimulatorQualityV1,
+            PrebuiltMetrics::MultiTurnTaskSuccessV1,
+            PrebuiltMetrics::MultiTurnTrajectoryQualityV1,
+            PrebuiltMetrics::MultiTurnToolUseQualityV1,
+            PrebuiltMetrics::RubricBasedMultiTurnTrajectoryQualityV1,
+        ];
+        for metric in all {
+            let derived = rusty_serde::json::to_string(&metric).unwrap();
+            assert_eq!(derived, format!("\"{}\"", metric.as_str()));
+        }
+    }
+
+    #[test]
+    fn interval_closed_defaults_to_a_closed_range() {
+        let interval = Interval::closed(0.0, 1.0);
+        assert!(!interval.open_at_min);
+        assert!(!interval.open_at_max);
+    }
+
+    #[test]
+    fn metric_info_round_trips_through_json_with_camel_case() {
+        let info = MetricInfo {
+            metric_name: PrebuiltMetrics::ToolTrajectoryAvgScore.as_str().to_string(),
+            description: Some("a description".to_string()),
+            metric_value_info: MetricValueInfo {
+                interval: Some(Interval::closed(0.0, 1.0)),
+            },
+        };
+        let json = rusty_serde::json::to_string(&info).unwrap();
+        assert!(json.contains("\"metricValueInfo\""));
+        let back: MetricInfo = rusty_serde::json::from_str(&json).unwrap();
+        assert_eq!(info, back);
     }
 }

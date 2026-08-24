@@ -22,6 +22,53 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: audio resampling + metric-catalog providers (C0604, C0625) — pure-computation leftovers
+**2026-08-24** · (link added once this PR is opened)
+
+Two genuine outliers among `evaluation/`'s remaining rows (mostly LLM-
+judge/GCS/simulator work): pure data and computation, no network, no
+cloud SDK.
+
+- **Added:** `audio_utils::{resample_pcm16, to_live_input,
+  parse_sample_rate}` (C0625) — a linear-interpolation 16-bit PCM
+  resampler (24kHz TTS output → 16kHz Live API input) plus a
+  `rate=<digits>` mime-type parameter parser, hand-rolled rather than
+  adding a `regex` dependency (`adk-eval` doesn't have one) since
+  `;`-delimited-parameter matching is straightforward to reimplement
+  directly. Cross-checked against the real
+  `google.adk.evaluation._audio_utils` functions, run directly from the
+  checked-out `google/adk-python` repo — both the resampler's exact
+  interpolated output and the mime-type parser's edge cases (case
+  insensitivity, surrounding whitespace, a later `;`-parameter, a
+  non-digit suffix) match.
+- **Added:** `eval_metrics::{PrebuiltMetrics, Interval, MetricValueInfo,
+  MetricInfo, MetricInfoProvider}` and `metric_info_providers` (C0604) —
+  all 12 concrete `MetricInfoProvider` implementors, covering all 13
+  `PrebuiltMetrics` (`ResponseEvaluatorMetricInfoProvider` alone covers
+  2: `response_evaluation_score` and `response_match_score`). Also
+  closes the `Interval`/`MetricValueInfo`/`MetricInfo`/
+  `MetricInfoProvider` slice of C0612, previously unported.
+- **Verified, not assumed:** the source's
+  `PerTurnUserSimulatorQualityV1MetricInfoProvider`/
+  `RubricBasedMultiTurnTrajectoryMetricInfoProvider` pass the bare
+  `PrebuiltMetrics` enum member (not `.value`) into `MetricInfo`'s
+  `str`-typed `metric_name` field — everywhere else in the file uses
+  `.value` explicitly. This looked like a real bug worth flagging or
+  replicating. Checked live instead: pydantic v2 unwraps a plain-`Enum`
+  member assigned to a `str` field via its `.value` automatically,
+  producing the identical string either way. Not a bug — this port uses
+  `.as_str()` uniformly for all 13 metrics, matching actual runtime
+  behavior rather than the surface-level code-review impression.
+
+## Test plan
+
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace` (adk-eval +23 new tests; zero regressions elsewhere)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --check`
+
+---
+
 ## PR #TBD — `skills/`: `format_skills_as_xml` (C0400) — first landing in the skills/ area
 **2026-08-24** · (link added once this PR is opened)
 

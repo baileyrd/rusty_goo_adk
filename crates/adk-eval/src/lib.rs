@@ -94,6 +94,7 @@
 //! `PrivateAttr`'s runtime enforcement.
 
 pub mod app_details;
+pub mod audio_utils;
 pub mod constants;
 pub mod conversation_scenarios;
 pub mod eval_case;
@@ -110,6 +111,7 @@ pub mod final_response_match_v1;
 pub mod in_memory_eval_sets_manager;
 pub mod local_eval_set_results_manager;
 pub mod local_eval_sets_manager;
+pub mod metric_info_providers;
 pub mod path_validation;
 mod porter_stemmer;
 pub mod rouge;
