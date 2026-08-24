@@ -22,6 +22,26 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `plugins/logging_plugin.py`: `LoggingPlugin` (C0362, partial)
+**2026-08-24** · (link added once this PR is opened)
+
+Ports the console-debugging plugin's 6 run-level and agent-level hooks —
+the remaining 7 (model/tool-level) stay blocked on C0355/C0356 as
+already disclosed.
+
+- **Added:** `adk_agents::logging_plugin::LoggingPlugin` (C0362 partial):
+  `on_user_message_callback`, `before_run_callback`, `on_event_callback`,
+  `after_run_callback`, `before_agent_callback`, `after_agent_callback`,
+  plus the `format_content`/`format_args` truncation helpers
+  (`_format_content`/`_format_args` in the source).
+- **Disclosed:** the source's `_log` calls bare `print()` with ANSI grey
+  codes, not Python's `logging` module — so this port's `println!` is a
+  faithful translation, not the "no logging framework adopted"
+  substitution used elsewhere in this migration.
+- **Scope:** no new dependency. 11 new tests.
+
+---
+
 ## PR #TBD — `plugins/save_files_as_artifacts_plugin.py`: `SaveFilesAsArtifactsPlugin` (C0367)
 **2026-08-24** · (link added once this PR is opened)
 

@@ -112,6 +112,17 @@
 //! to a later hook (`before_agent_callback`, in this plugin's case).
 //! Verified end-to-end in `adk-runners`'s own test suite. No new
 //! dependency.
+//!
+//! **`LoggingPlugin` batch**: [`logging_plugin`] (`LoggingPlugin`,
+//! C0362, partial) — ported from `plugins/logging_plugin.py`. 6 of its
+//! 13 hooks (`on_user_message_callback`/`before_run_callback`/
+//! `on_event_callback`/`after_run_callback`/`before_agent_callback`/
+//! `after_agent_callback`) port in full, including the ANSI-grey
+//! `println!`-based console output — faithful, not a substitution,
+//! since the source itself calls bare `print()` rather than routing
+//! through Python's `logging` module for this specific plugin. The
+//! remaining 7 (model-level and tool-level hooks) stay N/A, blocked on
+//! C0355/C0356's already-disclosed crate-cycle blocker.
 
 pub mod active_streaming_tool;
 pub mod agent_optimizer;
@@ -137,6 +148,7 @@ pub mod in_memory_memory_service;
 pub mod invocation_context;
 pub mod live_request;
 pub mod llm_agent;
+pub mod logging_plugin;
 pub mod loop_agent;
 pub mod oauth2_util;
 pub mod optimization_data_types;

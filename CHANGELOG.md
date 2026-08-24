@@ -5,6 +5,16 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `adk-agents::logging_plugin::LoggingPlugin` (C0362 partial) — an
+  ANSI-grey console-debugging plugin. 6 of 13 hooks ported
+  (`on_user_message_callback`/`before_run_callback`/`on_event_callback`/
+  `after_run_callback`/`before_agent_callback`/`after_agent_callback`),
+  including `format_content`/`format_args`, the source's own
+  `_format_content`/`_format_args` truncation helpers. 11 new tests.
+  The remaining 7 hooks (model-level/tool-level) stay N/A, blocked on
+  C0355/C0356's already-disclosed crate-cycle blocker. No new
+  dependency.
+### Added
 - `adk-agents::save_files_as_artifacts_plugin::SaveFilesAsArtifactsPlugin`
   (C0367 DONE) — saves `inline_data` parts from a user message as artifacts
   (20MB size cap), replacing each with a placeholder text part and,
