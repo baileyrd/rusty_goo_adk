@@ -1,10 +1,6 @@
-//! Capabilities C0048, C0050-C0058, C0061-C0065: `Context` (`CallbackContext`
-//! is now a unified alias for it), ported from `google.adk.agents.context`.
-//!
-//! **Deferred** (need `workflow::BaseNode`/the graph engine, Phase 7):
-//! `Context.run_node`/`_run_node_internal`/`_run_node_standalone` (C0059,
-//! C0060) — dynamic node execution is inseparable from the workflow
-//! scheduler that doesn't exist yet.
+//! Capabilities C0048, C0050-C0058, C0059/C0060, C0061-C0065: `Context`
+//! (`CallbackContext` is now a unified alias for it), ported from
+//! `google.adk.agents.context`.
 //!
 //! **Adaptation**: `telemetry_context` (Phase 12) is omitted — nothing in
 //! this batch reads it.
@@ -12,33 +8,38 @@
 //! **C0310-C0312 (`NodeRunner`) additions**: `node_path`/`run_id`/
 //! `attempt_count`/`resume_inputs`/`output_for_ancestors`/
 //! `output_delegated`/the `_output_emitted`/`_route_emitted` flags/
-//! `error`/`error_node_path` are additive fields (via the new
-//! [`Context::for_node`] constructor, used only by
-//! `workflow_node_runner::NodeRunner`) mirroring the source's own
-//! `Context.__init__`'s workflow-execution parameters. `Context::new`
-//! (every existing call site) is untouched — these fields default to
-//! their root-context values (empty path, run_id `"1"`, attempt 1,
-//! nothing delegated/emitted) exactly as the source's own
-//! `_derive_node_path` falls back to for a node-less context.
-//! `state_schema` inheritance (`node.state_schema` or
+//! `error`/`error_node_path`/`node_rerun_on_resume` are additive fields
+//! (via [`Context::for_node`], used by `workflow_node_runner::NodeRunner`
+//! and — for `node_rerun_on_resume` — [`Context::run_node`] itself)
+//! mirroring the source's own `Context.__init__`'s workflow-execution
+//! parameters. `Context::new` (every existing call site) is untouched —
+//! these fields default to their root-context values (empty path, run_id
+//! `"1"`, attempt 1, nothing delegated/emitted, `node_rerun_on_resume`
+//! `true`) exactly as the source's own `_derive_node_path`/`node.
+//! rerun_on_resume if node else True` fall back to for a node-less
+//! context. `state_schema` inheritance (`node.state_schema` or
 //! `parent_ctx.state._schema`) is not ported — `state.rs`'s own module
 //! doc already discloses this port has no per-key state schema
-//! mechanism at all, so there's nothing to inherit. `_workflow_scheduler`/
-//! `_child_run_counters`/`_node_rerun_on_resume` back `Context.run_node`
-//! (C0059/C0060, still deferred, see above) and are omitted along with
-//! it — they have no reader yet in this port.
+//! mechanism at all, so there's nothing to inherit.
 //!
-//! **`output_delegated`, disclosed**: always `false` here — its only
-//! setter in the source is `Context.run_node` itself (deferred). Kept as
-//! a real field (not hardcoded into the one place that reads it) so
-//! `NodeRunner`'s flush logic ports the source's exact condition rather
-//! than a narrowed one, and so the field is already in place once
-//! dynamic dispatch lands.
+//! **C0059/C0060 (`Context::run_node`), what's ported and what isn't**:
+//! see [`Context::run_node`]'s own doc for the Mode-1-vs-Mode-2 dispatch
+//! narrowing and the events-returned-not-enqueued adaptation.
+//! `_workflow_scheduler`/`_child_run_counters` (Mode 1's own
+//! Workflow-scheduled bookkeeping) stay omitted, matching that method's
+//! own disclosure — they have no reader in this port, since `Workflow`
+//! (C0298) and `DynamicNodeScheduler` (C0318/C0319) aren't built.
+//! `Context.node`/`Context.parent_ctx` (a permanent ancestry pair on
+//! every `Context`) are deliberately never added either —
+//! `workflow_transfer_utils.rs`'s own module doc explains the local,
+//! per-call [`crate::workflow_transfer_utils::ChainFrame`] chain
+//! `run_node`'s own loop builds instead.
 
 use std::collections::{BTreeMap, HashSet};
 
 use adk_events::node_path_builder::NodePathBuilder;
 use adk_events::ui_widget::UiWidget;
+use adk_events::Event;
 use adk_events::EventActions;
 use rusty_serde::value::Value;
 
@@ -46,6 +47,13 @@ use crate::auth_handler::{AuthHandler, AuthHandlerError};
 use crate::invocation_context::InvocationContext;
 use crate::services::{self, AuthConfig, AuthCredential};
 use crate::state::State;
+use crate::workflow_agent_node::AgentNode;
+use crate::workflow_base_node::{BaseNode, NodeRunError};
+use crate::workflow_errors::WorkflowNodeError;
+use crate::workflow_node_runner::{workflow_error, NodeRunner};
+use crate::workflow_transfer_utils::{
+    resolve_and_derive_transfer_context, ChainFrame, TransferOutcome,
+};
 
 #[derive(Debug, rusty_err::Error)]
 pub enum ContextError {
@@ -77,6 +85,85 @@ pub enum ContextError {
 /// `Context` (no longer a distinct class) — mirrored directly here.
 pub type CallbackContext = Context;
 
+/// C0059/C0060: [`Context::run_node`]'s keyword-argument bundle — the
+/// source's `use_as_output`/`run_id`/`use_sub_branch`/`override_branch`/
+/// `override_isolation_scope`/`raise_on_wait` keyword parameters
+/// (`node`/`node_input` stay positional method arguments; `Rust` has no
+/// keyword arguments to mirror the rest with, so they collect here
+/// instead — the same shape [`crate::workflow_node_runner::NodeRunner`]'s
+/// own builder already established for an overlapping set of options).
+#[derive(Debug, Clone, Default)]
+pub struct RunNodeOptions {
+    pub use_as_output: bool,
+    pub run_id: Option<String>,
+    pub use_sub_branch: bool,
+    pub override_branch: Option<String>,
+    pub override_isolation_scope: Option<String>,
+    pub raise_on_wait: bool,
+}
+
+/// Events and output accumulated by one [`Context::run_node`] call —
+/// see that method's own doc for why events are returned rather than
+/// enqueued.
+#[derive(Debug, Default)]
+pub struct RunNodeOutput {
+    pub output: Option<Value>,
+    pub events: Vec<Event>,
+}
+
+/// [`Context::run_node`]'s two non-error outcomes — see that method's
+/// own doc for why "interrupted" is a variant here rather than the
+/// source's raised `NodeInterruptedError`.
+#[derive(Debug)]
+pub enum RunNodeOutcome {
+    Completed(RunNodeOutput),
+    Interrupted(RunNodeOutput),
+}
+
+/// [`Context::run_node`]'s own validation/routing errors — every one of
+/// these is a plain, catchable `ValueError` in the source (unlike
+/// `DynamicNodeFail`, reused directly from
+/// [`crate::workflow_errors::WorkflowNodeError`] instead of duplicated
+/// here, so it downcasts identically wherever the source's own
+/// `DynamicNodeFailError` already does).
+#[derive(Debug, rusty_err::Error)]
+pub enum RunNodeError {
+    #[error(
+        "A node must have rerun_on_resume=true. Reason is that dynamically scheduled nodes might be interrupted, and the workflow wakes-up/re-runs the parent node, so it can get the child node response."
+    )]
+    RerunOnResumeRequired,
+    #[error("Node {0} already has a use_as_output delegate.")]
+    OutputAlreadyDelegated(String),
+    #[error("Only agents can request an agent transfer.")]
+    OnlyAgentsCanTransfer,
+    #[error("Agent '{0}' cannot transfer to itself.")]
+    SelfTransfer(String),
+    #[error("Transfer target agent '{0}' not found.")]
+    TransferTargetNotFound(String),
+    #[error("Cannot transfer from '{0}' to unrelated agent '{1}'.")]
+    UnrelatedTransfer(String, String),
+}
+
+/// Bridges [`RunNodeError`] into a [`NodeRunError`] — the same
+/// `BoxedWorkflowNodeError` workaround `workflow_node_runner.rs`'s own
+/// doc explains (a manual `std::error::Error` impl directly on a
+/// `rusty_err::Error`-derived type would conflict with the blanket
+/// bridge `rusty_err` provides in the other direction).
+#[derive(Debug)]
+struct BoxedRunNodeError(RunNodeError);
+
+impl std::fmt::Display for BoxedRunNodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for BoxedRunNodeError {}
+
+fn run_node_error(error: RunNodeError) -> NodeRunError {
+    Box::new(BoxedRunNodeError(error))
+}
+
 /// The context within an agent run.
 pub struct Context {
     invocation_context: InvocationContext,
@@ -99,6 +186,7 @@ pub struct Context {
     route_emitted: bool,
     error_message: Option<String>,
     error_node_path: String,
+    node_rerun_on_resume: bool,
 }
 
 impl Context {
@@ -126,6 +214,9 @@ impl Context {
             route_emitted: false,
             error_message: None,
             error_node_path: String::new(),
+            // `node.rerun_on_resume if node else True` — a node-less
+            // (root) context defaults `True`.
+            node_rerun_on_resume: true,
         }
     }
 
@@ -145,6 +236,7 @@ impl Context {
         resume_inputs: BTreeMap<String, Value>,
         attempt_count: u32,
         use_as_output: bool,
+        node_rerun_on_resume: bool,
     ) -> Self {
         let run_id = run_id.into();
         let node_path = NodePathBuilder::from_string(parent_node_path)
@@ -165,6 +257,7 @@ impl Context {
         ctx.resume_inputs = resume_inputs;
         ctx.attempt_count = attempt_count;
         ctx.output_for_ancestors = output_for_ancestors;
+        ctx.node_rerun_on_resume = node_rerun_on_resume;
         ctx
     }
 
@@ -209,6 +302,22 @@ impl Context {
         self.output_delegated
     }
 
+    /// C0059/C0060: `Context.run_node`'s own guard — once set, a second
+    /// `use_as_output=true` dynamic dispatch on this same context is
+    /// rejected (see [`Self::run_node`]).
+    pub(crate) fn set_output_delegated(&mut self, value: bool) {
+        self.output_delegated = value;
+    }
+
+    /// C0059/C0060: whether *this* context's own node (if any) may be
+    /// re-run on resume — `Context.run_node`'s prerequisite for dynamic
+    /// dispatch (the source's `self._node_rerun_on_resume`, checked
+    /// because a dynamically scheduled child might interrupt, and only a
+    /// re-runnable parent can wake up and retrieve the child's response).
+    pub(crate) fn node_rerun_on_resume(&self) -> bool {
+        self.node_rerun_on_resume
+    }
+
     pub(crate) fn output_emitted(&self) -> bool {
         self.output_emitted
     }
@@ -232,8 +341,10 @@ impl Context {
     /// C0310-C0312: the error (if any) this node's last run failed with,
     /// and the path of the node that actually raised it (may differ from
     /// [`Self::node_path`] once dynamic node dispatch propagates a
-    /// failure up from a descendant — not yet reachable in this port,
-    /// see `workflow_node_runner`'s own module doc).
+    /// failure up from a descendant — reachable since [`Self::run_node`]
+    /// (C0059/C0060) landed: a `DynamicNodeFail` bubbling out of a
+    /// dynamically-dispatched node is caught by a future outer
+    /// `NodeRunner::run` call the same way any other node error is).
     pub fn error_message(&self) -> Option<&str> {
         self.error_message.as_deref()
     }
@@ -363,6 +474,183 @@ impl Context {
         let mut ctx = self.invocation_context.clone();
         ctx.isolation_scope = self.isolation_scope.clone();
         ctx
+    }
+
+    // ------------------------------------------------------------------
+    // Dynamic node dispatch (C0059/C0060)
+    // ------------------------------------------------------------------
+
+    /// `Context.run_node`: executes `node` dynamically as a child run of
+    /// this context, in-place resolving any agent transfer the node (or
+    /// a node it transfers to) requests, and returns once the resulting
+    /// branch finishes.
+    ///
+    /// **Mode 1 (`Workflow`-scheduled dispatch), not ported**: the
+    /// source dispatches through `self._workflow_scheduler` when set —
+    /// only ever true once a node is running *under* a `Workflow`
+    /// orchestrator (C0298, not built) or `DynamicNodeScheduler`
+    /// (C0318/C0319, not built). Nothing in this port can produce a
+    /// non-`None` scheduler yet (this `Context` has no such field at
+    /// all — see `context.rs`'s own module doc), so that branch is
+    /// unconditionally dead code today; this method always takes the
+    /// source's Mode 2 (standalone, via [`NodeRunner`], C0310-C0312).
+    /// Revisit once `Workflow` lands.
+    ///
+    /// **Events, returned instead of enqueued**: the source streams
+    /// every event straight onto the shared invocation event queue as
+    /// it's produced. This port's "eagerly collected `Vec`" adaptation
+    /// (`workflow_node_runner.rs`'s own doc) has no shared queue to push
+    /// onto, so [`RunNodeOutput::events`] carries everything produced
+    /// across every node this call ran (including transfer hops) — the
+    /// caller (a [`crate::workflow_base_node::NodeBehavior::run_impl`]
+    /// that itself calls `run_node`) is responsible for folding these
+    /// into its own returned yields.
+    ///
+    /// **`NodeInterruptedError`, not raised**: the source raises it (a
+    /// deliberately non-catchable `BaseException`, `workflow_errors.rs`'s
+    /// own doc) to signal a WAITING child. Since this method's `Result`
+    /// is the ordinary catchable kind, that signal is instead a distinct
+    /// `Ok` variant, [`RunNodeOutcome::Interrupted`] — a caller cannot
+    /// accidentally swallow it via `?`/`.map_err` the way the source
+    /// guards against, since it never reaches the `Err` side at all.
+    pub async fn run_node(
+        &mut self,
+        node: BaseNode,
+        node_input: Value,
+        options: RunNodeOptions,
+    ) -> Result<RunNodeOutcome, NodeRunError> {
+        if !self.node_rerun_on_resume() {
+            return Err(run_node_error(RunNodeError::RerunOnResumeRequired));
+        }
+
+        if options.use_as_output {
+            if self.output_delegated {
+                return Err(run_node_error(RunNodeError::OutputAlreadyDelegated(
+                    self.node_path.clone(),
+                )));
+            }
+            self.set_output_delegated(true);
+        }
+
+        let mut chain: Vec<ChainFrame> = Vec::new();
+        let mut ctxs: Vec<Context> = Vec::new();
+        let mut all_events: Vec<Event> = Vec::new();
+
+        let mut curr_parent_index: Option<usize> = None;
+        let mut curr_node = node;
+        let mut curr_run_id = options.run_id.clone();
+        let mut curr_input = node_input;
+
+        loop {
+            let curr_use_as_output = curr_parent_index.is_none() && options.use_as_output;
+
+            let mut runner = NodeRunner::new(curr_node.clone())
+                .with_use_as_output(curr_use_as_output)
+                .with_sub_branch(options.use_sub_branch)
+                .with_override_branch(options.override_branch.clone())
+                .with_override_isolation_scope(options.override_isolation_scope.clone());
+            if let Some(run_id) = &curr_run_id {
+                runner = runner.with_run_id(run_id.clone());
+            }
+
+            let parent_ctx: &Context = match curr_parent_index {
+                None => &*self,
+                Some(i) => &ctxs[i],
+            };
+            let (child_ctx, child_events) = runner
+                .run(parent_ctx, curr_input.clone(), BTreeMap::new())
+                .await;
+            all_events.extend(child_events);
+
+            let transfer_to_agent = child_ctx.actions().transfer_to_agent.clone();
+
+            if let Some(error_message) = child_ctx.error_message() {
+                return Err(workflow_error(WorkflowNodeError::DynamicNodeFail {
+                    message: format!("Dynamic node {} failed", curr_node.name()),
+                    error: error_message.to_string().into(),
+                    error_node_path: child_ctx.error_node_path().to_string(),
+                }));
+            }
+
+            if !child_ctx.interrupt_ids().is_empty() {
+                if curr_parent_index.is_none() {
+                    self.add_interrupt_ids(child_ctx.interrupt_ids());
+                }
+                return Ok(RunNodeOutcome::Interrupted(RunNodeOutput {
+                    output: None,
+                    events: all_events,
+                }));
+            }
+            if options.raise_on_wait
+                && child_ctx.output().is_none()
+                && transfer_to_agent.is_none()
+                && curr_node.wait_for_output()
+            {
+                return Ok(RunNodeOutcome::Interrupted(RunNodeOutput {
+                    output: None,
+                    events: all_events,
+                }));
+            }
+
+            let Some(target_name) = transfer_to_agent else {
+                return Ok(RunNodeOutcome::Completed(RunNodeOutput {
+                    output: child_ctx.output().cloned(),
+                    events: all_events,
+                }));
+            };
+
+            let Some(current_agent) = curr_node
+                .as_any()
+                .downcast_ref::<AgentNode>()
+                .map(|n| n.agent().clone())
+            else {
+                return Err(run_node_error(RunNodeError::OnlyAgentsCanTransfer));
+            };
+            let root_agent = current_agent.root_agent();
+
+            let curr_index = ctxs.len();
+            chain.push(ChainFrame {
+                node_name: curr_node.name().to_string(),
+                parent: curr_parent_index,
+            });
+            ctxs.push(child_ctx);
+
+            let outcome = resolve_and_derive_transfer_context(
+                &target_name,
+                &current_agent,
+                &root_agent,
+                &chain,
+                curr_index,
+                curr_parent_index,
+            )
+            .map_err(|e| run_node_error(RunNodeError::SelfTransfer(e.0)))?;
+
+            match outcome {
+                TransferOutcome::NotFound => {
+                    return Err(run_node_error(RunNodeError::TransferTargetNotFound(
+                        target_name,
+                    )));
+                }
+                TransferOutcome::Unrelated { target_agent } => {
+                    debug_assert_eq!(target_agent.name(), target_name);
+                    return Err(run_node_error(RunNodeError::UnrelatedTransfer(
+                        curr_node.name().to_string(),
+                        target_name,
+                    )));
+                }
+                TransferOutcome::Resolved {
+                    target_agent,
+                    next_parent,
+                } => {
+                    curr_parent_index = next_parent;
+                    curr_node =
+                        crate::workflow_agent_node::agent_node(target_agent, true, None, None)
+                            .map_err(|e| -> NodeRunError { e.to_string().into() })?;
+                    curr_run_id = None;
+                    curr_input = Value::Null;
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -969,5 +1257,232 @@ mod tests {
 
         let keys = ctx.list_artifacts().await.unwrap();
         assert_eq!(keys, vec!["f.txt".to_string()]);
+    }
+
+    // ------------------------------------------------------------------
+    // C0059/C0060: Context::run_node
+    // ------------------------------------------------------------------
+
+    mod run_node_tests {
+        use super::*;
+        use crate::base_agent::{AgentBehavior, AgentRunError, BaseAgent, NoopBehavior};
+        use crate::workflow_base_node::{NodeYield, NoopNodeBehavior};
+        use crate::workflow_function_node::{function_node, FunctionNodeBody};
+        use adk_events::node_info::NodeInfo;
+        use adk_events::RequestInput;
+        use std::future::Future;
+        use std::pin::Pin;
+
+        type TestBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+        fn ctx_with_rerun(rerun: bool) -> Context {
+            let ic =
+                InvocationContextBuilder::new("inv-1", Session::new("app", "user", "s1")).build();
+            Context::for_node(
+                ic,
+                "",
+                &[],
+                None,
+                "root",
+                "1",
+                BTreeMap::new(),
+                1,
+                false,
+                rerun,
+            )
+        }
+
+        #[rusty_tokio::test]
+        async fn errors_when_this_contexts_own_node_is_not_rerun_on_resume() {
+            let mut ctx = ctx_with_rerun(false);
+            let node = BaseNode::new("child", NoopNodeBehavior).unwrap();
+            let err = ctx
+                .run_node(node, Value::Null, RunNodeOptions::default())
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("rerun_on_resume=true"));
+        }
+
+        #[rusty_tokio::test]
+        async fn rejects_a_second_use_as_output_delegate_on_the_same_context() {
+            let mut ctx = context();
+            ctx.set_output_delegated(true);
+            let node = BaseNode::new("child", NoopNodeBehavior).unwrap();
+            let options = RunNodeOptions {
+                use_as_output: true,
+                ..Default::default()
+            };
+            let err = ctx.run_node(node, Value::Null, options).await.unwrap_err();
+            assert!(err
+                .to_string()
+                .contains("already has a use_as_output delegate"));
+        }
+
+        struct EchoBody;
+        impl FunctionNodeBody for EchoBody {
+            fn call<'a>(
+                &'a self,
+                _ctx: &'a mut Context,
+                node_input: Value,
+            ) -> TestBoxFuture<'a, Result<Vec<NodeYield>, NodeRunError>> {
+                Box::pin(async move { Ok(vec![NodeYield::Data(node_input)]) })
+            }
+        }
+
+        #[rusty_tokio::test]
+        async fn completes_and_returns_the_nodes_output_and_events() {
+            let mut ctx = context();
+            let node = function_node("child", false, None, None, None, EchoBody).unwrap();
+            let result = ctx
+                .run_node(
+                    node,
+                    Value::String("hi".to_string()),
+                    RunNodeOptions::default(),
+                )
+                .await
+                .unwrap();
+            match result {
+                RunNodeOutcome::Completed(output) => {
+                    assert_eq!(output.output, Some(Value::String("hi".to_string())));
+                    assert_eq!(output.events.len(), 1);
+                }
+                RunNodeOutcome::Interrupted(_) => panic!("expected Completed"),
+            }
+        }
+
+        struct AsksForInput;
+        impl FunctionNodeBody for AsksForInput {
+            fn call<'a>(
+                &'a self,
+                _ctx: &'a mut Context,
+                _node_input: Value,
+            ) -> TestBoxFuture<'a, Result<Vec<NodeYield>, NodeRunError>> {
+                Box::pin(async move {
+                    Ok(vec![NodeYield::RequestInput(RequestInput::new(
+                        Some("please confirm".to_string()),
+                        None,
+                        None,
+                    ))])
+                })
+            }
+        }
+
+        #[rusty_tokio::test]
+        async fn reports_interrupted_and_propagates_interrupt_ids_onto_self() {
+            let mut ctx = context();
+            let node = function_node("waiter", true, None, None, None, AsksForInput).unwrap();
+            let result = ctx
+                .run_node(node, Value::Null, RunNodeOptions::default())
+                .await
+                .unwrap();
+            match result {
+                RunNodeOutcome::Interrupted(output) => {
+                    assert!(output.output.is_none());
+                    assert_eq!(output.events.len(), 1);
+                }
+                RunNodeOutcome::Completed(_) => panic!("expected Interrupted"),
+            }
+            assert_eq!(ctx.interrupt_ids().len(), 1);
+        }
+
+        /// A minimal agent double: transfers to `transfer_to` if set,
+        /// otherwise yields a single event carrying `"<name>_output"`.
+        struct ScriptedAgent {
+            transfer_to: Option<String>,
+        }
+
+        impl AgentBehavior for ScriptedAgent {
+            fn run_async_impl<'a>(
+                &'a self,
+                ctx: &'a mut InvocationContext,
+            ) -> TestBoxFuture<'a, Result<Vec<Event>, AgentRunError>> {
+                let name = ctx.agent.as_ref().unwrap().name().to_string();
+                let transfer_to = self.transfer_to.clone();
+                let invocation_id = ctx.invocation_id.clone();
+                Box::pin(async move {
+                    let mut event = Event::new(invocation_id, name.clone(), NodeInfo::new(""));
+                    match transfer_to {
+                        Some(target) => event.actions.transfer_to_agent = Some(target),
+                        None => event.output = Some(Value::String(format!("{name}_output"))),
+                    }
+                    Ok(vec![event])
+                })
+            }
+
+            fn run_live_impl<'a>(
+                &'a self,
+                _ctx: &'a mut InvocationContext,
+            ) -> TestBoxFuture<'a, Result<Vec<Event>, AgentRunError>> {
+                Box::pin(async { Ok(Vec::new()) })
+            }
+        }
+
+        #[rusty_tokio::test]
+        async fn resolves_a_sibling_transfer_and_returns_the_targets_output() {
+            let agent_b = BaseAgent::new("agent_b", ScriptedAgent { transfer_to: None }).unwrap();
+            let agent_a = BaseAgent::new(
+                "agent_a",
+                ScriptedAgent {
+                    transfer_to: Some("agent_b".to_string()),
+                },
+            )
+            .unwrap();
+            let root = BaseAgent::build(
+                "root",
+                "",
+                vec![agent_a.clone(), agent_b.clone()],
+                Vec::new(),
+                Vec::new(),
+                NoopBehavior,
+            )
+            .unwrap();
+            let agent_a = root.find_agent("agent_a").unwrap();
+
+            let mut ctx = context();
+            let node = crate::workflow_agent_node::agent_node(agent_a, true, None, None).unwrap();
+            let result = ctx
+                .run_node(node, Value::Null, RunNodeOptions::default())
+                .await
+                .unwrap();
+            match result {
+                RunNodeOutcome::Completed(output) => {
+                    assert_eq!(
+                        output.output,
+                        Some(Value::String("agent_b_output".to_string()))
+                    );
+                    assert_eq!(output.events.len(), 2);
+                }
+                RunNodeOutcome::Interrupted(_) => panic!("expected Completed"),
+            }
+        }
+
+        #[rusty_tokio::test]
+        async fn surfaces_a_self_transfer_as_an_error() {
+            let agent_a = BaseAgent::new(
+                "agent_a",
+                ScriptedAgent {
+                    transfer_to: Some("agent_a".to_string()),
+                },
+            )
+            .unwrap();
+            let root = BaseAgent::build(
+                "root",
+                "",
+                vec![agent_a.clone()],
+                Vec::new(),
+                Vec::new(),
+                NoopBehavior,
+            )
+            .unwrap();
+            let agent_a = root.find_agent("agent_a").unwrap();
+
+            let mut ctx = context();
+            let node = crate::workflow_agent_node::agent_node(agent_a, true, None, None).unwrap();
+            let err = ctx
+                .run_node(node, Value::Null, RunNodeOptions::default())
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("cannot transfer to itself"));
+        }
     }
 }

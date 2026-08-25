@@ -31,10 +31,14 @@
 //! concrete subclass needs it. This only changes *when* events become
 //! available to a caller, not their content or order.
 //!
-//! **Deferred**: `BaseAgent._run_impl` (C0043, the workflow-node adapter)
-//! needs `workflow::BaseNode` (Phase 7) and is not implemented — `BaseAgent`
-//! is a standalone struct here, not a graph node, until that phase lands.
-//! OTel span/context propagation (`_instrumentation.record_agent_invocation`,
+//! **Deferred, no longer including C0043**: `BaseAgent._run_impl` (the
+//! workflow-node adapter) is ported as [`crate::workflow_agent_node::
+//! agent_node`]/`AgentNode` instead of a method directly on `BaseAgent`
+//! — that module's own doc explains why (`BaseAgent` stays a standalone
+//! struct here, not itself a graph node; the adapter wraps a `BaseAgent`
+//! handle into a real `workflow_base_node::BaseNode` rather than
+//! `BaseAgent` implementing `NodeBehavior` directly). OTel span/context
+//! propagation (`_instrumentation.record_agent_invocation`,
 //! `opentelemetry::context::attach`/`detach`) is Phase 12 and is a no-op
 //! here. `PluginManager`'s agent-level hooks (C0354) are real (see
 //! `services.rs`) and wired here: `run_async`/`run_live` now read the

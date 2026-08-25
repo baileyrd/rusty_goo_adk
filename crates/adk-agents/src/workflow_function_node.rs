@@ -247,8 +247,18 @@ mod tests {
             "wf_auth:echo@1".to_string(),
             Value::String("resumed-key".to_string()),
         );
-        let mut node_ctx =
-            Context::for_node(ic, "", &[], None, "echo", "1", resume_inputs, 1, false);
+        let mut node_ctx = Context::for_node(
+            ic,
+            "",
+            &[],
+            None,
+            "echo",
+            "1",
+            resume_inputs,
+            1,
+            false,
+            true,
+        );
 
         let events = node
             .run(&mut node_ctx, Value::String("hi".to_string()))

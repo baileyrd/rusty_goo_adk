@@ -27,21 +27,28 @@
 //! [`flush_output_and_route`], mirroring the source's own unconditional
 //! post-loop `_flush_output_and_deltas` call.
 //!
-//! **`NodeInterruptedError` catch, disclosed as unreachable today**:
-//! the source's `_execute_node` catches `NodeInterruptedError` — raised
-//! only by a *dynamic* child node scheduled via `ctx.run_node()`
-//! (`context.rs`'s own module doc: dynamic dispatch is C0059/C0060,
-//! still deferred). Nothing in this port can raise it yet, so this
-//! batch doesn't port a corresponding catch — there is nothing to
-//! catch it from. Revisit once `ctx.run_node()` lands.
+//! **`NodeInterruptedError` catch, still not ported — but no longer for
+//! lack of a raiser**: the source's `_execute_node` catches
+//! `NodeInterruptedError`, raised by a *dynamic* child node scheduled via
+//! `ctx.run_node()` (C0059/C0060, now built — see `context.rs`'s own
+//! module doc). This port's `Context::run_node` never raises it in the
+//! first place: its own doc explains why "interrupted" is a distinct
+//! `Ok` outcome instead of an unraisable-by-design exception threading
+//! through `Result`/`?`, so a `NodeBehavior::run_impl` that calls
+//! `run_node` observes `RunNodeOutcome::Interrupted` directly and folds
+//! it into its own returned yields — there is still nothing for a catch
+//! *here* to intercept.
 //!
-//! **`WorkflowNodeError::DynamicNodeFail` handling, kept even though
-//! unreachable today**: mirrors `validate_chat_agent_wiring`'s
-//! precedent in `workflow_graph_validation.rs` — a real, checked branch
-//! that happens to never fire yet (nothing in this port currently
-//! *produces* a `DynamicNodeFail`, for the same dynamic-dispatch reason
-//! above), wired correctly now so a future batch that adds dynamic
-//! dispatch doesn't also have to revisit this one.
+//! **`WorkflowNodeError::DynamicNodeFail` handling, now reachable**:
+//! mirrors `validate_chat_agent_wiring`'s precedent in
+//! `workflow_graph_validation.rs` — wired correctly ahead of its first
+//! producer, which arrived once `Context::run_node` landed:
+//! `run_node`'s own `Err` path constructs this exact variant (via
+//! [`workflow_error`], now `pub(crate)` for that call site) when a
+//! dynamically-dispatched node's `Context::error_message` is set, so a
+//! node whose body calls `ctx.run_node()` and gets back a failed child
+//! now has that failure correctly named `DynamicNodeFailError` by
+//! [`error_type_name`] when it bubbles up through *this* `NodeRunner`.
 //!
 //! **Exception type name for retry matching, adaptation disclosed**:
 //! `workflow_retry_utils.rs` already discloses that `should_retry_node`
@@ -94,7 +101,12 @@ impl std::fmt::Display for BoxedWorkflowNodeError {
 
 impl std::error::Error for BoxedWorkflowNodeError {}
 
-fn workflow_error(error: WorkflowNodeError) -> NodeRunError {
+/// Bridges a [`WorkflowNodeError`] into a [`NodeRunError`] — `pub(crate)`
+/// so [`crate::context::Context::run_node`] (C0059/C0060) can construct
+/// the same `DynamicNodeFail` shape this module's own error-type-naming
+/// (see [`error_type_name`]) already recognizes when it bubbles back up
+/// through a future `NodeRunner::run` call.
+pub(crate) fn workflow_error(error: WorkflowNodeError) -> NodeRunError {
     Box::new(BoxedWorkflowNodeError(error))
 }
 
@@ -278,6 +290,7 @@ impl NodeRunner {
             resume_inputs,
             attempt_count,
             self.use_as_output,
+            self.node.rerun_on_resume(),
         );
 
         if let Some(scope) = &self.override_isolation_scope {
@@ -702,6 +715,7 @@ mod tests {
             "1",
             BTreeMap::new(),
             1,
+            false,
             false,
         );
         let (ctx, _events) = runner.run(&parent, Value::Null, BTreeMap::new()).await;

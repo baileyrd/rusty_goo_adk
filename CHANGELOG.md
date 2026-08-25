@@ -5,6 +5,37 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- Dynamic workflow-node dispatch: `Context::run_node` (C0059, DONE) and
+  its in-place agent-transfer loop (C0060, DONE — Mode 1/Workflow-scheduled
+  dispatch disclosed as not ported, since `Workflow`/C0298 and
+  `DynamicNodeScheduler`/C0318-C0319 don't exist yet; always takes Mode 2,
+  standalone via `NodeRunner`). New `RunNodeOptions`/`RunNodeOutcome`/
+  `RunNodeOutput` on `context.rs`: events are returned (not enqueued, this
+  port's usual "eagerly collected `Vec`" adaptation) and an interrupted
+  child surfaces as `RunNodeOutcome::Interrupted` rather than the source's
+  raised (deliberately non-catchable) `NodeInterruptedError` — a
+  `NodeBehavior::run_impl` calling `run_node` observes it directly instead
+  of needing a dedicated exception catch. New `Context::for_node` field
+  `node_rerun_on_resume` (mirrors the source's `self._node_rerun_on_resume`,
+  the *caller's* own rerun-on-resume flag `run_node` validates against —
+  not the dispatched node's). New `crates/adk-agents/src/
+  workflow_transfer_utils.rs`: `resolve_and_derive_transfer_context`
+  (C0325, DONE) resolves self/child/sibling/parent-climb/root-bypass-
+  fallback/unrelated transfer targets against a local, per-call
+  `ChainFrame` ancestry list built by `run_node`'s own loop — adapted from
+  the source's permanent `Context.node`/`Context.parent_ctx` object
+  references, deliberately never added to this port's `Context` (would
+  mean either an `Arc`-shared `Context`, a breaking change to every
+  existing `&mut Context` call site, or an owned `Context` tree with no
+  behavioral payoff). New `crates/adk-agents/src/workflow_agent_node.rs`:
+  `agent_node`/`AgentNode` (C0043, DONE) wraps a `BaseAgent` as a
+  `workflow_base_node::BaseNode`, the generic `BaseAgent._run_impl`
+  adapter — ported as a standalone wrapper rather than a `BaseAgent`
+  method, since this port's `BaseAgent` and `BaseNode` are unrelated types
+  (the source's `BaseAgent` is itself a `BaseNode` subclass). Scoped to
+  the generic run-once-collect-every-event adapter; `LlmAgent`'s
+  task/chat-mode dispatch loop and task delegation (`_llm_agent_wrapper.py`)
+  is the separate, larger C0407.
 - `_nl_planning`'s request/response processors (C0176/C0179, both DONE,
   closing C0200 as a side effect): `LlmFlow` gains a `planner: Option<
   Arc<dyn BasePlanner>>` field and `with_planner` builder — the same
