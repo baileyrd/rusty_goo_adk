@@ -22,6 +22,51 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `models/`: P10 Anthropic (Claude) backend, first slice (C0540/C0542, both DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-models/src/anthropic_conversion.rs` —
+  `ToolUseIdSanitizer` (C0540): maps invalid `tool_use` ids to
+  deterministic `toolu_fallback_N` placeholders, reusing one instance
+  per conversation so a `tool_use` and its paired `tool_result` sharing
+  the same invalid source id get matching outputs.
+- **Added:** `to_google_genai_finish_reason`/`AnthropicUsage`/
+  `extract_prompt_token_count`/`extract_cached_token_count`/
+  `extract_cache_creation_token_count`/`extract_thinking_token_count`
+  (C0542): Anthropic stop-reason → GenAI finish-reason mapping (returned
+  as the same raw wire string `LlmResponse::finish_reason` already
+  holds, not a typed enum — there's nothing left to normalize away,
+  same situation already disclosed for C0661), plus token-usage
+  extraction/reconciliation (folding Anthropic's disjoint cache-read/
+  cache-write token fields into a single prompt count, and subtracting
+  extended-thinking tokens out of the output count with a non-negative
+  clamp).
+- No new dependency: this port talks to Anthropic's Messages API via
+  plain `reqwest::blocking` (the same recipe `gemini.rs` already
+  established for Gemini, not the Python source's `anthropic` SDK,
+  which has no Rust equivalent to add and isn't needed for a plain
+  HTTPS JSON API).
+- **Deliberately a small first slice, disclosed at length**: P10 is a
+  9-row phase. This batch ports only the two pieces that are pure,
+  self-contained, and testable without designing any Anthropic
+  wire-format type beyond the minimal `AnthropicUsage` struct declared
+  alongside them (itself ahead of its own real caller, the still-deferred
+  `message_to_generate_content_response`). The rest — the actual
+  `AnthropicLlm` `BaseLlm` backend + credential resolution (C0536/
+  C0537), extended-thinking/reasoning-effort mapping (C0538), the full
+  content↔block conversion including image/PDF/tool-result media
+  handling (C0539), tool-schema conversion (C0541), and SSE streaming
+  (C0543/C0544) — stays `REQUIRED`, not blocked but genuinely separable,
+  larger work needing either a 7-variant wire-shape enum this port can't
+  verify without a live Anthropic endpoint to test against, or new
+  fields on `GenerateContentConfigStub` that don't exist yet.
+- **Tests:** `crates/adk-models/src/anthropic_conversion.rs::tests::*`
+  (18 tests: sanitizer pass-through/fallback/memoization/distinctness,
+  every finish-reason mapping branch, and token-usage extraction
+  including the thinking-token clamp).
+
+---
+
 ## PR #TBD — `models/`+`agents/`: P12 telemetry pure-logic batch (C0668/C0669/C0672/C0673, all DONE; C0661, partial)
 **2026-08-25**
 
