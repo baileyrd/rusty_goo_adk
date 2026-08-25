@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Fixed
+- `crates/adk-flows/src/request_confirmation.rs`: closed most of the
+  remaining gap in C0172 (`request_confirmation`) — `resolve_confirmation_targets`
+  (the full 3-check validation: registered in session history, author
+  match, tool-registered + requires-confirmation-or-dynamically-requested,
+  name/args match) and `process_request_confirmations` (the processor's
+  Steps 1-4: parse the last user event's approvals, dedup already-consumed
+  confirmations, resolve targets, re-execute via `functions::execute_function_calls`)
+  are now real, tested code. Corrects a stale blocker claim (same pattern
+  as C0178): `BaseTool`/`ToolConfirmation`/`ToolContext` all exist in
+  `adk-tools`, which `adk-flows` already depends on. Still `Partial:` —
+  not wired into `LlmFlow::preprocess`, since `tools_dict` auto-resolution
+  needs `LlmAgent.canonical_tools()` (C0092, still blocked). 16 new
+  tests.
 - `crates/adk-flows/src/output_schema.rs`/`llm_flow.rs`: closed out C0178
   (`_output_schema_processor`) — `apply_output_schema_processor` now
   actually injects the synthetic `set_model_response` tool + its
