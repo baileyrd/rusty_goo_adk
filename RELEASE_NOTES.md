@@ -22,6 +22,46 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/`: NodeTool (C0490, DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-tools/src/node_tool.rs` — `NodeTool`, wrapping a
+  workflow `BaseNode` as a callable `BaseTool` so an `LlmAgent` can invoke
+  it like any other function. Unblocked once `workflow::BaseNode`/
+  `Context::run_node` landed earlier this migration; a stale cross-reference
+  on C0491's own evidence (which called this row blocked on that engine)
+  is corrected alongside it.
+- Ports `_get_declaration`'s object-schema wrapping (a non-object
+  `input_schema` gets wrapped under `{"type":"object","properties":
+  {"request":<schema>},"required":["request"]}`, since the GenAI API
+  requires an object-typed `parameters_json_schema`) and `run_async`'s
+  matching `args["request"]` extraction, both verified directly against
+  `_node_tool.py` rather than assumed. `run_async`'s catch-all
+  (`except Exception as e: return f'Error running node {name}: {e}'`)
+  turns a failed node run into ordinary tool *output*, not a raised tool
+  error — ported as `Ok(Value::String(...))`, called out explicitly in
+  the module doc since the opposite (mapping to `Err(ToolError::...)`)
+  would have been an easy, silent behavioral regression.
+- An interrupted node run returns `Ok(Value::Null)` with no separate
+  propagation step needed: `Context::run_node` already writes the
+  interrupt ids onto the calling `Context` in place, the same contract
+  `ParallelWorker` (C0317) already relies on.
+- **Disclosed, no Rust equivalent needed (not gaps):** the source's
+  `isinstance(node, BaseAgent)` guard (foreclosed by the type system —
+  `BaseNode`/`BaseAgent` are disjoint types) and the `FunctionNode`/
+  `parameter_binding` rebinding block (this port's `FunctionNode` has no
+  `parameter_binding` concept at all, and the concrete type isn't even
+  `pub`). The Pydantic-`BaseModel`-vs-dict-schema branch in both
+  `_get_declaration`/`run_async` is unreachable by construction — this
+  port's `input_schema` is always an opaque `Value`, never a class.
+- **Tests:** `crates/adk-tools/src/node_tool.rs::tests::*` (8 tests:
+  missing-input-schema construction error, name/description defaulting,
+  declaration pass-through vs. request-wrapping, a normal run, an
+  interrupted run with `context.interrupt_ids()` asserted non-empty, and
+  a failed run stringified into a successful result).
+
+---
+
 ## PR #TBD — `eval/`: P11 local LLM-judge metrics batch (C0592/C0593/C0595/C0598, all DONE)
 **2026-08-25**
 

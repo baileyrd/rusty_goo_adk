@@ -10,8 +10,8 @@
 //! C0592/C0593/C0595/C0598) are now built too, once C0600's `LlmAsJudge`
 //! harness landed — but **cannot** register here regardless: they're
 //! inherently async (the harness awaits a judge-model call), while this
-//! registry's [`EvaluatorFactory`] constructs a sync `Box<dyn Evaluator
-//! + Send + Sync>` and `Evaluator::evaluate_invocations` is deliberately
+//! registry's [`EvaluatorFactory`] constructs a sync boxed `Evaluator`
+//! trait object and `Evaluator::evaluate_invocations` is deliberately
 //! sync (see `evaluator.rs`'s own doc) — a structural mismatch, not a
 //! temporary gap this registry will close once more evaluators exist. The
 //! remaining 8 (`ResponseEvaluator`/`SafetyEvaluatorV1`/the Vertex-delegated
