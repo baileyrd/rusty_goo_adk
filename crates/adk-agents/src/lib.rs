@@ -190,6 +190,7 @@ pub mod workflow_errors;
 pub mod workflow_graph;
 pub mod workflow_graph_validation;
 pub mod workflow_hitl_utils;
+pub mod workflow_node_runner;
 pub mod workflow_node_state;
 pub mod workflow_node_status;
 pub mod workflow_retry_config;

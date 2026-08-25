@@ -22,6 +22,42 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `workflow/`: `NodeRunner`, P7 Chunk 3 (C0310/C0311/C0312, all DONE)
+**2026-08-25**
+
+- **Added:** `NodeRunner` (`workflow_node_runner.rs`) — the per-node
+  executor directly below the still-unbuilt `Workflow` orchestrator.
+  Drives `BaseNode::run` with retry (reusing Chunk 1's
+  `should_retry_node`/`get_retry_delay`), a timeout enforced via
+  `rusty_tokio::time::timeout` (converted to `WorkflowNodeError::Timeout`
+  on expiry), and result-tracking: writes a node's output/route/
+  interrupt-ids onto its child `Context`, filtering to "native" events
+  only (an author check that prevents a nested structured node's own
+  internal decisions from bubbling up as if they were this node's own),
+  and stamps author/invocation-id/node-path/branch/output-for/
+  isolation-scope onto every emitted event.
+- **Added:** `Context::for_node` (`context.rs`) — an additive
+  constructor for the child context a node run gets, deriving
+  `node_path` via `NodePathBuilder` (mirroring the source's own
+  `_derive_node_path`) and carrying `run_id`/`attempt_count`/
+  `resume_inputs`/`output_for_ancestors`/the emitted-output-or-route
+  flags/error fields the retry loop and trailing flush need.
+  `Context::new`'s existing call sites and signature are untouched.
+- **Narrowed, disclosed:** resume-inputs session-history rehydration
+  (`_reconstruct_node_states`) isn't ported — it needs the not-yet-built
+  replay stack (C0320-C0323); `resume_inputs` are only ever what the
+  caller explicitly passes to `NodeRunner::run`. The source's
+  `NodeInterruptedError` catch isn't ported either, since nothing in
+  this port can raise it yet (only a dynamic child node via
+  `ctx.run_node()` can, and that's still deferred, C0059/C0060).
+  `WorkflowNodeError`/`ContextError` — this port's own sovereign
+  `rusty_err::Error`, not `std::error::Error` — are bridged into
+  `NodeRunError` (the `Box<dyn std::error::Error + Send + Sync>`
+  `BaseNode::run` already returns) via a local newtype/string
+  conversion rather than a direct `impl std::error::Error`, which would
+  conflict with `rusty_err`'s own blanket bridge running the other way.
+- 7 new tests (`cargo test -p adk-agents workflow_node_runner`).
+
 ## PR #TBD — `workflow/`: `BaseNode`/`Graph`/`validate_graph`/HITL utils, P7 Chunk 2 (C0294/C0295/C0297-narrowed/C0328/C0329, all DONE)
 **2026-08-25**
 

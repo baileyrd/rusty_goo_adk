@@ -5,6 +5,37 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/workflow_node_runner.rs`: P7 workflow/graph
+  engine Chunk 3 — `NodeRunner` (C0310/C0311/C0312, all DONE), the
+  per-node executor directly below the still-unbuilt `Workflow`
+  orchestrator (C0298-C0306). Drives `BaseNode::run` with retry (per
+  the node's `retry_config`, reusing Chunk 1's `should_retry_node`/
+  `get_retry_delay`), a `rusty_tokio::time::timeout`-enforced timeout
+  (→ `WorkflowNodeError::Timeout`), and result-tracking (output/route/
+  interrupt-ids, "native event" author filtering, branch/author/
+  invocation-id/output-for stamping). `crates/adk-agents/src/context.rs`
+  grows a new `Context::for_node` constructor (additive — `node_path`/
+  `run_id`/`attempt_count`/`resume_inputs`/`output_for_ancestors`/
+  emitted-flags/error fields; `Context::new`'s existing call sites
+  untouched) computing the node path via `NodePathBuilder`, the same
+  singleton-safe pattern already established for `BaseNode::start`'s
+  identity. `State` grows `take_delta` (returns and clears the pending
+  state delta, `pub(crate)`) for the trailing flush step. Adaptations,
+  disclosed at length in the module doc: `BaseNode::run` already
+  returns one eagerly-collected `Vec<Event>` rather than streaming
+  through a live queue (the same adaptation `AgentBehavior
+  ::run_async_impl` established), so `NodeRunner::run` returns that
+  same shape instead of enqueueing, and the source's per-event
+  delta-flush collapses into one trailing flush since nothing here
+  emits partial events yet; `WorkflowNodeError`/`ContextError` are this
+  port's own sovereign `rusty_err::Error` (not `std::error::Error`), so
+  they're bridged into `NodeRunError` via a local newtype/string
+  conversion rather than a direct `impl std::error::Error` (which would
+  conflict with `rusty_err`'s own blanket bridge the other way); the
+  source's `NodeInterruptedError` catch and resume-inputs session-history
+  rehydration aren't ported since nothing in this port can raise the
+  former or build the latter yet (both need still-deferred dynamic
+  dispatch / the replay stack, C0059/C0060, C0320-C0323). 7 new tests.
 - New `crates/adk-agents/src/workflow_{base_node,graph,graph_validation,
   hitl_utils}.rs`: P7 workflow/graph engine Chunk 2 — `BaseNode`
   (C0294/C0295), `Edge`/`Graph`/routing (C0297, narrowed), `validate_graph`

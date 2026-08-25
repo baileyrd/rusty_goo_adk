@@ -101,6 +101,15 @@ impl State {
     pub fn delta_map(&self) -> BTreeMap<String, Value> {
         self.delta.clone()
     }
+
+    /// Returns the pending-commit delta and clears it — used by
+    /// `workflow_node_runner::NodeRunner`'s trailing flush step, which
+    /// moves any still-unflushed delta onto a synthesized event and
+    /// starts the next node run with a clean slate (mirroring the
+    /// source's `state_delta.clear()` after copying it onto an event).
+    pub(crate) fn take_delta(&mut self) -> BTreeMap<String, Value> {
+        std::mem::take(&mut self.delta)
+    }
 }
 
 #[cfg(test)]
