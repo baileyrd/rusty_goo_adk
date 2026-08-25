@@ -22,6 +22,43 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `plugins/_reflect_retry_utils.py`: `TrackingScope`/`ScopedFailureTracker` (C0370)
+**2026-08-25**
+
+- **Added:** `adk-agents::reflect_retry_utils::{TrackingScope,
+  resolve_scope_key, ScopedFailureTracker}` — the invocation-vs-global
+  failure-tracking layer behind the source's two reflect-and-retry
+  plugins. `resolve_scope_key` returns the fixed global-scope constant
+  for `TrackingScope::Global`, or the given `invocation_id` for
+  `TrackingScope::Invocation` (erroring, as the source's `raise
+  ValueError` does, when none is given). `ScopedFailureTracker::{increment,
+  reset}` atomically track a per-item failure count keyed by scope,
+  used to enforce a retry limit and clean up state once an item
+  succeeds again.
+- **Changed (port shape):** the source's `asyncio.Lock` becomes a plain
+  `std::sync::Mutex` — its critical section is a synchronous map
+  mutation with no `await` inside, the same shape
+  `InMemoryMemoryService`/`InMemoryCredentialService` already use
+  elsewhere in this crate. `increment`/`reset` stay `async fn` to keep
+  the same call shape as the source's `async def` methods, even though
+  nothing inside actually awaits.
+- **Known limitation:** this module's only real-world callers,
+  `ReflectAndRetryModelPlugin` (C0368) and `ReflectAndRetryToolPlugin`
+  (C0369), are both still blocked on the `before_model_callback`/
+  `before_tool_callback` crate-cycle deferral (C0355/C0356) — so this
+  lands as ready-to-consume infrastructure with no live caller yet in
+  this port, same as recent precedent
+  (`get_function_responses_from_content` ahead of its own still-blocked
+  caller). `_reflect_retry_utils.py` itself imports neither
+  `LlmRequest` nor `BaseTool`/`ToolContext`, so it has no dependency on
+  that blocked machinery and needed no new crate dependency.
+- **Testing:** 8 new tests — both `resolve_scope_key` branches plus its
+  error case, `increment` accumulating and staying independent across
+  items and scopes, and `reset` removing only the targeted item
+  (including as a no-op on an unknown scope/item).
+
+---
+
 ## PR #TBD — `auth/oauth2_discovery.py`: `OAuth2DiscoveryManager` (C0534, C0535)
 **2026-08-25**
 

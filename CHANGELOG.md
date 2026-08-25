@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/reflect_retry_utils.rs`:
+  `TrackingScope`/`resolve_scope_key`/`ScopedFailureTracker` (C0370
+  DONE) — the invocation-vs-global failure-tracking layer behind the
+  still-unbuilt reflect-and-retry plugins (C0368/C0369). `asyncio.Lock`
+  ported as `std::sync::Mutex` (a synchronous-critical-section lock, no
+  `await` inside — the same shape `InMemoryMemoryService`/
+  `InMemoryCredentialService` already use); `increment`/`reset` stay
+  `async fn` to mirror the source's own `async def` signatures. Built
+  ahead of its callers, same as recent precedent
+  (`get_function_responses_from_content`,
+  `session_util.rs`/`artifact_util.rs`) — C0368/C0369 both route through
+  the still-blocked `before_model_callback`/`before_tool_callback`
+  hooks (C0355/C0356), but this module depends on neither. 8 new tests.
 - New `crates/adk-agents/src/oauth2_discovery.rs`:
   `AuthorizationServerMetadata` (RFC8414) and `ProtectedResourceMetadata`
   (RFC9728), C0533's two data models. Field names stay literal
