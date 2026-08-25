@@ -54,11 +54,25 @@ impl NodePathBuilder {
         self.segments.last().map(|s| s.node.as_str()).unwrap_or("")
     }
 
-    /// Alias for [`Self::node_name`] — the source exposes both `name` (via
-    /// `NodeInfo`) and a distinct `leaf_segment` concept; here they
-    /// coincide since a segment carries no extra data beyond node+run_id.
-    pub fn leaf_segment(&self) -> &str {
-        self.node_name()
+    /// The leaf segment's full string form (`"node"` or `"node@run_id"`),
+    /// or `""` for an empty path — `_NodePathBuilder.leaf_segment` in the
+    /// source, a distinct property from [`Self::node_name`]/`NodeInfo
+    /// .name` (which strips `@run_id`; confirmed by reading `event.py`'s
+    /// own `Event.name`/`NodeInfo.name`, a separate computed property
+    /// from `_NodePathBuilder.leaf_segment`, which does not strip it).
+    /// An earlier revision of this method aliased `node_name` directly,
+    /// conflating the two — fixed here (no prior caller depended on that
+    /// behavior, verified before changing it) since
+    /// `workflow_rehydration_utils::reconstruct_node_states` (C0320)
+    /// needs the real, run_id-inclusive segment as a map key.
+    pub fn leaf_segment(&self) -> String {
+        match self.segments.last() {
+            Some(segment) => match &segment.run_id {
+                Some(run_id) => format!("{}@{}", segment.node, run_id),
+                None => segment.node.clone(),
+            },
+            None => String::new(),
+        }
     }
 
     /// The `run_id` tagged on the leaf segment, if any — this is the

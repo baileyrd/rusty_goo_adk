@@ -22,6 +22,60 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `workflow/`: the replay/rehydration stack, P7 Chunk 4 (C0320/C0321/C0322/C0323, all DONE)
+**2026-08-25**
+
+- **Added:** `workflow_rehydration_utils.rs` (C0320) — rebuilds per-node
+  scan state from session events (`reconstruct_node_states`), extracts
+  an interrupt's response schema off its `RequestInput` function call,
+  and classifies terminal events (`is_terminal_event`: output, route,
+  error, or interrupt).
+- **Added:** `workflow_replay_interceptor.rs` (C0321) — `check_interception`,
+  the core replay decision: rerun natively, fast-forward a cached
+  output/route, or stay waiting on unresolved interrupts, across the
+  source's four still-reachable cases. `create_mock_context` builds a
+  `Context` carrying cached results with no execution, using only the
+  already-shipped guarded `Context` API (`set_output`/`set_route`/
+  `add_interrupt_ids`/`actions_mut`) — no new `Context` surface needed.
+- **Added:** `workflow_replay_manager.rs` (C0322) — `ReplayManager`
+  unifies event indexing (by direct and transitive parent path),
+  `get_events_for_rehydration`'s pre-filtered event lookup with
+  top-level user-prompt merging, and per-parent sequence-barrier setup
+  for (once built) dynamic nodes.
+- **Added:** `workflow_replay_sequence_barrier.rs` (C0323) —
+  `ReplaySequenceBarrier` enforces deterministic chronological replay
+  ordering, including the default 15s timeout and the source's exact
+  "Replay divergence detected" error message.
+- **No caller yet, disclosed:** the only real caller in the source,
+  `Workflow` (C0298-C0306), stays blocked on `Graph::from_edge_items`
+  (C0327) and `DynamicNodeScheduler` (C0318/C0319) — confirmed still
+  blocked before starting this batch, since dynamic dispatch needs a
+  seam over `BaseNode` this port's concrete-struct `BaseNode` doesn't
+  have. Every function/type in this batch is directly testable today
+  against constructed `Context`/`Event` fixtures regardless — the same
+  situation Chunk 1's pure-data primitives were in before Chunk 2/3
+  used them.
+- **Narrowed, disclosed:** `process_rehydrated_output`/
+  `validate_resume_response` can't run real schema validation (no
+  TypeAdapter/pydantic — `BaseNode::output_schema` stays an opaque
+  `Value` placeholder), narrowing to a JSON-parse-or-fallback plus
+  primitive-type (`integer`/`number`/`string`/`boolean`) coercion only.
+  `check_interception` drops the same-turn `DynamicNodeRun` case and the
+  `isinstance(node, Workflow)` check for the same still-blocked/
+  not-yet-built reasons.
+- **Fixed, discovered while porting this batch:**
+  `workflow_hitl_utils::create_request_input_event` was building its
+  `response_schema` function-call argument under the wrong (camelCase)
+  wire key — the source explicitly re-adds this one field as snake_case
+  after its otherwise-camelCase `by_alias=True` dump, confirmed by
+  reading `_workflow_hitl_utils.py` directly. `adk-events
+  ::node_path_builder::NodePathBuilder::leaf_segment` was wrongly
+  aliased to `node_name` (dropping `run_id`) instead of the source's
+  own distinct, run_id-preserving `leaf_segment` property — fixed since
+  this batch is `leaf_segment`'s first real caller and nothing else
+  depended on the old behavior.
+- 35 new tests across the four modules.
+
 ## PR #TBD — `workflow/`: `NodeRunner`, P7 Chunk 3 (C0310/C0311/C0312, all DONE)
 **2026-08-25**
 

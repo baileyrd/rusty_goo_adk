@@ -5,6 +5,37 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/workflow_{rehydration_utils,replay_interceptor,
+  replay_manager,replay_sequence_barrier}.rs`: P7 workflow/graph engine
+  Chunk 4 — the replay/rehydration stack (C0320/C0321/C0322/C0323, all
+  DONE), unblocked now that `NodeRunner` (Chunk 3) exists. Rebuilds
+  per-node state from session events (`reconstruct_node_states`,
+  `is_terminal_event`), decides whether a node should re-run, fast-forward,
+  or stay waiting on resume (`check_interception`, `create_mock_context`),
+  and unifies event indexing/sequence-barrier synchronization for
+  deterministic replay ordering (`ReplayManager`, `ReplaySequenceBarrier`).
+  Every piece is directly testable today against constructed `Context`/
+  `Event` fixtures — the same "no caller yet" situation Chunk 1's pure-data
+  primitives were in before Chunk 2/3 used them; the only real caller,
+  `Workflow` (C0298-C0306), stays blocked on `Graph::from_edge_items`
+  (C0327) and `DynamicNodeScheduler` (C0318/C0319, confirmed still blocked:
+  its `__call__` needs a dynamic-dispatch seam over `BaseNode` that this
+  port's concrete-struct `BaseNode` doesn't have). Narrowed, disclosed at
+  length in the module docs: `process_rehydrated_output`/
+  `validate_resume_response` can't run real schema validation (no
+  TypeAdapter/pydantic — `BaseNode::output_schema` stays an opaque `Value`
+  placeholder) and narrow to JSON-parse-or-fallback plus primitive-type
+  coercion only; `check_interception` drops the same-turn `DynamicNodeRun`
+  case (C0318/C0319 still blocked) and the `isinstance(node, Workflow)`
+  check (`Workflow` isn't built, so nothing can ever be one). Also fixed,
+  discovered while porting this batch: `workflow_hitl_utils
+  ::create_request_input_event` was building its `response_schema`
+  function-call arg under the wrong (camelCase) wire key — the source
+  explicitly re-adds it as snake_case after its `by_alias=True` dump; and
+  `adk-events::node_path_builder::NodePathBuilder::leaf_segment` was
+  wrongly aliased to `node_name` (dropping `run_id`) instead of the
+  source's own distinct, run_id-preserving `leaf_segment` property — fixed
+  since this batch is `leaf_segment`'s first real caller. 35 new tests.
 - New `crates/adk-agents/src/workflow_node_runner.rs`: P7 workflow/graph
   engine Chunk 3 — `NodeRunner` (C0310/C0311/C0312, all DONE), the
   per-node executor directly below the still-unbuilt `Workflow`
