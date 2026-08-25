@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-tools/src/finish_task_tool.rs`: `FinishTaskTool`
+  (C0099) — signals `LlmAgent` task completion, wraps a non-object
+  `output_schema` under a `result` key (hoisting `$defs` to the wrapped
+  schema's root so `$ref` pointers stay valid), and appends its "don't
+  call this prematurely" instruction via `process_llm_request`. Plus its
+  two pure helpers, `get_output_wrapper_key` and
+  `is_finish_task_terminal_fr`. Disclosed narrowings: takes
+  `output_schema: Option<Value>` directly rather than a whole `LlmAgent`
+  (the source's own `self._task_agent_name` is set but never read
+  anywhere in the source tree); `run_async` never validates `args`
+  against the schema and always succeeds, since this port has no
+  Pydantic-equivalent validator (same limitation `set_model_response_tool.rs`,
+  C0437, already discloses). Scoped to the tool itself — not the
+  task-mode turn loop that would construct and wire it into a running
+  agent (C0333/C0834/C0887), which needs infrastructure this port
+  doesn't have yet. 13 new tests.
 - New `crates/adk-flows/src/compaction_request_processor.rs`: the
   `compaction` request processor (C0173), wired into
   `LlmFlow::preprocess` right after `instructions`/`identity` and before
