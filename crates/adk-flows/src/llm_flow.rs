@@ -68,12 +68,41 @@
 //!     mirroring `AgentBehavior::as_any`'s already-reviewed pattern in
 //!     `adk-agents`) plus [`Gemini::use_interactions_api`]
 //!     (`adk_models::gemini`) — both real fields, no longer blocked.
-//!   - **No telemetry spans, before/after/on-error model callback
-//!     dispatch** (C0154, C0155): `LlmAgent.before_model_callback`/
-//!     `after_model_callback` exist as real fields but dispatching them
-//!     needs a `Context`-based short-circuit path like the agent-level
-//!     callbacks `BaseAgent` already has (C0038/C0045) — a follow-up, not
-//!     built here.
+//!   - **Before/after/on-error model callback dispatch, now wired
+//!     (C0153-C0155)**: [`LlmFlow::handle_before_model_callback`]/
+//!     [`LlmFlow::handle_after_model_callback`]/
+//!     [`LlmFlow::handle_on_model_error_callback`] mirror
+//!     `BaseAgent::handle_before_agent_callback`'s short-circuit shape
+//!     (C0038/C0045) exactly, wired around the bare model call in
+//!     [`LlmFlow::run_one_step`] — [`LlmFlow::call_model`]'s own
+//!     signature/behavior stays untouched (an already-shipped public
+//!     method; the dispatch wraps it rather than reaching inside it).
+//!     **No telemetry spans** — no OTel backend exists in this port.
+//!     **No plugin-manager half** — `adk-agents::services::PluginManager`
+//!     can't grow model-level hooks without an `adk-agents`↔`adk-models`
+//!     crate cycle (its own module doc discloses this explicitly), so
+//!     only the agent-canonical callback chain runs. **No grounding-metadata-
+//!     from-session-state workaround** (the `google_search_agent`
+//!     special case) — needs `agent.canonical_tools()`, blocked on the
+//!     same C0092 tree-fusion gap as everything else that needs it.
+//!     **`LlmCallback`'s pre-existing narrowing, sharper for the
+//!     on-error case**: this type (`Fn(&mut Context) -> Option<Value>`,
+//!     C0089, predating this batch) carries neither the `LlmRequest`/
+//!     `LlmResponse` nor (for the error callback) the triggering error
+//!     itself — a callback can only unconditionally decide, from session
+//!     state alone, whether to substitute a response; a `Some(value)`
+//!     that doesn't decode into a real `LlmResponse` is treated as no
+//!     override (the chain continues), the same "malformed round-trip
+//!     silently skipped" convention `functions_utils.rs` established.
+//!     **Callback-side state mutations aren't threaded back**: each
+//!     dispatch phase builds a fresh `Context` from `ctx.clone()` rather
+//!     than sharing one `Context` (or a real event's `EventActions`)
+//!     across the before/after/error phases of one model call the way
+//!     the source's single `CallbackContext` does — a mutation a
+//!     callback makes via `Context::state_mut()` is visible to nothing
+//!     and never persisted. Threading it through would need
+//!     `postprocess`/`finalize_model_response_event` to accept an extra
+//!     accumulated `EventActions`, out of this batch's bounded scope.
 //!   - **No live mode** (C0161-C0167): [`AgentBehavior::run_live_impl`]
 //!     returns [`LlmFlowError::LiveNotImplemented`].
 //!   - **`preserve_function_call_ids`** is always `false` — the source's
@@ -101,6 +130,7 @@
 use std::sync::Arc;
 
 use adk_agents::base_agent::{AgentBehavior, AgentRunError};
+use adk_agents::context::Context;
 use adk_agents::invocation_context::{InvocationContext, InvocationContextError};
 use adk_agents::llm_agent::{AgentMode, IncludeContents, LlmAgent};
 use adk_agents::readonly_context::ReadonlyContext;
@@ -475,13 +505,84 @@ impl LlmFlow {
     }
 
     /// C0153 (partial): calls the resolved model. No telemetry spans, no
-    /// before/after-model callback dispatch, no live branch — see the
-    /// module doc.
+    /// live branch — see the module doc. Before/after/on-error model
+    /// callback dispatch (C0154/C0155) is wired one level up, around
+    /// this call, in [`Self::run_one_step`] — see
+    /// [`Self::handle_before_model_callback`]'s own doc for why.
     pub async fn call_model(&self, request: &LlmRequest) -> Result<Vec<LlmResponse>, LlmFlowError> {
         self.model
             .generate_content_async(request, false)
             .await
             .map_err(LlmFlowError::from)
+    }
+
+    /// C0155 (partial — see the module doc for the plugin-manager-half
+    /// and grounding-metadata-workaround scope cuts): runs the agent's
+    /// canonical `before_model_callback` chain, stopping at the first
+    /// callback whose returned `Value` decodes into a real `LlmResponse`
+    /// — that response short-circuits the model call entirely, mirroring
+    /// `BaseAgent::handle_before_agent_callback`'s shape (C0038/C0045)
+    /// exactly, adapted for the model-level short-circuit type. A
+    /// callback returning `None`, or a `Value` that doesn't decode into
+    /// `LlmResponse`, is treated as "no override" and the chain
+    /// continues — the same "malformed round-trip silently skipped"
+    /// convention `functions_utils.rs` already establishes.
+    fn handle_before_model_callback(&self, ctx: &InvocationContext) -> Option<LlmResponse> {
+        let mut callback_ctx = Context::new(ctx.clone());
+        for callback in &self.llm_agent.before_model_callback {
+            if let Some(value) = callback(&mut callback_ctx) {
+                if let Ok(response) = rusty_serde::json::from_value::<LlmResponse>(value) {
+                    return Some(response);
+                }
+            }
+        }
+        None
+    }
+
+    /// C0155 (partial): runs the agent's canonical `after_model_callback`
+    /// chain, returning the first callback's decoded `LlmResponse`
+    /// override, or `response` unchanged if none altered it. Same
+    /// decode-failure-skips convention as
+    /// [`Self::handle_before_model_callback`].
+    fn handle_after_model_callback(
+        &self,
+        ctx: &InvocationContext,
+        response: LlmResponse,
+    ) -> LlmResponse {
+        let mut callback_ctx = Context::new(ctx.clone());
+        for callback in &self.llm_agent.after_model_callback {
+            if let Some(value) = callback(&mut callback_ctx) {
+                if let Ok(altered) = rusty_serde::json::from_value::<LlmResponse>(value) {
+                    return altered;
+                }
+            }
+        }
+        response
+    }
+
+    /// C0154/C0155 (partial): runs the agent's canonical
+    /// `on_model_error_callback` chain after a model call fails,
+    /// returning the first callback's decoded substitute `LlmResponse`
+    /// (yielded instead of propagating the error, matching
+    /// `_run_and_handle_error`), or `None` if no callback recovers it.
+    ///
+    /// **Disclosed, sharper than [`Self::handle_before_model_callback`]'s
+    /// narrowing**: the source passes the triggering `Exception` into
+    /// each callback; this port's `LlmCallback` type (`Fn(&mut Context)
+    /// -> Option<Value>`, predating this batch) has no error parameter
+    /// at all, so a callback here can't inspect what failed — it can
+    /// only unconditionally decide (from session state alone) whether to
+    /// substitute a response.
+    fn handle_on_model_error_callback(&self, ctx: &InvocationContext) -> Option<LlmResponse> {
+        let mut callback_ctx = Context::new(ctx.clone());
+        for callback in &self.llm_agent.on_model_error_callback {
+            if let Some(value) = callback(&mut callback_ctx) {
+                if let Ok(response) = rusty_serde::json::from_value::<LlmResponse>(value) {
+                    return Some(response);
+                }
+            }
+        }
+        None
     }
 
     /// C0156 (partial): converts each `LlmResponse` into an `Event` via
@@ -558,7 +659,23 @@ impl LlmFlow {
 
         ctx.increment_llm_call_count()?;
         let request = self.preprocess(ctx).await?;
-        let responses = self.call_model(&request).await?;
+        // C0153-C0155: before/after/on-error model callback dispatch,
+        // wired around the bare model call — see
+        // `Self::handle_before_model_callback`'s own doc.
+        let responses = if let Some(short_circuit) = self.handle_before_model_callback(ctx) {
+            vec![short_circuit]
+        } else {
+            match self.call_model(&request).await {
+                Ok(responses) => responses
+                    .into_iter()
+                    .map(|response| self.handle_after_model_callback(ctx, response))
+                    .collect(),
+                Err(err) => match self.handle_on_model_error_callback(ctx) {
+                    Some(error_response) => vec![error_response],
+                    None => return Err(err),
+                },
+            }
+        };
         let mut events = self.postprocess(ctx, responses);
 
         if let Some(function_call_event) = events.last().cloned() {
@@ -1034,6 +1151,200 @@ mod tests {
             err,
             LlmFlowError::InvocationContext(InvocationContextError::LlmCallsLimitExceeded(1))
         ));
+    }
+
+    // --- C0153-C0155: before/after/on-error model callback dispatch ---
+
+    struct FailingLlm;
+
+    impl BaseLlm for FailingLlm {
+        fn model(&self) -> &str {
+            "fake-model"
+        }
+
+        fn type_name(&self) -> &'static str {
+            "FailingLlm"
+        }
+
+        fn generate_content_async<'a>(
+            &'a self,
+            _llm_request: &'a LlmRequest,
+            _stream: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmResponse>, BaseLlmError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                Err(BaseLlmError::GenerationNotSupported(
+                    "fake-model".to_string(),
+                ))
+            })
+        }
+    }
+
+    fn flow_with_llm(llm_agent: LlmAgent, model: Arc<dyn BaseLlm>) -> LlmFlow {
+        LlmFlow::with_model(llm_agent, model)
+    }
+
+    fn llm_agent_named(name: &str) -> LlmAgent {
+        let _ = name;
+        LlmAgent::new(ModelRef::Name("gemini-2.0-flash".to_string()))
+    }
+
+    fn callback_returning(response: LlmResponse) -> adk_agents::llm_agent::LlmCallback {
+        Arc::new(move |_ctx| Some(rusty_serde::json::to_value(&response).unwrap()))
+    }
+
+    fn noop_callback() -> adk_agents::llm_agent::LlmCallback {
+        Arc::new(|_ctx| None)
+    }
+
+    #[rusty_tokio::test]
+    async fn before_model_callback_short_circuits_the_model_call() {
+        let mut llm_agent = llm_agent_named("my_agent");
+        let short_circuit = LlmResponse {
+            content: Some(Content::user_text("from before-model callback")),
+            ..Default::default()
+        };
+        llm_agent.before_model_callback = vec![callback_returning(short_circuit.clone())];
+        // The model would return something else entirely — proof the
+        // short-circuit means it's never actually called.
+        let flow = flow_with_llm(
+            llm_agent,
+            Arc::new(FakeLlm {
+                responses: vec![LlmResponse {
+                    content: Some(Content::user_text("from the real model")),
+                    ..Default::default()
+                }],
+            }),
+        );
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_one_step(&mut ctx).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("from before-model callback")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn before_model_callback_chain_stops_at_the_first_short_circuit() {
+        let mut llm_agent = llm_agent_named("my_agent");
+        let short_circuit = LlmResponse {
+            content: Some(Content::user_text("from second callback")),
+            ..Default::default()
+        };
+        llm_agent.before_model_callback = vec![noop_callback(), callback_returning(short_circuit)];
+        let flow = flow_with_llm(
+            llm_agent,
+            Arc::new(FakeLlm {
+                responses: vec![LlmResponse::default()],
+            }),
+        );
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_one_step(&mut ctx).await.unwrap();
+        assert_eq!(
+            events[0].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("from second callback")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn before_model_callback_returning_none_falls_through_to_the_real_model_call() {
+        let mut llm_agent = llm_agent_named("my_agent");
+        llm_agent.before_model_callback = vec![noop_callback()];
+        let flow = flow_with_llm(
+            llm_agent,
+            Arc::new(FakeLlm {
+                responses: vec![LlmResponse {
+                    content: Some(Content::user_text("from the real model")),
+                    ..Default::default()
+                }],
+            }),
+        );
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_one_step(&mut ctx).await.unwrap();
+        assert_eq!(
+            events[0].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("from the real model")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn after_model_callback_alters_the_response() {
+        let mut llm_agent = llm_agent_named("my_agent");
+        let altered = LlmResponse {
+            content: Some(Content::user_text("altered by after-model callback")),
+            ..Default::default()
+        };
+        llm_agent.after_model_callback = vec![callback_returning(altered)];
+        let flow = flow_with_llm(
+            llm_agent,
+            Arc::new(FakeLlm {
+                responses: vec![LlmResponse {
+                    content: Some(Content::user_text("from the real model")),
+                    ..Default::default()
+                }],
+            }),
+        );
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_one_step(&mut ctx).await.unwrap();
+        assert_eq!(
+            events[0].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("altered by after-model callback")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn after_model_callback_returning_none_leaves_the_response_unchanged() {
+        let mut llm_agent = llm_agent_named("my_agent");
+        llm_agent.after_model_callback = vec![noop_callback()];
+        let flow = flow_with_llm(
+            llm_agent,
+            Arc::new(FakeLlm {
+                responses: vec![LlmResponse {
+                    content: Some(Content::user_text("untouched")),
+                    ..Default::default()
+                }],
+            }),
+        );
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_one_step(&mut ctx).await.unwrap();
+        assert_eq!(
+            events[0].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("untouched")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn on_model_error_callback_substitutes_a_response_instead_of_propagating() {
+        let mut llm_agent = llm_agent_named("my_agent");
+        let recovered = LlmResponse {
+            content: Some(Content::user_text("recovered from error")),
+            ..Default::default()
+        };
+        llm_agent.on_model_error_callback = vec![callback_returning(recovered)];
+        let flow = flow_with_llm(llm_agent, Arc::new(FailingLlm));
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_one_step(&mut ctx).await.unwrap();
+        assert_eq!(
+            events[0].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("recovered from error")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn on_model_error_callback_absent_propagates_the_original_error() {
+        let llm_agent = llm_agent_named("my_agent");
+        let flow = flow_with_llm(llm_agent, Arc::new(FailingLlm));
+        let mut ctx = ctx_for("my_agent");
+
+        let err = flow.run_one_step(&mut ctx).await.unwrap_err();
+        assert!(matches!(err, LlmFlowError::ModelCall(_)));
     }
 
     #[rusty_tokio::test]
