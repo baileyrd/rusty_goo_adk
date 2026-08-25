@@ -5,6 +5,31 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P11 local LLM-judge metrics batch (C0592/C0593/C0595/C0598, all DONE):
+  `crates/adk-eval/src/final_response_match_v2.rs` (`FinalResponseMatchV2Evaluator`),
+  `rubric_based_tool_use_quality_v1.rs` (`RubricBasedToolUseV1Evaluator`),
+  `rubric_based_final_response_quality_v1.rs`
+  (`RubricBasedFinalResponseQualityV1Evaluator`), and
+  `rubric_based_multi_turn_trajectory_evaluator.rs`
+  (`RubricBasedMultiTurnTrajectoryEvaluator`) — four evaluators unblocked
+  once C0600's `LlmAsJudge` harness landed, none of them actually GCP-gated
+  (`metric_evaluator_registry.rs`'s own module doc previously lumped them in
+  with the GCP-blocked metrics; corrected). None can register into
+  `MetricEvaluatorRegistry`: the harness is inherently async, while
+  `Evaluator::evaluate_invocations` and `MetricEvaluatorRegistry`'s
+  `EvaluatorFactory` are both deliberately sync — a structural mismatch,
+  disclosed on each evaluator and on the registry's module doc.
+- **Widened** `RubricBasedEvaluator::create_effective_rubrics_list`/
+  `get_effective_rubrics_list` (`&mut self`/`&self -> &[Rubric]` to
+  `&self` via interior-mutable `RefCell`/`&self -> Vec<Rubric>`): three of
+  the four new evaluators pass `format_auto_rater_prompt` to the harness
+  as a plain `Fn` closure, needing interior mutability to recompute the
+  effective-rubrics cache per invocation. Backwards-compatible — every
+  existing call site already bound its receiver `mut`, and this is
+  `RubricBasedEvaluator`'s first real caller.
+- **Manifest housekeeping:** corrected `metric_evaluator_registry.rs`'s
+  stale module doc, which blamed all 12 unregistered evaluators on a
+  harness that shipped the day before this batch.
 - P5 Session/State closure batch (C0204 DONE; C0206/C0209/C0211 manifest
   corrections): `crates/adk-agents/src/session.rs`'s `Session` now derives
   `Serialize`/`Deserialize` with `#[rusty_serde(rename_all = "camelCase",

@@ -3,15 +3,21 @@
 //!
 //! **Partial, same shape as C0600's own split**: `_register_standard_metrics`
 //! seeds 13 evaluators in the source; only [`crate::trajectory_evaluator::TrajectoryEvaluator`]
-//! is actually built in this port so far, so [`MetricEvaluatorRegistry::new`]
-//! registers just that one. The other 12
-//! (`ResponseEvaluator`/`SafetyEvaluatorV1`/the multi-turn and rubric-based
-//! evaluators/`PerTurnUserSimulatorQualityV1`) stay `REQUIRED` under
-//! their own rows (C0591-C0598) — each blocked on GCP or the still-deferred
-//! `LlmAsJudge` harness (C0600's other half), not on anything this batch
-//! builds. Registering them is one call each, added alongside their own
-//! evaluator once it lands, following the same pattern
-//! [`MetricEvaluatorRegistry::register_evaluator`] already establishes.
+//! is actually built AND registrable in this port so far, so
+//! [`MetricEvaluatorRegistry::new`] registers just that one. Four more
+//! (`FinalResponseMatchV2Evaluator`/`RubricBasedFinalResponseQualityV1Evaluator`/
+//! `RubricBasedToolUseV1Evaluator`/`RubricBasedMultiTurnTrajectoryEvaluator`,
+//! C0592/C0593/C0595/C0598) are now built too, once C0600's `LlmAsJudge`
+//! harness landed — but **cannot** register here regardless: they're
+//! inherently async (the harness awaits a judge-model call), while this
+//! registry's [`EvaluatorFactory`] constructs a sync `Box<dyn Evaluator
+//! + Send + Sync>` and `Evaluator::evaluate_invocations` is deliberately
+//! sync (see `evaluator.rs`'s own doc) — a structural mismatch, not a
+//! temporary gap this registry will close once more evaluators exist. The
+//! remaining 8 (`ResponseEvaluator`/`SafetyEvaluatorV1`/the Vertex-delegated
+//! multi-turn metrics/`HallucinationsV1`/`PerTurnUserSimulatorQualityV1`)
+//! stay `REQUIRED` under their own rows (C0591/C0594/C0596/C0597) — GCP-blocked,
+//! not on anything this crate builds.
 //!
 //! **`type[Evaluator]` → tagged factory closure, adaptation disclosed**:
 //! the source stores the concrete `Evaluator` *class* per metric name and

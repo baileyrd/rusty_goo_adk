@@ -51,7 +51,29 @@
 //! self-identifying by `rubric_id`, so the order of the returned list
 //! doesn't affect correctness, only incidental ordering. Same disclosed
 //! choice already made for `EvalConfig.criteria`.
+//!
+//! **`effective_rubrics_list`, widened to interior mutability**:
+//! [`RubricBasedEvaluator::create_effective_rubrics_list`]/
+//! [`RubricBasedEvaluator::get_effective_rubrics_list`] were `&mut self`/
+//! `&self -> &[Rubric]` when this struct had no real caller yet (every
+//! concrete per-metric evaluator needing them was GCP-blocked). Their
+//! first real callers — `RubricBasedToolUseV1Evaluator`/
+//! `RubricBasedFinalResponseQualityV1Evaluator`/
+//! `RubricBasedMultiTurnTrajectoryEvaluator` — pass `format_auto_rater_prompt`
+//! to [`crate::llm_as_judge::evaluate_invocations_via_llm_judge`] as a
+//! plain `Fn` closure (not `FnMut`), so recomputing the effective rubrics
+//! list per invocation needs interior mutability rather than `&mut self`.
+//! `effective_rubrics_list` becomes a `RefCell`, `create_effective_rubrics_list`
+//! relaxes to `&self` (every existing call site already binds its
+//! receiver `mut`, so this widening breaks nothing), and
+//! `get_effective_rubrics_list` returns an owned `Vec<Rubric>` instead of
+//! `&[Rubric]` (a `Ref` guard can't outlive the borrow, and the list is a
+//! handful of short strings — cloning it is not a real cost) — the same
+//! "widen a placeholder once its first real consumer needs the shape"
+//! precedent already used repeatedly elsewhere in this port (e.g.
+//! `PerInvocationResult::rubric_scores` itself).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -380,7 +402,7 @@ pub struct RubricBasedEvaluator {
     /// Ported but never read by this port's own code either — see this
     /// module's doc.
     normalized_rubric_to_id_map: HashMap<String, String>,
-    effective_rubrics_list: Option<Vec<Rubric>>,
+    effective_rubrics_list: RefCell<Option<Vec<Rubric>>>,
 }
 
 impl RubricBasedEvaluator {
@@ -414,7 +436,7 @@ impl RubricBasedEvaluator {
             invocation_results_summarizer: Box::new(MeanInvocationResultsSummarizer),
             rubrics,
             normalized_rubric_to_id_map,
-            effective_rubrics_list: None,
+            effective_rubrics_list: RefCell::new(None),
         })
     }
 
@@ -448,9 +470,11 @@ impl RubricBasedEvaluator {
         &self.normalized_rubric_to_id_map
     }
 
-    /// `RubricBasedEvaluator.create_effective_rubrics_list`.
+    /// `RubricBasedEvaluator.create_effective_rubrics_list`. See this
+    /// module's doc for why this is `&self` (interior mutability) rather
+    /// than `&mut self`.
     pub fn create_effective_rubrics_list(
-        &mut self,
+        &self,
         invocation_rubrics: Option<&[Rubric]>,
     ) -> Result<(), String> {
         let mut rubrics_by_id: Vec<(String, Rubric)> = Vec::new();
@@ -488,13 +512,14 @@ impl RubricBasedEvaluator {
         if effective.is_empty() {
             return Err("Rubrics are required.".to_string());
         }
-        self.effective_rubrics_list = Some(effective);
+        *self.effective_rubrics_list.borrow_mut() = Some(effective);
         Ok(())
     }
 
-    /// `RubricBasedEvaluator.get_effective_rubrics_list`.
-    pub fn get_effective_rubrics_list(&self) -> Result<&[Rubric], String> {
-        self.effective_rubrics_list.as_deref().ok_or_else(|| {
+    /// `RubricBasedEvaluator.get_effective_rubrics_list`. Returns an owned
+    /// clone rather than `&[Rubric]` — see this module's doc.
+    pub fn get_effective_rubrics_list(&self) -> Result<Vec<Rubric>, String> {
+        self.effective_rubrics_list.borrow().clone().ok_or_else(|| {
             "Effective rubrics list not initialized. Call create_effective_rubrics_list() first."
                 .to_string()
         })
@@ -538,7 +563,7 @@ impl RubricBasedEvaluator {
             .expect("create_effective_rubrics_list() must be called before scoring");
         let mut normalized_rubric_to_rubric_map: HashMap<String, &Rubric> = HashMap::new();
         let mut rubric_by_id: HashMap<&str, &Rubric> = HashMap::new();
-        for r in effective_rubrics {
+        for r in &effective_rubrics {
             normalized_rubric_to_rubric_map
                 .insert(normalize_text(r.rubric_content.text_property.as_deref()), r);
             rubric_by_id.insert(r.rubric_id.as_str(), r);
@@ -863,7 +888,7 @@ Verdict: Maybe";
     fn create_effective_rubrics_list_merges_criterion_and_invocation_rubrics() {
         let eval_metric =
             eval_metric_with_criterion(&criterion(vec![rubric("r1", "criterion rubric", None)]));
-        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
         let invocation_rubrics = vec![rubric("r2", "invocation rubric", None)];
         evaluator
             .create_effective_rubrics_list(Some(&invocation_rubrics))
@@ -876,7 +901,7 @@ Verdict: Maybe";
     fn create_effective_rubrics_list_rejects_a_duplicate_rubric_id() {
         let eval_metric =
             eval_metric_with_criterion(&criterion(vec![rubric("r1", "criterion rubric", None)]));
-        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
         let invocation_rubrics = vec![rubric("r1", "duplicate id", None)];
         let result = evaluator.create_effective_rubrics_list(Some(&invocation_rubrics));
         assert!(result.is_err());
@@ -887,7 +912,7 @@ Verdict: Maybe";
     fn create_effective_rubrics_list_filters_invocation_rubrics_by_rubric_type() {
         let eval_metric =
             eval_metric_with_criterion(&criterion(vec![rubric("r1", "criterion rubric", None)]));
-        let mut evaluator =
+        let evaluator =
             RubricBasedEvaluator::new(&eval_metric, Some("FINAL_RESPONSE_QUALITY".to_string()))
                 .unwrap();
         let invocation_rubrics = vec![
@@ -906,7 +931,7 @@ Verdict: Maybe";
     #[test]
     fn create_effective_rubrics_list_errors_without_any_rubrics() {
         let eval_metric = eval_metric_with_criterion(&criterion(vec![]));
-        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
         let result = evaluator.create_effective_rubrics_list(None);
         assert!(result.is_err());
     }
@@ -923,7 +948,7 @@ Verdict: Maybe";
     fn convert_auto_rater_response_to_score_matches_a_rubric_by_id() {
         let eval_metric =
             eval_metric_with_criterion(&criterion(vec![rubric("r1", "concise", None)]));
-        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
         evaluator.create_effective_rubrics_list(None).unwrap();
         let response =
             llm_response_text("ID: r1\nProperty: concise\nRationale: It is short.\nVerdict: Yes");
@@ -942,7 +967,7 @@ Verdict: Maybe";
             "The response is concise.",
             None,
         )]));
-        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
         evaluator.create_effective_rubrics_list(None).unwrap();
         // No "ID:" line, so the parser must fall back to matching the
         // normalized property text against the rubric's own text.
@@ -960,7 +985,7 @@ Verdict: Maybe";
     fn convert_auto_rater_response_to_score_skips_an_unmatched_rubric() {
         let eval_metric =
             eval_metric_with_criterion(&criterion(vec![rubric("r1", "concise", None)]));
-        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
         evaluator.create_effective_rubrics_list(None).unwrap();
         let response = llm_response_text(
             "ID: r-unknown\nProperty: something else\nRationale: n/a\nVerdict: Yes",
@@ -974,7 +999,7 @@ Verdict: Maybe";
     fn convert_auto_rater_response_to_score_returns_empty_for_a_blank_response() {
         let eval_metric =
             eval_metric_with_criterion(&criterion(vec![rubric("r1", "concise", None)]));
-        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
         evaluator.create_effective_rubrics_list(None).unwrap();
         let response = LlmResponse {
             content: None,
