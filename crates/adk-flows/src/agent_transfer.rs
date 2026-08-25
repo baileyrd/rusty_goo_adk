@@ -21,11 +21,18 @@
 //! None)` and an actually-`None` `LlmAgent.mode` are indistinguishable to
 //! this check either way).
 //!
-//! **Not** ported: `_get_incompatible_builtin_tool_error` (needs
-//! `GoogleSearchTool`/`VertexAiSearchTool`/`EnterpriseWebSearchTool`,
-//! Phase 8) and actually building/attaching a `TransferToAgentTool`
-//! (needs `BaseTool`, also Phase 8, the same blocker `output_schema.rs`
-//! already discloses for `SetModelResponseTool`).
+//! **Not** ported: `_get_incompatible_builtin_tool_error` and building/
+//! attaching a real `TransferToAgentTool` into `LlmRequest.config.tools`.
+//! `GoogleSearchTool`/`VertexAiSearchTool`/`EnterpriseWebSearchTool` and
+//! `TransferToAgentTool` itself are all fully built now (`adk-tools`,
+//! C0428/C0430/C0431/C0436) — the remaining gap is purely the
+//! request-processor wiring, which needs `InvocationContext.agent` to
+//! resolve a concrete `LlmAgent`, the same C0092 tree-fusion blocker
+//! every other Phase 4 processor discloses (this file's own
+//! [`get_transfer_targets`] already works around it via the `llm_mode`
+//! callback above, but this specific piece — checking the *current*
+//! agent's own tools against the incompatible-search-tool list, and
+//! attaching a tool the model can call — still needs it).
 
 use adk_agents::base_agent::BaseAgent;
 use adk_agents::llm_agent::AgentMode;

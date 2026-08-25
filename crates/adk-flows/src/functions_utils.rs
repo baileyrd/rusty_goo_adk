@@ -44,8 +44,14 @@
 //! generic merge and aggregated additively across every event (not
 //! last-wins), then reattached, exactly as the source special-cases it.
 //! `get_long_running_function_calls` takes an `is_long_running` callback
-//! rather than a `tools_dict: dict[str, BaseTool]`, since `BaseTool`
-//! (Phase 8) doesn't exist in this port yet.
+//! rather than a `tools_dict: dict[str, BaseTool]` — not because
+//! `BaseTool` doesn't exist (it does, `adk-tools::base_tool`), but
+//! because this port has no automatic `agent.tools -> HashMap<String,
+//! Arc<dyn BaseTool>>` resolution yet (C0092), so there's no
+//! caller-side `tools_dict` to hand in for most callers; `functions.rs`'s
+//! own `execute_function_calls`, which *does* take a caller-supplied
+//! `ToolsDict`, is the counter-example showing this is a per-caller
+//! choice, not a missing-type gap.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 

@@ -1,10 +1,16 @@
 //! Capabilities C0114-C0115, C0117-C0118: `LlmRequest`, ported from
 //! `google.adk.models.llm_request`.
 //!
-//! **Deferred**: `append_tools` (C0116) needs `BaseTool` (Phase 8) — nothing
-//! to convert to function declarations yet, and `tools_dict` (excluded from
-//! serialization in the source, populated only by `append_tools`) is
-//! omitted entirely rather than kept as a dead field.
+//! **`append_tools` (C0116), now built**: `adk-tools::append_tools`
+//! populates `config.tools` (an opaque [`rusty_serde::value::Value`]
+//! placeholder here, not yet a typed field — see
+//! `generate_content_request.rs`'s own module doc for the real remaining
+//! gap: nothing downstream reads it back out into the outgoing REST
+//! body yet). `tools_dict` (excluded from serialization in the source,
+//! populated only by `append_tools`) is omitted entirely rather than
+//! kept as a dead field — this port's callers pass a resolved
+//! `ToolsDict` directly to `functions.rs::execute_function_calls`
+//! instead of round-tripping it through the request.
 //!
 //! **Adaptation**: `config`/`live_connect_config` are opaque
 //! `google.genai.types.GenerateContentConfig`/`LiveConnectConfig` in the

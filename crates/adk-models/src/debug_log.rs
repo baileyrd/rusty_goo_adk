@@ -6,10 +6,11 @@
 //! `req.config.tools[i].function_declarations`), sourced by locating the
 //! first `Tool` in `config.tools` that carries `function_declarations`.
 //! `LlmRequest.config.tools` stays an opaque [`rusty_serde::value::Value`]
-//! placeholder in this port (C0116, Phase 8's `BaseTool` — see
-//! `llm_request.rs`'s module doc), so there is no typed `Tool`/
-//! `FunctionDeclaration` to walk. The "Functions" section is always empty
-//! here, and the config log's own `tools` key is always fully excluded
+//! placeholder in this port — `append_tools`/`BaseTool` (C0116) are
+//! already built and populate it, see `llm_request.rs`'s module doc, but
+//! nothing downstream (this log included) reads a typed `Tool`/
+//! `FunctionDeclaration` back out of it yet. The "Functions" section is
+//! always empty here, and the config log's own `tools` key is always fully excluded
 //! (redacted) rather than partially — the same effect the source's own
 //! fallback branch produces whenever it *can't* locate a function-
 //! declaration-bearing tool (`tools_exclusion = True`), just taken

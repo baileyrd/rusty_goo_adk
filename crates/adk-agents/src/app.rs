@@ -11,11 +11,12 @@
 //! just enforces the same invariant at the type level instead of at
 //! runtime.
 //!
-//! **Not wired into `Runner`, deliberately, this batch**: `Runner::new`'s
-//! constructor already shipped (PR #101 onward) taking an agent + services
-//! directly. Accepting an `App` there instead (C0840-C0850) would change
-//! that already-shipped signature — left for a follow-up batch once `App`
-//! exists and can be reviewed on its own.
+//! **Wired into `Runner` as an additive constructor**: `Runner::from_app`
+//! (`adk-runners::runner`, C0846/C0849, DONE) resolves `app.root_agent`/
+//! `app.plugins`/`app.context_cache_config`/`app.resumability_config`.
+//! `Runner::new`'s already-shipped signature (agent + services directly)
+//! is left untouched rather than changed — `Runner::from_app` is a
+//! second, purely additive constructor instead.
 //!
 //! **App-name validation, a distinct rule from agent-name validation**: the
 //! source's `_VALID_APP_NAME_RE` (`^[a-zA-Z][a-zA-Z0-9_-]*$`) additionally

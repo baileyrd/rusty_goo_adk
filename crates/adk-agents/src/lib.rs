@@ -132,9 +132,10 @@
 //! `Option`, since the source's own `_validate` model-validator already
 //! rejects a `None` root_agent. App-name validation is a new, distinct
 //! validator from `base_agent::validate_name` — the source's app-name
-//! regex additionally permits hyphens. `App` is deliberately not wired
-//! into `Runner`'s constructor this batch (a follow-up, once `App` exists
-//! and can be reviewed on its own). No new dependency.
+//! regex additionally permits hyphens. `App` is wired into `Runner` via
+//! `Runner::from_app` (`adk-runners::runner`, C0846/C0849, DONE) — a
+//! second, additive constructor, leaving `Runner::new`'s already-shipped
+//! signature untouched. No new dependency.
 
 pub mod active_streaming_tool;
 pub mod agent_optimizer;

@@ -121,10 +121,11 @@ pub struct ArtifactVersion {
 /// `LoadMemoryTool`/`PreloadMemoryTool`, C0423/C0424) now that a concrete
 /// consumer needs its fields — the same "widen a placeholder to a real
 /// type once a real consumer needs its structure" precedent already used
-/// for `EventCompaction.compacted_content` (Phase 4, C0185). The backing
-/// `BaseMemoryService` implementation itself is still Phase 6 — nothing
-/// here *produces* real `MemoryEntry` values yet, only consumes the
-/// shape.
+/// for `EventCompaction.compacted_content` (Phase 4, C0185).
+/// `InMemoryMemoryService` (`in_memory_memory_service.rs`, C0243/C0244/
+/// C0247/C0248/C0249) already constructs real `MemoryEntry` values — the
+/// remaining unbuilt backing implementation is `VertexAiMemoryBankService`
+/// (GCP-backed, genuinely out of scope, SDK-blocked).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct MemoryEntry {
     /// The main content of the memory.
