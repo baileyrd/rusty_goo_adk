@@ -22,6 +22,47 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `workflow/`: `BaseNode`/`Graph`/`validate_graph`/HITL utils, P7 Chunk 2 (C0294/C0295/C0297-narrowed/C0328/C0329, all DONE)
+**2026-08-25**
+
+- **Added:** `BaseNode` (`workflow_base_node.rs`) — the `NodeBehavior`
+  trait + `Arc`-backed handle split mirroring `AgentBehavior`/`BaseAgent`
+  exactly, including a `NoopNodeBehavior` used by the `START` sentinel
+  (cached behind a `OnceLock` so every call returns the same singleton —
+  needed for identity-based comparisons elsewhere) and as a test double.
+  `BaseNode::run` normalizes every yielded item (`Event` passthrough,
+  `RequestInput` → interrupt event, any other value wrapped as
+  `Event(output=...)`).
+- **Added:** `Edge`/`Graph` (`workflow_graph.rs`) — `nodes` always
+  inferred from `edges` (deduplicated by pointer identity), plus
+  `Graph::get_next_pending_nodes`'s full route-matching logic (untagged
+  edges always fire, `DEFAULT_ROUTE` only as a fallback, a dead-end
+  warning). **Narrowed, disclosed:** `Graph::from_edge_items`/
+  `parse_edge_items` (C0327) and `build_node`/`is_node_like` (C0326) are
+  deferred to a future batch — they need node-wrapper types
+  (`FunctionNode`/`_ToolNode`/`_ParallelWorker`, C0313/C0316/C0317, not
+  yet built) plus `BaseTool`, and `adk-tools` already depends on
+  `adk-agents`, so a dependency back would be the same crate-cycle shape
+  already disclosed for C0355/C0356.
+- **Added:** `validate_graph` (`workflow_graph_validation.rs`) — all 9 of
+  the source's checks, in its exact order (duplicate names, missing/
+  incoming-edge START, unreachable nodes, duplicate edges, DEFAULT_ROUTE
+  combination rules, unconditional-cycle detection, chat-agent wiring,
+  terminal-node computation). The chat-agent-wiring check is ported as a
+  real, called step but is a disclosed structural no-op: it's only
+  reachable in the source because `LlmAgent` (via `BaseAgent`) IS a
+  `BaseNode` there (the already-known C0092 tree-fusion gap) — this
+  port's `BaseNode`/`LlmAgent` are separate types, so no `BaseNode` value
+  can currently be an `LlmAgent`.
+- **Added:** HITL utilities (`workflow_hitl_utils.rs`) —
+  `create_request_input_event`/`create_auth_request_event` (stores the
+  generated OAuth `state` for later verification) and `process_auth_resume`
+  (raises on a state mismatch, a CSRF-style protection), matching the
+  source's exact contract including its `{"result": ...}`-unwrapping
+  caller responsibility.
+- 34 new tests across the four modules (`cargo test -p adk-agents
+  workflow_`).
+
 ## PR #TBD — `workflow/`: the P7 workflow/graph engine's pure-data slice, first batch (C0307/C0308/C0309/C0324, all DONE)
 **2026-08-25**
 
