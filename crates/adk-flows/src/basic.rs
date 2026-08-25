@@ -106,7 +106,10 @@ pub fn build_basic_request(
     // Only set output_schema if no tools are specified — models don't
     // support output_schema and tools together yet; task-mode agents
     // collect structured output via the finish_task tool schema instead
-    // (not ported — needs BaseTool, Phase 8).
+    // (not ported — needs LlmAgent.canonical_tools()/BaseAgent-LlmAgent
+    // tree fusion, C0092: LlmAgent.tools has no real Arc<dyn BaseTool>
+    // storage to read a FinishTaskTool schema from, even though
+    // FinishTaskTool itself exists, adk-tools/src/finish_task_tool.rs).
     if agent.mode != Some(AgentMode::Task) {
         if let Some(output_schema) = &agent.output_schema {
             if agent.tools.is_empty() || model.capabilities().output_schema_and_tools {

@@ -4,20 +4,39 @@
 //! [`LlmFlow`] is the first concrete [`AgentBehavior`] this port builds for
 //! an [`LlmAgent`] — it's what an `LlmAgent` is actually *for*: given a
 //! [`BaseAgent`] wired with `LlmFlow` as its behavior, `BaseAgent::run_async`
-//! now drives a real (if narrowed) request → model call → response turn,
-//! using every processor this crate has built so far
-//! ([`crate::basic`], [`crate::identity`], [`crate::instructions`],
-//! [`crate::contents`], [`crate::context_cache`],
+//! now drives a real (if narrowed) multi-step request → model call →
+//! tool-execution → model call turn loop, using every processor this
+//! crate has built so far ([`crate::basic`], [`crate::identity`],
+//! [`crate::instructions`], [`crate::contents`], [`crate::context_cache`],
 //! [`crate::output_schema`]).
 //!
-//! **Scope, disclosed** — this is the single non-live step
-//! (`_run_one_step_async`'s core, not the full engine):
-//!   - **No turn loop / tool execution** (C0148, C0149, C0151, C0152,
-//!     C0158, C0159): without `BaseTool` (Phase 8) a model backend is
-//!     never handed any tools, so it has nothing to call — the source's
-//!     multi-step "call model, run tools, call model again" loop has
-//!     nothing to loop on yet. `run_one_step` is exactly one model call;
-//!     [`AgentBehavior::run_async_impl`] calls it once and returns.
+//! **Turn loop, now wired (C0148/C0149/C0151/C0152)**: [`LlmFlow::run_async`]
+//! mirrors the source's `run_async`/`_run_one_step_async` two-level
+//! structure — an outer loop repeats [`LlmFlow::run_one_step`] (preprocess →
+//! call model → postprocess → execute any function calls the response
+//! carries) until a step's last event is a final response. Function calls
+//! are dispatched against [`LlmFlow::tools_dict`], a caller-supplied
+//! `name -> BaseTool` map (see its own doc) rather than one this port
+//! resolves itself from `agent.tools` — the same "caller supplies the
+//! resolved bits" adaptation `request_confirmation.rs`/`agent_transfer.rs`
+//! already established for the C0092 tree-fusion gap. See
+//! [`LlmFlow::run_async`]'s own doc for the inter-step session-append
+//! mechanics this loop needs (this port materializes a step's events as a
+//! `Vec<Event>` rather than yielding them cooperatively, so a later step
+//! seeing an earlier one's events needs an explicit append in between).
+//!
+//! **Scope, disclosed** — even with the loop wired, these remain narrowed:
+//!   - **Auth/tool-confirmation event synthesis, transfer-to-agent
+//!     recursion, and `set_model_response` structured-output final-event
+//!     synthesis** (part of C0149/C0158/C0159): `generate_auth_event`/
+//!     `generate_request_confirmation_event` (`functions_utils.rs`) exist
+//!     and are callable, but `run_one_step` doesn't call them yet; a
+//!     `transfer_to_agent` action from a tool response doesn't yet trigger
+//!     a recursive sub-agent run within the same loop.
+//!   - **`_process_agent_tools`'s automatic `tools_dict` resolution from
+//!     `agent.tools`** is still blocked on C0092 (`LlmAgent.tools` has no
+//!     real `Arc<dyn BaseTool>` storage to resolve from) — see
+//!     [`LlmFlow::tools_dict`]'s own doc.
 //!   - **`interactions_processor` (C0174), now wired**: `preprocess` gates
 //!     on `self.model.as_ref().as_any().downcast_ref::<Gemini>()` (the
 //!     `AsAny` downcast mechanism `adk-models::base_llm` now provides,
@@ -64,6 +83,7 @@ use adk_agents::run_config::RunConfig;
 use adk_agents::streaming_mode::StreamingMode;
 use adk_events::node_info::NodeInfo;
 use adk_events::Event;
+use adk_genai::content::FunctionCall;
 use adk_models::base_llm::{BaseLlm, BaseLlmError};
 use adk_models::llm_request::LlmRequest;
 use adk_models::llm_response::LlmResponse;
@@ -73,6 +93,7 @@ use crate::canonical_model::{canonical_model, CanonicalModelError};
 use crate::compaction_request_processor::apply_compaction_processor;
 use crate::contents::{get_contents, get_current_turn_contents, ContentsError};
 use crate::context_cache::{apply_context_cache, ContextCacheError};
+use crate::functions::{execute_function_calls, FunctionExecutionError, ToolsDict};
 use crate::identity::apply_identity;
 use crate::instructions::{build_instructions, InstructionsError};
 use crate::interactions::find_previous_interaction_state;
@@ -84,6 +105,8 @@ use crate::{basic, basic::BasicRequestError};
 pub enum LlmFlowError {
     #[error("{0}")]
     CanonicalModel(#[from] CanonicalModelError),
+    #[error("{0}")]
+    FunctionExecution(#[from] FunctionExecutionError),
     #[error("{0}")]
     BasicRequest(#[from] BasicRequestError),
     #[error("{0}")]
@@ -264,6 +287,15 @@ pub fn finalize_model_response_event(event: &mut Event, response: &LlmResponse) 
 pub struct LlmFlow {
     pub llm_agent: LlmAgent,
     pub model: Arc<dyn BaseLlm>,
+    /// C0151 (narrowed): the resolved `name -> BaseTool` map the turn
+    /// loop dispatches function calls against. The source resolves this
+    /// itself, every step, from `agent.tools` (`_process_agent_tools`);
+    /// this port takes it as a caller-supplied value instead, the same
+    /// "caller supplies the resolved bits" adaptation `request_confirmation.rs`/
+    /// `agent_transfer.rs` already established for the C0092 tree-fusion
+    /// gap (`LlmAgent.tools` has no real `Arc<dyn BaseTool>` storage to
+    /// resolve *from*). Empty by default — see [`Self::with_tools_dict`].
+    pub tools_dict: ToolsDict,
 }
 
 impl LlmFlow {
@@ -271,14 +303,29 @@ impl LlmFlow {
     /// onto it — see the module doc's memoization note.
     pub fn new(llm_agent: LlmAgent) -> Result<Self, LlmFlowError> {
         let model = canonical_model(&llm_agent)?;
-        Ok(Self { llm_agent, model })
+        Ok(Self {
+            llm_agent,
+            model,
+            tools_dict: ToolsDict::new(),
+        })
     }
 
     /// Builds an `LlmFlow` from an already-resolved model — the seam a
     /// test double (or a future live-instance-model agent) plugs into
     /// without touching the process-wide registry.
     pub fn with_model(llm_agent: LlmAgent, model: Arc<dyn BaseLlm>) -> Self {
-        Self { llm_agent, model }
+        Self {
+            llm_agent,
+            model,
+            tools_dict: ToolsDict::new(),
+        }
+    }
+
+    /// Attaches the resolved tool map the turn loop dispatches function
+    /// calls against — see [`Self::tools_dict`]'s own doc.
+    pub fn with_tools_dict(mut self, tools_dict: ToolsDict) -> Self {
+        self.tools_dict = tools_dict;
+        self
     }
 
     /// C0150 (partial): assembles the `LlmRequest` — `basic` → `identity`
@@ -436,8 +483,25 @@ impl LlmFlow {
             .collect()
     }
 
-    /// C0149 (partial): one model turn — preprocess, call the model,
-    /// postprocess. No multi-step loop (see the module doc).
+    /// C0149 (partial)/C0156 (partial): one model turn — preprocess,
+    /// call the model, postprocess, then — mirroring
+    /// `_postprocess_handle_function_calls_async` — if the last
+    /// postprocessed event carries function calls and isn't a partial
+    /// streaming chunk, executes them via [`execute_function_calls`]
+    /// against [`Self::tools_dict`] and appends the resulting
+    /// function-response event. Returns every event this step produced,
+    /// in order (0-2: a model-response event, optionally followed by a
+    /// function-response event).
+    ///
+    /// **Not ported this step, disclosed** (matching
+    /// `_postprocess_handle_function_calls_async`'s remaining pieces):
+    /// auth-request/tool-confirmation-request event synthesis
+    /// (`generate_auth_event`/`generate_request_confirmation_event`,
+    /// both already built in `functions_utils.rs` but not yet called
+    /// from here); the `set_model_response` structured-output final-event
+    /// synthesis; and recursive re-run of a transferred sub-agent
+    /// (`transfer_to_agent` action handling) — all genuine follow-up
+    /// work now that a real caller exists, not silently dropped.
     pub async fn run_one_step(
         &self,
         ctx: &mut InvocationContext,
@@ -445,7 +509,81 @@ impl LlmFlow {
         ctx.increment_llm_call_count()?;
         let request = self.preprocess(ctx).await?;
         let responses = self.call_model(&request).await?;
-        Ok(self.postprocess(ctx, responses))
+        let mut events = self.postprocess(ctx, responses);
+
+        if let Some(last_event) = events.last() {
+            if last_event.partial != Some(true) {
+                let function_calls: Vec<FunctionCall> = last_event
+                    .get_function_calls()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                if !function_calls.is_empty() {
+                    let agent_name = ctx
+                        .agent
+                        .as_ref()
+                        .map(|a| a.name().to_string())
+                        .unwrap_or_default();
+                    if let Some(response_event) = execute_function_calls(
+                        ctx,
+                        &function_calls,
+                        &self.tools_dict,
+                        &agent_name,
+                        None,
+                        None,
+                    )
+                    .await?
+                    {
+                        events.push(response_event);
+                    }
+                }
+            }
+        }
+
+        Ok(events)
+    }
+
+    /// C0148: `run_async` — repeats [`Self::run_one_step`] until a step's
+    /// last event is a final response (or there was no event at all, or
+    /// the last event is a partial streaming chunk — matching the
+    /// source's own `while True` loop condition exactly). Each step's
+    /// events are persisted onto `ctx.session` via `ctx.session_service`
+    /// between iterations, so the next step's `preprocess` sees them
+    /// through `ctx.get_events()` — the same append this port's `Runner`
+    /// already does at the top level for a single-step run, now needed
+    /// *inside* the flow itself once a step can be followed by another.
+    ///
+    /// **Disclosed reliance**: the caller (`Runner::run_async_impl` via
+    /// `BaseAgent::run_async`) still appends this method's full returned
+    /// `Vec<Event>` to session again at the top level — a given event
+    /// therefore reaches `session_service.append_event` twice. This is
+    /// safe only because `InMemorySessionService` (the only concrete
+    /// `SessionService` this port has) already deduplicates a
+    /// redelivered event by id+equality (see its own
+    /// `append_event_dedupes_a_redelivered_event` test) — a future
+    /// second `SessionService` implementor would need the same guarantee.
+    pub async fn run_async(&self, ctx: &mut InvocationContext) -> Result<Vec<Event>, LlmFlowError> {
+        let mut all_events = Vec::new();
+        loop {
+            let step_events = self.run_one_step(ctx).await?;
+
+            let session_service = ctx.session_service.clone();
+            for event in &step_events {
+                session_service
+                    .append_event(&mut ctx.session, event.clone())
+                    .await;
+            }
+
+            let last_event = step_events.last().cloned();
+            all_events.extend(step_events);
+
+            match last_event {
+                None => break,
+                Some(event) if event.is_final_response() || event.partial == Some(true) => break,
+                Some(_) => continue,
+            }
+        }
+        Ok(all_events)
     }
 }
 
@@ -454,7 +592,7 @@ impl AgentBehavior for LlmFlow {
         &'a self,
         ctx: &'a mut InvocationContext,
     ) -> BoxFuture<'a, Result<Vec<Event>, AgentRunError>> {
-        Box::pin(async move { self.run_one_step(ctx).await.map_err(AgentRunError::from) })
+        Box::pin(async move { self.run_async(ctx).await.map_err(AgentRunError::from) })
     }
 
     fn run_live_impl<'a>(
@@ -820,5 +958,198 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("live mode isn't implemented"));
+    }
+
+    // --- LlmFlow::run_async multi-step turn loop (C0148/C0149/C0151/C0152) ---
+
+    /// Unlike [`FakeLlm`] (one fixed response returned on every call), this
+    /// double pops a different response batch on each successive
+    /// `generate_content_async` call — needed to drive a scenario where
+    /// step 1 returns a function call and step 2 (after the tool runs)
+    /// returns a final text response.
+    struct SequencedLlm {
+        responses: std::sync::Mutex<std::collections::VecDeque<Vec<LlmResponse>>>,
+    }
+
+    impl SequencedLlm {
+        fn new(steps: Vec<Vec<LlmResponse>>) -> Self {
+            Self {
+                responses: std::sync::Mutex::new(steps.into()),
+            }
+        }
+    }
+
+    impl BaseLlm for SequencedLlm {
+        fn model(&self) -> &str {
+            "fake-model"
+        }
+
+        fn type_name(&self) -> &'static str {
+            "SequencedLlm"
+        }
+
+        fn generate_content_async<'a>(
+            &'a self,
+            _llm_request: &'a LlmRequest,
+            _stream: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmResponse>, BaseLlmError>> + Send + 'a>>
+        {
+            let next = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("SequencedLlm called more times than it has queued responses");
+            Box::pin(async move { Ok(next) })
+        }
+    }
+
+    struct WeatherTool;
+    impl adk_tools::base_tool::BaseTool for WeatherTool {
+        fn name(&self) -> &str {
+            "get_weather"
+        }
+        fn description(&self) -> &str {
+            "returns the weather for a city"
+        }
+        fn run_async<'a>(
+            &'a self,
+            args: &'a std::collections::BTreeMap<String, rusty_serde::value::Value>,
+            _tool_context: &'a mut adk_tools::tool_context::ToolContext,
+        ) -> adk_tools::base_tool::BoxFuture<
+            'a,
+            Result<rusty_serde::value::Value, adk_tools::base_tool::ToolError>,
+        > {
+            let city = args
+                .get("city")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Box::pin(async move {
+                Ok(rusty_serde::value::Value::String(format!(
+                    "sunny in {city}"
+                )))
+            })
+        }
+    }
+
+    fn function_call_response(name: &str, id: &str, city: &str) -> LlmResponse {
+        let mut args = std::collections::BTreeMap::new();
+        args.insert(
+            "city".to_string(),
+            rusty_serde::value::Value::String(city.to_string()),
+        );
+        LlmResponse {
+            content: Some(Content::new(
+                "model",
+                vec![Part::function_call(FunctionCall {
+                    id: Some(id.to_string()),
+                    name: Some(name.to_string()),
+                    args: Some(args),
+                    ..Default::default()
+                })],
+            )),
+            finish_reason: Some(rusty_serde::value::Value::String("STOP".to_string())),
+            ..Default::default()
+        }
+    }
+
+    fn flow_with_sequenced_responses(steps: Vec<Vec<LlmResponse>>) -> LlmFlow {
+        let llm_agent = LlmAgent::new(ModelRef::Name("gemini-2.0-flash".to_string()));
+        LlmFlow::with_model(llm_agent, Arc::new(SequencedLlm::new(steps)))
+    }
+
+    fn weather_tools_dict() -> ToolsDict {
+        let mut tools_dict: ToolsDict = std::collections::HashMap::new();
+        tools_dict.insert("get_weather".to_string(), Arc::new(WeatherTool));
+        tools_dict
+    }
+
+    #[rusty_tokio::test]
+    async fn run_async_executes_a_tool_call_then_continues_to_a_final_response() {
+        let step1 = vec![function_call_response("get_weather", "call-1", "sf")];
+        let step2 = vec![LlmResponse {
+            content: Some(Content::new("model", vec![Part::text("it's sunny in sf")])),
+            finish_reason: Some(rusty_serde::value::Value::String("STOP".to_string())),
+            ..Default::default()
+        }];
+        let flow =
+            flow_with_sequenced_responses(vec![step1, step2]).with_tools_dict(weather_tools_dict());
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_async(&mut ctx).await.unwrap();
+
+        assert_eq!(events.len(), 3, "expected {events:?}");
+        assert!(!events[0].get_function_calls().is_empty());
+        assert!(!events[1].get_function_responses().is_empty());
+        assert_eq!(
+            events[2].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("it's sunny in sf")
+        );
+        assert!(!events[1].is_final_response());
+        assert!(events[2].is_final_response());
+    }
+
+    #[rusty_tokio::test]
+    async fn run_async_wires_the_tool_result_into_the_function_response_event() {
+        let step1 = vec![function_call_response("get_weather", "call-1", "nyc")];
+        let step2 = vec![LlmResponse {
+            content: Some(Content::new("model", vec![Part::text("done")])),
+            finish_reason: Some(rusty_serde::value::Value::String("STOP".to_string())),
+            ..Default::default()
+        }];
+        let flow =
+            flow_with_sequenced_responses(vec![step1, step2]).with_tools_dict(weather_tools_dict());
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_async(&mut ctx).await.unwrap();
+
+        let function_response_event = &events[1];
+        let response = &function_response_event.get_function_responses()[0];
+        assert_eq!(
+            response.response.as_ref().and_then(|r| r.get("result")),
+            Some(&rusty_serde::value::Value::String(
+                "sunny in nyc".to_string()
+            ))
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn run_async_appends_every_step_event_onto_the_session_between_iterations() {
+        let step1 = vec![function_call_response("get_weather", "call-1", "sf")];
+        let step2 = vec![LlmResponse {
+            content: Some(Content::new("model", vec![Part::text("final")])),
+            finish_reason: Some(rusty_serde::value::Value::String("STOP".to_string())),
+            ..Default::default()
+        }];
+        let flow =
+            flow_with_sequenced_responses(vec![step1, step2]).with_tools_dict(weather_tools_dict());
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_async(&mut ctx).await.unwrap();
+
+        assert_eq!(ctx.session.events.len(), events.len());
+        for (session_event, returned_event) in ctx.session.events.iter().zip(events.iter()) {
+            assert_eq!(session_event.id, returned_event.id);
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn run_async_stops_after_one_step_when_there_are_no_function_calls() {
+        let response = LlmResponse {
+            content: Some(Content::new("model", vec![Part::text("no tools needed")])),
+            finish_reason: Some(rusty_serde::value::Value::String("STOP".to_string())),
+            ..Default::default()
+        };
+        let flow = flow_with_response(response);
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_async(&mut ctx).await.unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("no tools needed")
+        );
     }
 }

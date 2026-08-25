@@ -5,6 +5,45 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-flows/src/llm_flow.rs`: the multi-step tool-calling turn
+  loop (C0148/C0149/C0151/C0152) — `LlmFlow::run_async`, a new outer loop
+  mirroring the source's `run_async`/`_run_one_step_async` structure that
+  repeats `run_one_step` (preprocess → call model → postprocess →
+  execute any function calls the response carries) until a step's last
+  event is a final response. `LlmFlow` gains a `pub tools_dict: ToolsDict`
+  field (default empty) plus a `with_tools_dict` builder — the resolved
+  `name -> BaseTool` map the loop dispatches function calls against,
+  supplied by the caller rather than auto-resolved from `agent.tools`
+  (still blocked on C0092's tree-fusion gap), the same "caller supplies
+  the resolved bits" adaptation already established by
+  `request_confirmation.rs`/`agent_transfer.rs`. `run_one_step` now
+  executes a step's function calls via `execute_function_calls` and
+  appends the resulting function-response event to the step.
+  `AgentBehavior::run_async_impl` now calls `run_async` instead of
+  `run_one_step` once. Disclosed adaptation: since this port materializes
+  each step's events as a `Vec<Event>` rather than yielding them
+  cooperatively, `run_async` explicitly appends each step's events onto
+  `ctx.session` between iterations (via `ctx.session_service`) so the
+  next step's `preprocess` sees them — this means every event now flows
+  through `session_service.append_event` twice (once from the loop,
+  once from `Runner`'s own top-level append), safe only because
+  `InMemorySessionService` already deduplicates a redelivered event by
+  id+equality. Not ported this batch, disclosed in the file's own module
+  doc: auth/tool-confirmation-request event synthesis, transfer-to-agent
+  recursion, and `set_model_response` final-event synthesis. 4 new tests.
+  Bundled stale-blocker corrections (the loop's own existence falsifies
+  these): `llm_flow.rs`'s module doc no longer claims the turn loop
+  "has nothing to loop on yet" without `BaseTool`; `functions.rs`'s
+  module doc no longer claims auth-event synthesis "needs `AuthConfig`,
+  Phase 9, not built" (stale since C0504 landed; the real gap is that
+  `run_one_step` doesn't call it yet); `basic.rs`'s task-mode
+  `output_schema` comment no longer claims it needs `BaseTool` (stale
+  since `FinishTaskTool` shipped; the real blocker is C0092); manifest
+  rows C0148/C0149/C0150/C0151/C0152/C0156 updated with real, tested
+  evidence in place of the stale "needs `BaseTool` (Phase 8)" reasoning;
+  manifest rows C0842/C0843 updated from "N/A: `App` doesn't exist" to
+  cite `App`/`Runner::from_app`, both DONE, matching sibling rows
+  C0841/C0846/C0848/C0849/C0850's already-corrected treatment.
 - New `crates/adk-tools/src/tool_configs.rs`: `BaseToolConfig`/
   `ToolArgsConfig`/`ToolConfig` (C0417) — the declarative YAML/dict
   tool-reference data shape (a tool `name` plus optional free-form
