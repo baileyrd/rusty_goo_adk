@@ -5,6 +5,34 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/credential_manager.rs`: `CredentialManager`
+  (C0517/C0519/C0520/C0521, C0518 partial) — the master credential-
+  resolution orchestrator, ported from `auth/credential_manager.py`.
+  `get_auth_credential`'s full 9-step state machine (custom-scheme
+  dispatch, validate, fast-path for API_KEY/HTTP, load-existing,
+  load-from-auth-response, client-credentials fallback or
+  return-None-for-consent, exchange, refresh, save) ports in full,
+  including a source quirk preserved faithfully rather than "fixed":
+  step 4 sets `was_from_auth_response = true` unconditionally on entry
+  to that branch, even when the lookup itself also finds nothing.
+  `register_auth_provider`/`default_auth_provider_registry` (C0517) use
+  this crate's own established `OnceLock<Mutex<_>>`-inside-an-accessor-fn
+  singleton-registry convention. Narrowed, disclosed at length in the
+  module doc: `CredentialManager::new` (C0518) registers no default
+  exchangers/refreshers, since none of `OAuth2CredentialExchanger`/
+  `ServiceAccountCredentialExchanger`/`OAuth2CredentialRefresher` exist
+  in this port yet (still blocked on an authlib-equivalent HTTP
+  exchange dependency, C0524/C0526); `_populate_auth_scheme` (OAuth2
+  auto-discovery, C0520) is kept as a real, called step but always
+  returns `false`, since this port's `ExtendedOAuth2` is a flattened
+  struct outside the `AuthScheme` enum (a pre-existing tree-fusion gap
+  from an earlier batch) and no `AuthScheme` value can ever be the
+  `ExtendedOAuth2` the source's discovery check requires;
+  `_rehydrate_custom_scheme`'s `__subclasses__()` reflection has no
+  port, since this port's `AuthScheme::Custom` holds only a plain
+  `CustomAuthScheme`, no subclass hierarchy to rehydrate into; and
+  `request_credential`'s `hasattr` guard is moot given `CallbackContext`
+  is already a unified alias for `Context` (C0048). 7 new tests.
 - New `crates/adk-agents/src/workflow_graph_parser.rs`: P7 workflow/graph
   engine Chunk 6 — `parse_edge_items`/`Graph::from_edge_items` (C0327,
   narrowed), the chain-building convenience syntax on top of `Edge`/
