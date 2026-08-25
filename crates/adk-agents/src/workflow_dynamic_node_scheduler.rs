@@ -108,17 +108,18 @@ impl DynamicNodeScheduler {
 
     /// Interrupt ids accumulated across every dynamic node this
     /// scheduler has dispatched — the source's own `_state.interrupt_ids`,
-    /// read only by `Workflow._finalize` (C0306, not built) to propagate
-    /// them to the `Workflow`'s own context once it completes.
-    /// [`crate::context::Context::run_node`] doesn't read this: its own
-    /// interrupt handling already works from each call's own returned
-    /// `child_ctx.interrupt_ids()` (see that method's own doc), which is
-    /// the per-request signal a *caller* of `run_node` needs — this
-    /// accumulator is scheduler-wide bookkeeping for a still-unbuilt
-    /// consumer. Kept correctly wired now (mirroring every `record_result`
-    /// outcome, matching the source) so a future batch building `Workflow`
-    /// doesn't also have to revisit this scheduler.
-    #[allow(dead_code)]
+    /// read by `Workflow::finalize` (C0306) and unioned with
+    /// `WorkflowLoopState::interrupt_ids` (the separate accumulator
+    /// `Workflow::handle_completion` populates for *static* graph
+    /// nodes — the source's single `_LoopState(DynamicNodeState)`
+    /// inheritance means one Python attribute backs both; this port has
+    /// no such inheritance, so the two stay genuinely separate
+    /// `HashSet`s that must both be checked). [`crate::context::Context::
+    /// run_node`] doesn't read this: its own interrupt handling already
+    /// works from each call's own returned `child_ctx.interrupt_ids()`
+    /// (see that method's own doc), which is the per-request signal a
+    /// *caller* of `run_node` needs — this accumulator is
+    /// scheduler-wide bookkeeping for `Workflow::finalize` specifically.
     pub(crate) fn interrupt_ids(&self) -> &HashSet<String> {
         &self.interrupt_ids
     }

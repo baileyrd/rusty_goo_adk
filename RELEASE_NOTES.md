@@ -22,6 +22,72 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`: `Workflow` FINALIZE phase (C0306, DONE)
+**2026-08-25**
+
+- **Added:** `Workflow::finalize` — propagates interrupt ids onto `ctx`
+  (returning early), or sets `ctx.output` from the single terminal
+  node's cached output. Errors with a new `WorkflowError::
+  MultipleTerminalOutputs` if more than one terminal node produced
+  output, matching the source's own `raise ValueError`.
+- **Added:** `Workflow::cleanup_all_tasks` — drains any still-pending
+  node futures left over when the LOOP phase stopped early (on error),
+  marking their corresponding `NodeState`s `CANCELLED`.
+- **Added:** `Workflow::collect_remaining_interrupts` — gathers
+  interrupt ids from nodes still `WAITING` (with unresolved interrupts)
+  after the LOOP phase; `Workflow::has_terminal_output` — whether any
+  terminal node produced output; `Workflow::validate_output_data` — a
+  no-op, matching `Workflow::validate_state_schema`'s already-shipped
+  shape (`output_schema` stays an opaque `Value` placeholder
+  crate-wide).
+- **Disclosed adaptation:** `finalize` is `async fn`, unlike the
+  source's sync `_finalize`. It unions two separate interrupt-id
+  accumulators — `WorkflowLoopState::interrupt_ids` (populated by
+  `Workflow::handle_completion` for *static* graph nodes that went
+  WAITING) and `DynamicNodeScheduler::interrupt_ids` (populated for
+  *dynamic* `ctx.run_node()` nodes) — because the source's single
+  `_LoopState(DynamicNodeState)` inheritance makes these the same
+  Python attribute, but this port's two unrelated structs keep them
+  genuinely separate `HashSet<String>`s that must both be checked (an
+  interrupt raised by a dynamic node nested inside a running static
+  node would otherwise silently fail to propagate). Reading the
+  scheduler's side needs its async `Mutex` guard, hence the `async fn`.
+- **Disclosed no-op:** `cleanup_all_tasks`'s dynamic-task cancellation
+  half (the source's `loop_state.get_dynamic_tasks()`/`loop_state.runs`
+  loop) has no equivalent here — this port's dynamic dispatch always
+  executes inline via `DynamicNodeScheduler::call` (already-disclosed
+  C0318/C0319 narrowing), never as a separately-scheduled task, so
+  there's nothing dynamic left to cancel. Only the static-node half
+  (draining `pending_tasks`, marking `CANCELLED`) is ported, and it
+  needs no `async`/explicit `task.cancel()` + `asyncio.gather(...,
+  return_exceptions=True)` either: a boxed `PendingNodeFuture` this
+  port never spawns onto the runtime is already cancelled the moment
+  it's dropped without being polled to completion — Rust's standard
+  async-cancellation-by-drop model.
+- **Reused, not re-ported:** `get_common_branch_prefix` — already
+  satisfied by the prior C0305 batch's reuse of the already-shipped
+  `workflow_join_node::common_branch_prefix` (the same n-ary
+  common-prefix computation, one pairwise-reduced, one all-at-once).
+- **Known limitation:** `Workflow` is still not wired into a
+  `BaseNode`/`NodeBehavior`. That glue (`setup` → `run_loop` →
+  `cleanup_all_tasks` → `collect_remaining_interrupts` → `finalize`,
+  matching `_run_impl`'s own SETUP/LOOP/FINALIZE sequencing) is
+  deliberately a separate follow-up — it also needs to settle how
+  `Workflow`'s own `max_concurrency`/`rerun_on_resume` fields map onto
+  `BaseNode::build`'s constructor parameters, a real scope-defining
+  question this batch didn't need to answer to land `finalize`/
+  `cleanup_all_tasks` on their own.
+- **Tests:** `crates/adk-agents/src/workflow_workflow.rs::tests::
+  {finalize_propagates_interrupt_ids_and_skips_terminal_output,
+  finalize_sets_ctx_output_from_the_single_terminal_output,
+  finalize_is_a_no_op_with_no_terminal_output_and_no_interrupts,
+  finalize_errors_when_more_than_one_terminal_node_has_output,
+  cleanup_all_tasks_drains_pending_tasks_and_marks_nodes_cancelled,
+  collect_remaining_interrupts_gathers_from_waiting_nodes_only,
+  has_terminal_output_checks_only_terminal_node_outputs}`.
+
+---
+
 ## PR #TBD — `agents/`: `Workflow` LOOP driver + completion handling (C0301/C0304/C0305, all DONE)
 **2026-08-25**
 

@@ -5,6 +5,52 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `Workflow` FINALIZE phase (C0306, DONE — see below for disclosed
+  adaptations): `Workflow::finalize` propagates interrupt ids onto `ctx`
+  or sets `ctx.output` from the single terminal node's output (erroring
+  via new `WorkflowError::MultipleTerminalOutputs` if more than one
+  terminal node produced output). `Workflow::cleanup_all_tasks` drains
+  any still-pending node futures and marks their nodes `CANCELLED`.
+  Small helpers `Workflow::collect_remaining_interrupts` (gathers
+  interrupt ids from nodes still `WAITING` after the LOOP phase) and
+  `Workflow::has_terminal_output` (whether any terminal node produced
+  output) round out the batch, plus a no-op `Workflow::
+  validate_output_data` matching `validate_state_schema`'s
+  already-established shape.
+- **Disclosed adaptation:** `finalize` is `async fn`, unlike the
+  source's sync `_finalize` — it unions two separate interrupt-id
+  accumulators, `WorkflowLoopState::interrupt_ids` (static graph nodes)
+  and `DynamicNodeScheduler::interrupt_ids` (dynamic `ctx.run_node()`
+  nodes), since the source's single `_LoopState(DynamicNodeState)`
+  inheritance makes these the same Python attribute but this port's two
+  unrelated structs keep them separate; reading the scheduler's side
+  needs its async `Mutex` guard.
+- **Disclosed no-op:** `cleanup_all_tasks`'s dynamic-task cancellation
+  half (`loop_state.get_dynamic_tasks()`/`loop_state.runs`) has no
+  equivalent here — this port's dynamic dispatch always executes inline
+  via `DynamicNodeScheduler::call` (already-disclosed C0318/C0319
+  narrowing), never as a separately-scheduled task. Only the
+  static-node half (draining `pending_tasks`, marking `CANCELLED`) is
+  ported, and needs no `async`/explicit cancellation either — dropping
+  a boxed `PendingNodeFuture` without polling it to completion already
+  is cancellation (Rust's standard async-cancellation-by-drop model).
+- New `WorkflowError::MultipleTerminalOutputs`/`WorkflowError::
+  Context(#[from] ContextError)` variants.
+- **Known limitation:** `Workflow` is still not wired into a
+  `BaseNode`/`NodeBehavior` — that glue (`setup` → `run_loop` →
+  `cleanup_all_tasks` → `collect_remaining_interrupts` → `finalize`,
+  matching `_run_impl`'s own sequencing) is deliberately a separate
+  follow-up, since it also needs to settle how `Workflow`'s own
+  `max_concurrency`/`rerun_on_resume` fields map onto `BaseNode::
+  build`'s constructor parameters.
+- **Tests:** `crates/adk-agents/src/workflow_workflow.rs::tests::
+  {finalize_propagates_interrupt_ids_and_skips_terminal_output,
+  finalize_sets_ctx_output_from_the_single_terminal_output,
+  finalize_is_a_no_op_with_no_terminal_output_and_no_interrupts,
+  finalize_errors_when_more_than_one_terminal_node_has_output,
+  cleanup_all_tasks_drains_pending_tasks_and_marks_nodes_cancelled,
+  collect_remaining_interrupts_gathers_from_waiting_nodes_only,
+  has_terminal_output_checks_only_terminal_node_outputs}`.
 - `Workflow` LOOP driver + completion handling (C0301/C0304/C0305, all
   DONE — see below for disclosed adaptations): `Workflow::run_loop`
   (C0301) schedules ready nodes and drains pending tasks until none
