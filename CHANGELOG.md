@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `_gda_stream_util.py`'s pure logic, part of C0489 (P8): new
+  `crates/adk-tools/src/gda_stream_util.rs` — the Gemini Data Analytics
+  streaming-response accumulator/parser: `get_stream` (buffers lines
+  until a complete JSON value assembles, handling the `"[{"`/`"}]"`/
+  `","` line-framing, and replaces a superseded "Data Retrieved" entry
+  with an "Intermediate result omitted" placeholder),
+  `extract_data_result`, `format_data_retrieved` (headers/rows/summary,
+  truncated to `max_rows`). `get_stream` takes already-decoded response
+  lines directly rather than a live `requests.Session`/URL/payload/
+  headers — `get_gda_endpoint`/`get_gda_session` (needing
+  `google.auth`/mTLS) stay disclosed-blocked, the same gap C0413/C0414's
+  `GoogleTool` is already blocked on. Built ahead of its own caller
+  (`DataAgentToolset`, itself GCP-blocked). 12 new unit tests.
+### Fixed
+- Corrected two stale/blank manifest evidence cells found while
+  verifying this batch's scope: C0066 (`InvocationContext`) had a
+  substantial, already-shipped implementation
+  (`crates/adk-agents/src/invocation_context.rs`) with a completely
+  blank evidence cell — filled in, row stays correctly `REQUIRED` only
+  for its disclosed live-mode-field gap.
+### Added
 - P2/P8 export-facade + MCP data-model batch (C0034, C0451, both DONE):
   - `crates/adk-agents/src/agents.rs` (new): the `agents` package's
     public export facade — `Agent`(alias for `LlmAgent`)/`BaseAgent`/

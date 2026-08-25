@@ -22,6 +22,40 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/`: Gemini Data Analytics stream parsing (part of C0489)
+**2026-08-25**
+
+- **Added:** `crates/adk-tools/src/gda_stream_util.rs` — the pure
+  accumulator/parsing half of `_gda_stream_util.py`:
+  - `get_stream`: buffers streamed lines until a complete JSON value
+    assembles (handling the `"[{"`/`"}]"`/`","` line-framing), classifies
+    each parsed object, and replaces a superseded "Data Retrieved"
+    entry with an "Intermediate result omitted" placeholder.
+  - `extract_data_result`: finds `systemMessage.data.result` deep
+    inside a generic message dict, requiring `result.data` to be a list.
+  - `format_data_retrieved`: builds `{headers, rows, summary}` from
+    schema fields (falling back to first-row keys), truncated to
+    `max_rows`.
+- **Adaptation, disclosed:** `get_stream` takes already-decoded response
+  lines directly rather than a live `requests.Session`/URL/payload/
+  headers, since making the actual streaming HTTP POST needs
+  `get_gda_endpoint`/`get_gda_session` (mTLS + `google.auth`) — this
+  workspace has no `google-auth`-equivalent dependency, the same gap
+  C0413/C0414's `GoogleTool` is already blocked on. Built ahead of its
+  own caller (`DataAgentToolset`, itself GCP-blocked) — same precedent
+  as `remote_mcp_server.rs`.
+- **Corrected:** two stale/blank manifest evidence cells found while
+  verifying this batch's scope — C0066 (`InvocationContext`) had a
+  substantial, already-shipped implementation with a completely blank
+  evidence cell; filled in (the row stays correctly `REQUIRED` only for
+  its disclosed live-mode-field gap).
+- **Tests:** 12 new unit tests.
+- Full local gate green: `cargo build --workspace`, `cargo test
+  --workspace`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo fmt --check`.
+
+---
+
 ## PR #TBD — `agents/`+`tools/`: export facade + MCP connection-param models (C0034/C0451, both DONE)
 **2026-08-25**
 
