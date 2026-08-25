@@ -22,6 +22,37 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `models/`: P10 Anthropic Content↔block conversion (C0539, DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-models/src/anthropic_conversion.rs` — the full
+  request-side (`part_to_message_block`/`content_to_message_param`) and
+  response-side (`content_block_to_part`) `Content`↔Anthropic-block
+  conversion from `anthropic_llm.py`: text, thinking (signature
+  round-tripped as a plain string, no byte-level codec needed),
+  redacted thinking, tool_use (id sanitized via C0540's
+  `ToolUseIdSanitizer`), tool_result (the source's 4-branch
+  content-text derivation, plus appended image/PDF media blocks),
+  image/PDF parts (base64 source blocks, dropped with a warning on
+  non-user turns), and executable_code/code_execution_result rendered
+  as fenced markdown text.
+- New wire-shape stand-ins — `AnthropicMessageBlock`/
+  `AnthropicMessageParam`/`AnthropicToolResultBlock`/
+  `AnthropicToolResultContent`/`AnthropicBase64Source`/
+  `AnthropicResponseBlock` — declared ahead of the still-deferred
+  `AnthropicLlm` HTTP backend (C0536/C0537), the same precedent already
+  set by `AnthropicToolParam`/`AnthropicThinkingParam`.
+- **Corrected:** this row's own prior manifest evidence (via C0542)
+  flagged C0539 as needing a live Anthropic endpoint to verify
+  correctness against and possibly a `GenerateContentConfigStub`
+  widening — turned out to need neither; it's pure, deterministic
+  conversion logic, testable the same way every other function in this
+  file already is.
+- 33 new tests covering every block variant in both directions,
+  including a round-trip test for the thinking block.
+
+---
+
 ## PR #TBD — `eval/`: `UserSimulatorProvider` audio-decorator composition (C0627, DONE)
 **2026-08-25**
 

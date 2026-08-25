@@ -12,39 +12,62 @@
 //! **Scope of this batch, disclosed**: [`ToolUseIdSanitizer`] (C0540),
 //! the finish-reason mapping + token-usage extraction/reconciliation
 //! functions (C0542), [`update_type_string`]/
-//! [`function_declaration_to_tool_param`] (C0541), and now
+//! [`function_declaration_to_tool_param`] (C0541),
 //! [`build_anthropic_thinking_param`] (C0538, `thinking_budget`-only
-//! subset) are ported here — all pure, self-contained, and testable
-//! without any wire-format type beyond the minimal
-//! [`AnthropicUsage`]/[`AnthropicToolParam`]/[`AnthropicThinkingParam`]
-//! structs declared alongside them (all ahead of their own real caller,
-//! same "widen/declare ahead of a consumer" precedent used throughout
-//! this port — their real consumer is the still-deferred `AnthropicLlm`
-//! backend). The rest of P10 (C0536, C0537, C0539, C0543, C0544 — the
-//! actual `AnthropicLlm` `BaseLlm` backend, credential resolution, the
-//! full content↔block conversion including media/tool-result handling,
-//! and SSE streaming) is real, substantial additional work deliberately
-//! left for a follow-up batch: each of those needs either a non-trivial
-//! new wire-shape enum (`_MessageBlockParam`'s 7 variants, with real
-//! image/PDF/tool-result branching this port has no way to verify
-//! without a live Anthropic endpoint to test against) or new fields on
+//! subset), and now the full `Content`↔Anthropic block conversion —
+//! [`part_to_message_block`]/[`content_to_message_param`] (request
+//! direction) and [`content_block_to_part`] (response direction), C0539
+//! — are ported here. All pure, self-contained, and testable without
+//! any wire-format type beyond the minimal
+//! [`AnthropicUsage`]/[`AnthropicToolParam`]/[`AnthropicThinkingParam`]/
+//! [`AnthropicMessageBlock`]/[`AnthropicResponseBlock`] structs declared
+//! alongside them (all ahead of their own real caller, same
+//! "widen/declare ahead of a consumer" precedent used throughout this
+//! port — their real consumer is the still-deferred `AnthropicLlm`
+//! backend, so none of these types carry `Serialize`/`Deserialize` yet
+//! either — the real HTTP-transport caller (C0536/C0537) is what will
+//! need to decide the exact wire-tagging, same as [`AnthropicToolParam`]
+//! already left undecided). The rest of P10 (C0536, C0537, C0543,
+//! C0544 — the actual `AnthropicLlm` `BaseLlm` backend, credential
+//! resolution, and SSE streaming) is real, substantial additional work
+//! deliberately left for a follow-up batch: each of those needs either
+//! HTTP-client wiring or new fields on
 //! [`crate::llm_request::GenerateContentConfigStub`]
 //! (`temperature`/`top_p`/`top_k`/`stop_sequences`/`max_output_tokens`,
 //! none of which exist there yet) — real, separable units of work, not
-//! something to fold into this small slice. C0541 and C0538 turned out
-//! **not** to need any of those — C0541 only touches
-//! [`adk_genai::content::FunctionDeclaration`], and C0538's
+//! something to fold into this slice. C0541, C0538, and now C0539
+//! turned out **not** to need any of that — C0541 only touches
+//! [`adk_genai::content::FunctionDeclaration`], C0538's
 //! `thinking_budget` mapping only reads
 //! [`crate::llm_request::GenerateContentConfigStub::thinking_config`],
-//! both of which already have everything required. **C0538's other
-//! half stays deferred**: `_build_effort_param`/
-//! `AnthropicGenerateContentConfig.effort` (Anthropic's separate
-//! `reasoning_effort` request field, distinct from `thinking_budget`)
-//! needs a genuinely new field on `AnthropicGenerateContentConfig` (a
-//! type that doesn't exist in this port yet, since the whole
-//! `AnthropicLlm`-specific config subclass is part of the deferred
-//! `AnthropicLlm` backend) — left for that follow-up batch rather than
-//! bolted on here.
+//! and C0539's conversion functions only touch
+//! [`adk_genai::content::Content`]/[`Part`] (already real, non-opaque
+//! types) plus this module's own new wire-shape stand-ins — all of
+//! which already have everything required. **C0538's other half stays
+//! deferred**: `_build_effort_param`/`AnthropicGenerateContentConfig.effort`
+//! (Anthropic's separate `reasoning_effort` request field, distinct from
+//! `thinking_budget`) needs a genuinely new field on
+//! `AnthropicGenerateContentConfig` (a type that doesn't exist in this
+//! port yet, since the whole `AnthropicLlm`-specific config subclass is
+//! part of the deferred `AnthropicLlm` backend) — left for that
+//! follow-up batch rather than bolted on here.
+//!
+//! **C0539's `python_str_stand_in`, disclosed**: the source's
+//! `function_response` branch falls back to Python's `str()`/dict-
+//! `repr()` stringification for a tool-response content item that isn't
+//! already `{"type": "text", "text": ...}`-shaped. This port uses
+//! compact JSON instead (a bare string still round-trips unquoted), the
+//! same disclosed lower-fidelity idiom
+//! `llm_backed_user_simulator.rs::display_args` already establishes.
+//!
+//! **C0539's `thought_signature`, no byte-level codec needed**: the
+//! source's `part.thought_signature` is raw `bytes`, encoded/decoded via
+//! plain UTF-8 (not base64) when moving to/from Anthropic's `signature`/
+//! `data` string fields. This port's [`Part::thought_signature`] is
+//! already an opaque [`Value`] holding that same string directly (see
+//! `content.rs`'s own doc and this crate's other `thought_signature`
+//! call sites) — so conversion here is a direct `Value::String` read/
+//! write, with no encode/decode step to port.
 //!
 //! **`to_google_genai_finish_reason`, wire string not enum**: the source
 //! maps to a `types.FinishReason` enum member; this port's
@@ -55,8 +78,9 @@
 //! consistent with the "no enum to normalize away" precedent already
 //! established in `stable_semconv.rs`.
 
+use adk_genai::content::{Content, FunctionCall, FunctionResponse, MediaBlobStub, Part};
 use rusty_serde::value::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// `anthropic_llm._ToolUseIdSanitizer` — maps invalid `tool_use` ids to
 /// deterministic fallbacks. Reuse one instance per conversation so a
@@ -375,6 +399,476 @@ pub fn build_anthropic_thinking_param(
     Ok(Some(AnthropicThinkingParam::Enabled {
         budget_tokens: thinking_budget,
     }))
+}
+
+/// `anthropic_llm.to_claude_role` — Anthropic only has `"user"`/
+/// `"assistant"` roles; any genai role other than `"model"`/`"assistant"`
+/// (including `None`) maps to `"user"`.
+pub fn to_claude_role(role: Option<&str>) -> &'static str {
+    match role {
+        Some("model") | Some("assistant") => "assistant",
+        _ => "user",
+    }
+}
+
+const ANTHROPIC_IMAGE_MEDIA_TYPES: &[&str] =
+    &["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+fn is_image_part(part: &Part) -> bool {
+    part.inline_data
+        .as_ref()
+        .and_then(|blob| blob.mime_type.as_deref())
+        .is_some_and(|mime_type| mime_type.starts_with("image/"))
+}
+
+fn is_pdf_part(part: &Part) -> bool {
+    part.inline_data
+        .as_ref()
+        .and_then(|blob| blob.mime_type.as_deref())
+        .is_some_and(|mime_type| {
+            mime_type.split(';').next().unwrap_or(mime_type).trim() == "application/pdf"
+        })
+}
+
+fn normalize_image_media_type(mime_type: &str) -> Result<String, String> {
+    let normalized = mime_type
+        .split(';')
+        .next()
+        .unwrap_or(mime_type)
+        .trim()
+        .to_lowercase();
+    if ANTHROPIC_IMAGE_MEDIA_TYPES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "Unsupported Anthropic image MIME type: {mime_type}"
+        ))
+    }
+}
+
+/// A [`MediaBlobStub`]'s already-base64-encoded `"data"` wire key — this
+/// port stores it opaquely in `rest` (see that struct's own doc), and
+/// Anthropic's own block params want the same base64 string directly, so
+/// there's no decode/re-encode round trip to do here (unlike the
+/// source, whose `types.Blob.data` is raw bytes it re-encodes with
+/// `base64.b64encode`).
+fn blob_data_base64(blob: &MediaBlobStub) -> Option<&str> {
+    blob.rest.as_ref()?.get("data")?.as_str()
+}
+
+/// Wire-shape stand-in for Anthropic's `Base64ImageSourceParam`/
+/// `Base64PDFSourceParam` — declared ahead of its real HTTP-transport
+/// caller, same precedent as [`AnthropicToolParam`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnthropicBase64Source {
+    pub media_type: String,
+    pub data: String,
+}
+
+/// `anthropic_llm._ToolResultContentBlockParam` — the subset of block
+/// types Claude accepts inside a tool result.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnthropicToolResultBlock {
+    Text(String),
+    Image(AnthropicBase64Source),
+    Document(AnthropicBase64Source),
+}
+
+/// `anthropic_types.ToolResultBlockParam.content`'s `str |
+/// list[_ToolResultContentBlockParam]` union.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnthropicToolResultContent {
+    Text(String),
+    Blocks(Vec<AnthropicToolResultBlock>),
+}
+
+/// `anthropic_llm._MessageBlockParam` — a request-side content block.
+/// Declared ahead of its real HTTP-transport caller, same precedent as
+/// [`AnthropicToolParam`]/[`AnthropicThinkingParam`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnthropicMessageBlock {
+    Text(String),
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    RedactedThinking {
+        data: String,
+    },
+    Image(AnthropicBase64Source),
+    Document(AnthropicBase64Source),
+    ToolUse {
+        id: String,
+        name: String,
+        input: BTreeMap<String, Value>,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: AnthropicToolResultContent,
+        is_error: bool,
+    },
+}
+
+/// `anthropic_types.MessageParam` — a full request-side message.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnthropicMessageParam {
+    pub role: &'static str,
+    pub content: Vec<AnthropicMessageBlock>,
+}
+
+/// `anthropic_llm._function_response_media_blocks` — converts media a
+/// tool attached to its response into tool result blocks. Media Claude
+/// cannot carry in a tool result is dropped with a warning (`eprintln!`,
+/// this port's established ad hoc warning convention) rather than
+/// raised on, since the tool that produced it is often third-party code
+/// the caller cannot change.
+fn function_response_media_blocks(
+    function_response: &FunctionResponse,
+) -> Vec<AnthropicToolResultBlock> {
+    let mut blocks = Vec::new();
+    for response_part in function_response.parts.iter().flatten() {
+        let Some(blob) = &response_part.inline_data else {
+            continue;
+        };
+        let Some(data) = blob_data_base64(blob) else {
+            continue;
+        };
+        let Some(mime_type) = &blob.mime_type else {
+            continue;
+        };
+        let media_type = mime_type
+            .split(';')
+            .next()
+            .unwrap_or(mime_type)
+            .trim()
+            .to_lowercase();
+        if ANTHROPIC_IMAGE_MEDIA_TYPES.contains(&media_type.as_str()) {
+            blocks.push(AnthropicToolResultBlock::Image(AnthropicBase64Source {
+                media_type,
+                data: data.to_string(),
+            }));
+        } else if media_type == "application/pdf" {
+            blocks.push(AnthropicToolResultBlock::Document(AnthropicBase64Source {
+                media_type,
+                data: data.to_string(),
+            }));
+        } else {
+            eprintln!(
+                "Dropping tool result media of type {media_type}, which Claude cannot receive \
+                 in a tool result."
+            );
+        }
+    }
+    blocks
+}
+
+/// Stand-in for Python's `str()`/dict-`repr()` stringification of a
+/// tool-response value that isn't already `{"type": "text", "text":
+/// ...}`-shaped — compact JSON instead, the same disclosed lower-
+/// fidelity idiom `llm_backed_user_simulator.rs::display_args` already
+/// establishes. A bare string round-trips unquoted, matching `str(s)`.
+fn python_str_stand_in(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        other => rusty_serde::json::to_string(other).unwrap_or_default(),
+    }
+}
+
+/// `anthropic_llm._part_to_message_block`'s `function_response` branch,
+/// factored out: builds the serializable `content` text a tool's
+/// response contributes, before any media blocks are appended.
+fn function_response_content_text(response_data: &BTreeMap<String, Value>) -> String {
+    match response_data.get("content") {
+        Some(Value::Seq(items)) if !items.is_empty() => items
+            .iter()
+            .map(|item| match item {
+                Value::Map(_)
+                    if item.get("type").and_then(Value::as_str) == Some("text")
+                        && item.get("text").is_some() =>
+                {
+                    item.get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                }
+                other => python_str_stand_in(other),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(Value::String(s)) if !s.is_empty() => s.clone(),
+        _ => match response_data.get("result") {
+            Some(result) if !matches!(result, Value::Null) => match result {
+                Value::Map(_) | Value::Seq(_) => {
+                    rusty_serde::json::to_string(result).unwrap_or_default()
+                }
+                other => python_str_stand_in(other),
+            },
+            _ => {
+                if response_data.is_empty() {
+                    String::new()
+                } else {
+                    let value = Value::Map(
+                        response_data
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    );
+                    rusty_serde::json::to_string(&value).unwrap_or_default()
+                }
+            }
+        },
+    }
+}
+
+fn function_response_to_block(
+    function_response: &FunctionResponse,
+    sanitizer: &mut ToolUseIdSanitizer,
+) -> AnthropicMessageBlock {
+    let response_data = function_response.response.clone().unwrap_or_default();
+    let content_text = function_response_content_text(&response_data);
+
+    let media_blocks = function_response_media_blocks(function_response);
+    let content = if media_blocks.is_empty() {
+        AnthropicToolResultContent::Text(content_text)
+    } else {
+        let mut blocks = Vec::new();
+        if !content_text.is_empty() {
+            blocks.push(AnthropicToolResultBlock::Text(content_text));
+        }
+        blocks.extend(media_blocks);
+        AnthropicToolResultContent::Blocks(blocks)
+    };
+
+    AnthropicMessageBlock::ToolResult {
+        tool_use_id: sanitizer.sanitize(function_response.id.as_deref()),
+        content,
+        is_error: false,
+    }
+}
+
+fn image_part_to_block(part: &Part) -> Result<AnthropicMessageBlock, String> {
+    let blob = part
+        .inline_data
+        .as_ref()
+        .ok_or_else(|| "Anthropic image parts require MIME type and data".to_string())?;
+    let data = blob_data_base64(blob)
+        .ok_or_else(|| "Anthropic image parts require MIME type and data".to_string())?;
+    let mime_type = blob
+        .mime_type
+        .as_deref()
+        .ok_or_else(|| "Anthropic image parts require MIME type and data".to_string())?;
+    let media_type = normalize_image_media_type(mime_type)?;
+    Ok(AnthropicMessageBlock::Image(AnthropicBase64Source {
+        media_type,
+        data: data.to_string(),
+    }))
+}
+
+fn pdf_part_to_block(part: &Part) -> Result<AnthropicMessageBlock, String> {
+    let blob = part
+        .inline_data
+        .as_ref()
+        .ok_or_else(|| "Anthropic PDF parts require data".to_string())?;
+    let data =
+        blob_data_base64(blob).ok_or_else(|| "Anthropic PDF parts require data".to_string())?;
+    Ok(AnthropicMessageBlock::Document(AnthropicBase64Source {
+        media_type: "application/pdf".to_string(),
+        data: data.to_string(),
+    }))
+}
+
+/// `anthropic_llm._part_to_message_block`.
+///
+/// The bare `assert function_call.name` in the source's `function_call`
+/// branch is ported as a Rust panic, the same "assert = caller
+/// invariant" convention [`function_declaration_to_tool_param`] already
+/// establishes in this file — distinct from the final `NotImplementedError`
+/// case (a genuinely unsupported part shape), which this port surfaces as
+/// `Err` since it's a real, reachable failure mode, not an invariant.
+fn part_to_message_block_with(
+    part: &Part,
+    sanitizer: &mut ToolUseIdSanitizer,
+) -> Result<AnthropicMessageBlock, String> {
+    let has_text = part.text.as_deref().is_some_and(|text| !text.is_empty());
+    let has_thought_signature = part
+        .thought_signature
+        .as_ref()
+        .and_then(Value::as_str)
+        .is_some_and(|signature| !signature.is_empty());
+
+    if part.thought == Some(true) && has_text {
+        let signature = if has_thought_signature {
+            part.thought_signature
+                .as_ref()
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            String::new()
+        };
+        return Ok(AnthropicMessageBlock::Thinking {
+            thinking: part.text.clone().unwrap_or_default(),
+            signature,
+        });
+    }
+    if part.thought == Some(true) && has_thought_signature {
+        return Ok(AnthropicMessageBlock::RedactedThinking {
+            data: part
+                .thought_signature
+                .as_ref()
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        });
+    }
+    if let Some(text) = &part.text {
+        return Ok(AnthropicMessageBlock::Text(text.clone()));
+    }
+    if let Some(function_call) = &part.function_call {
+        let name = function_call
+            .name
+            .clone()
+            .filter(|name| !name.is_empty())
+            .expect("function_call.name is required");
+        return Ok(AnthropicMessageBlock::ToolUse {
+            id: sanitizer.sanitize(function_call.id.as_deref()),
+            name,
+            input: function_call.args.clone().unwrap_or_default(),
+        });
+    }
+    if let Some(function_response) = &part.function_response {
+        return Ok(function_response_to_block(function_response, sanitizer));
+    }
+    if is_image_part(part) {
+        return image_part_to_block(part);
+    }
+    if is_pdf_part(part) {
+        return pdf_part_to_block(part);
+    }
+    if let Some(executable_code) = &part.executable_code {
+        let code = executable_code
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        return Ok(AnthropicMessageBlock::Text(format!(
+            "Code:```python\n{code}\n```"
+        )));
+    }
+    if let Some(code_execution_result) = &part.code_execution_result {
+        let output = code_execution_result
+            .get("output")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        return Ok(AnthropicMessageBlock::Text(format!(
+            "Execution Result:```code_output\n{output}\n```"
+        )));
+    }
+
+    Err(format!("Not supported yet: {part:?}"))
+}
+
+/// `anthropic_llm.part_to_message_block` — the module-level convenience
+/// wrapper that builds a fresh [`ToolUseIdSanitizer`] per call.
+pub fn part_to_message_block(part: &Part) -> Result<AnthropicMessageBlock, String> {
+    part_to_message_block_with(part, &mut ToolUseIdSanitizer::new())
+}
+
+/// `anthropic_llm._content_to_message_param`. Image/PDF parts are
+/// dropped with a warning (`eprintln!`) for any non-`"user"` role,
+/// including a `None` role — matching the source's own `content.role !=
+/// "user"` comparison exactly (a `None` role compares unequal to the
+/// literal `"user"` too).
+pub fn content_to_message_param_with(
+    content: &Content,
+    sanitizer: &mut ToolUseIdSanitizer,
+) -> Result<AnthropicMessageParam, String> {
+    let is_user = content.role.as_deref() == Some("user");
+    let mut blocks = Vec::with_capacity(content.parts.len());
+    for part in &content.parts {
+        if !is_user && is_image_part(part) {
+            eprintln!("Image data is not supported in Claude for assistant turns.");
+            continue;
+        }
+        if !is_user && is_pdf_part(part) {
+            eprintln!("PDF data is not supported in Claude for assistant turns.");
+            continue;
+        }
+        blocks.push(part_to_message_block_with(part, sanitizer)?);
+    }
+    Ok(AnthropicMessageParam {
+        role: to_claude_role(content.role.as_deref()),
+        content: blocks,
+    })
+}
+
+/// `anthropic_llm.content_to_message_param` — the module-level
+/// convenience wrapper that builds a fresh [`ToolUseIdSanitizer`] per
+/// call.
+pub fn content_to_message_param(content: &Content) -> Result<AnthropicMessageParam, String> {
+    content_to_message_param_with(content, &mut ToolUseIdSanitizer::new())
+}
+
+/// `anthropic_llm.content_block_to_part` — the response-parsing
+/// direction, narrowed to the closed set of Anthropic content-block
+/// variants [`AnthropicResponseBlock`] models (the same four the source
+/// itself handles; every other `anthropic_types.ContentBlock` subtype
+/// hits the source's own `raise NotImplementedError`, so there is no
+/// fifth variant for this port's enum to be missing — unlike
+/// [`part_to_message_block`], this direction cannot fail).
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnthropicResponseBlock {
+    Thinking {
+        thinking: String,
+        signature: Option<String>,
+    },
+    RedactedThinking {
+        data: String,
+    },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: Option<String>,
+        name: String,
+        input: BTreeMap<String, Value>,
+    },
+}
+
+/// `anthropic_llm.content_block_to_part`.
+pub fn content_block_to_part(content_block: &AnthropicResponseBlock) -> Part {
+    match content_block {
+        AnthropicResponseBlock::Thinking {
+            thinking,
+            signature,
+        } => {
+            let mut part = Part {
+                text: Some(thinking.clone()),
+                thought: Some(true),
+                ..Default::default()
+            };
+            if let Some(signature) = signature.as_ref().filter(|s| !s.is_empty()) {
+                part.thought_signature = Some(Value::String(signature.clone()));
+            }
+            part
+        }
+        AnthropicResponseBlock::RedactedThinking { data } => Part {
+            thought: Some(true),
+            thought_signature: Some(Value::String(data.clone())),
+            ..Default::default()
+        },
+        AnthropicResponseBlock::Text { text } => Part::text(text.clone()),
+        AnthropicResponseBlock::ToolUse { id, name, input } => {
+            let mut part = Part::function_call(FunctionCall {
+                name: Some(name.clone()),
+                args: Some(input.clone()),
+                ..Default::default()
+            });
+            if let Some(function_call) = part.function_call.as_mut() {
+                function_call.id = id.clone();
+            }
+            part
+        }
+    }
 }
 
 #[cfg(test)]
@@ -808,5 +1302,446 @@ mod tests {
                 budget_tokens: 10240
             }))
         );
+    }
+
+    // --- C0539: Content <-> Anthropic block conversion ---
+
+    fn image_part(mime_type: &str, data: &str) -> Part {
+        Part {
+            inline_data: Some(MediaBlobStub {
+                mime_type: Some(mime_type.to_string()),
+                rest: Some(Value::Map(vec![(
+                    "data".to_string(),
+                    Value::String(data.to_string()),
+                )])),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn to_claude_role_maps_model_and_assistant_to_assistant() {
+        assert_eq!(to_claude_role(Some("model")), "assistant");
+        assert_eq!(to_claude_role(Some("assistant")), "assistant");
+    }
+
+    #[test]
+    fn to_claude_role_defaults_everything_else_to_user() {
+        assert_eq!(to_claude_role(Some("user")), "user");
+        assert_eq!(to_claude_role(None), "user");
+        assert_eq!(to_claude_role(Some("system")), "user");
+    }
+
+    #[test]
+    fn part_to_message_block_converts_plain_text() {
+        let block = part_to_message_block(&Part::text("hello")).unwrap();
+        assert_eq!(block, AnthropicMessageBlock::Text("hello".to_string()));
+    }
+
+    #[test]
+    fn part_to_message_block_converts_thinking_with_signature() {
+        let part = Part {
+            text: Some("reasoning...".to_string()),
+            thought: Some(true),
+            thought_signature: Some(Value::String("sig".to_string())),
+            ..Default::default()
+        };
+        let block = part_to_message_block(&part).unwrap();
+        assert_eq!(
+            block,
+            AnthropicMessageBlock::Thinking {
+                thinking: "reasoning...".to_string(),
+                signature: "sig".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn part_to_message_block_thinking_without_signature_uses_empty_string() {
+        let part = Part {
+            text: Some("reasoning...".to_string()),
+            thought: Some(true),
+            thought_signature: None,
+            ..Default::default()
+        };
+        let block = part_to_message_block(&part).unwrap();
+        assert_eq!(
+            block,
+            AnthropicMessageBlock::Thinking {
+                thinking: "reasoning...".to_string(),
+                signature: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn part_to_message_block_converts_redacted_thinking() {
+        let part = Part {
+            text: None,
+            thought: Some(true),
+            thought_signature: Some(Value::String("encrypted-blob".to_string())),
+            ..Default::default()
+        };
+        let block = part_to_message_block(&part).unwrap();
+        assert_eq!(
+            block,
+            AnthropicMessageBlock::RedactedThinking {
+                data: "encrypted-blob".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn part_to_message_block_converts_a_function_call_to_tool_use() {
+        let part = Part::function_call(FunctionCall {
+            id: Some("call_1".to_string()),
+            name: Some("roll_die".to_string()),
+            args: Some(BTreeMap::from([("sides".to_string(), Value::UInt(6))])),
+            ..Default::default()
+        });
+        let block = part_to_message_block(&part).unwrap();
+        assert_eq!(
+            block,
+            AnthropicMessageBlock::ToolUse {
+                id: "call_1".to_string(),
+                name: "roll_die".to_string(),
+                input: BTreeMap::from([("sides".to_string(), Value::UInt(6))]),
+            }
+        );
+    }
+
+    #[test]
+    fn part_to_message_block_sanitizes_an_invalid_tool_use_id() {
+        let part = Part::function_call(FunctionCall {
+            id: Some("not valid!".to_string()),
+            name: Some("roll_die".to_string()),
+            ..Default::default()
+        });
+        let mut sanitizer = ToolUseIdSanitizer::new();
+        let block = part_to_message_block_with(&part, &mut sanitizer).unwrap();
+        match block {
+            AnthropicMessageBlock::ToolUse { id, .. } => assert_eq!(id, "toolu_fallback_0"),
+            other => panic!("expected ToolUse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "function_call.name is required")]
+    fn part_to_message_block_panics_on_a_missing_function_call_name() {
+        let part = Part::function_call(FunctionCall::default());
+        let _ = part_to_message_block(&part);
+    }
+
+    #[test]
+    fn part_to_message_block_converts_a_simple_text_function_response() {
+        let part = Part {
+            function_response: Some(FunctionResponse {
+                id: Some("call_1".to_string()),
+                response: Some(BTreeMap::from([(
+                    "result".to_string(),
+                    Value::String("42".to_string()),
+                )])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let block = part_to_message_block(&part).unwrap();
+        assert_eq!(
+            block,
+            AnthropicMessageBlock::ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: AnthropicToolResultContent::Text("42".to_string()),
+                is_error: false,
+            }
+        );
+    }
+
+    #[test]
+    fn part_to_message_block_function_response_extracts_content_list_text_items() {
+        let part = Part {
+            function_response: Some(FunctionResponse {
+                id: Some("call_1".to_string()),
+                response: Some(BTreeMap::from([(
+                    "content".to_string(),
+                    Value::Seq(vec![
+                        Value::Map(vec![
+                            ("type".to_string(), Value::String("text".to_string())),
+                            ("text".to_string(), Value::String("first".to_string())),
+                        ]),
+                        Value::Map(vec![
+                            ("type".to_string(), Value::String("text".to_string())),
+                            ("text".to_string(), Value::String("second".to_string())),
+                        ]),
+                    ]),
+                )])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let block = part_to_message_block(&part).unwrap();
+        match block {
+            AnthropicMessageBlock::ToolResult { content, .. } => {
+                assert_eq!(
+                    content,
+                    AnthropicToolResultContent::Text("first\nsecond".to_string())
+                );
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn part_to_message_block_function_response_appends_media_blocks() {
+        let part = Part {
+            function_response: Some(FunctionResponse {
+                id: Some("call_1".to_string()),
+                response: Some(BTreeMap::from([(
+                    "result".to_string(),
+                    Value::String("done".to_string()),
+                )])),
+                parts: Some(vec![adk_genai::content::FunctionResponsePart {
+                    inline_data: Some(MediaBlobStub {
+                        mime_type: Some("image/png".to_string()),
+                        rest: Some(Value::Map(vec![(
+                            "data".to_string(),
+                            Value::String("aW1hZ2U=".to_string()),
+                        )])),
+                    }),
+                    file_data: None,
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let block = part_to_message_block(&part).unwrap();
+        match block {
+            AnthropicMessageBlock::ToolResult { content, .. } => match content {
+                AnthropicToolResultContent::Blocks(blocks) => {
+                    assert_eq!(blocks.len(), 2);
+                    assert_eq!(
+                        blocks[0],
+                        AnthropicToolResultBlock::Text("done".to_string())
+                    );
+                    assert_eq!(
+                        blocks[1],
+                        AnthropicToolResultBlock::Image(AnthropicBase64Source {
+                            media_type: "image/png".to_string(),
+                            data: "aW1hZ2U=".to_string(),
+                        })
+                    );
+                }
+                other => panic!("expected Blocks, got {other:?}"),
+            },
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn part_to_message_block_converts_an_image_part() {
+        let part = image_part("image/png", "aW1hZ2U=");
+        let block = part_to_message_block(&part).unwrap();
+        assert_eq!(
+            block,
+            AnthropicMessageBlock::Image(AnthropicBase64Source {
+                media_type: "image/png".to_string(),
+                data: "aW1hZ2U=".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn part_to_message_block_rejects_an_unsupported_image_mime_type() {
+        let part = image_part("image/bmp", "aW1hZ2U=");
+        assert!(part_to_message_block(&part).is_err());
+    }
+
+    #[test]
+    fn part_to_message_block_converts_a_pdf_part() {
+        let part = image_part("application/pdf", "cGRm");
+        let block = part_to_message_block(&part).unwrap();
+        assert_eq!(
+            block,
+            AnthropicMessageBlock::Document(AnthropicBase64Source {
+                media_type: "application/pdf".to_string(),
+                data: "cGRm".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn part_to_message_block_renders_executable_code_as_fenced_text() {
+        let part = Part {
+            executable_code: Some(Value::Map(vec![(
+                "code".to_string(),
+                Value::String("print(1)".to_string()),
+            )])),
+            ..Default::default()
+        };
+        let block = part_to_message_block(&part).unwrap();
+        assert_eq!(
+            block,
+            AnthropicMessageBlock::Text("Code:```python\nprint(1)\n```".to_string())
+        );
+    }
+
+    #[test]
+    fn part_to_message_block_renders_code_execution_result_as_fenced_text() {
+        let part = Part {
+            code_execution_result: Some(Value::Map(vec![(
+                "output".to_string(),
+                Value::String("1\n".to_string()),
+            )])),
+            ..Default::default()
+        };
+        let block = part_to_message_block(&part).unwrap();
+        assert_eq!(
+            block,
+            AnthropicMessageBlock::Text("Execution Result:```code_output\n1\n\n```".to_string())
+        );
+    }
+
+    #[test]
+    fn part_to_message_block_errors_for_an_empty_part() {
+        let part = Part::default();
+        assert!(part_to_message_block(&part).is_err());
+    }
+
+    #[test]
+    fn content_to_message_param_maps_role_and_converts_every_part() {
+        let content = Content::new("user", vec![Part::text("hi"), Part::text("there")]);
+        let message = content_to_message_param(&content).unwrap();
+        assert_eq!(message.role, "user");
+        assert_eq!(
+            message.content,
+            vec![
+                AnthropicMessageBlock::Text("hi".to_string()),
+                AnthropicMessageBlock::Text("there".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn content_to_message_param_drops_image_parts_on_non_user_turns() {
+        let content = Content::new(
+            "model",
+            vec![
+                Part::text("here's an image"),
+                image_part("image/png", "aW1hZ2U="),
+            ],
+        );
+        let message = content_to_message_param(&content).unwrap();
+        assert_eq!(message.role, "assistant");
+        assert_eq!(
+            message.content,
+            vec![AnthropicMessageBlock::Text("here's an image".to_string())]
+        );
+    }
+
+    #[test]
+    fn content_to_message_param_drops_pdf_parts_on_non_user_turns() {
+        let content = Content::new("model", vec![image_part("application/pdf", "cGRm")]);
+        let message = content_to_message_param(&content).unwrap();
+        assert!(message.content.is_empty());
+    }
+
+    #[test]
+    fn content_to_message_param_keeps_image_parts_on_user_turns() {
+        let content = Content::new("user", vec![image_part("image/png", "aW1hZ2U=")]);
+        let message = content_to_message_param(&content).unwrap();
+        assert_eq!(message.content.len(), 1);
+    }
+
+    #[test]
+    fn content_to_message_param_treats_a_missing_role_as_non_user() {
+        let content = Content {
+            role: None,
+            parts: vec![image_part("image/png", "aW1hZ2U=")],
+        };
+        let message = content_to_message_param(&content).unwrap();
+        assert_eq!(message.role, "user");
+        assert!(message.content.is_empty());
+    }
+
+    #[test]
+    fn content_block_to_part_converts_a_text_block() {
+        let part = content_block_to_part(&AnthropicResponseBlock::Text {
+            text: "hi".to_string(),
+        });
+        assert_eq!(part.text.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn content_block_to_part_converts_a_thinking_block() {
+        let part = content_block_to_part(&AnthropicResponseBlock::Thinking {
+            thinking: "reasoning...".to_string(),
+            signature: Some("sig".to_string()),
+        });
+        assert_eq!(part.text.as_deref(), Some("reasoning..."));
+        assert_eq!(part.thought, Some(true));
+        assert_eq!(
+            part.thought_signature,
+            Some(Value::String("sig".to_string()))
+        );
+    }
+
+    #[test]
+    fn content_block_to_part_thinking_without_signature_omits_it() {
+        let part = content_block_to_part(&AnthropicResponseBlock::Thinking {
+            thinking: "reasoning...".to_string(),
+            signature: None,
+        });
+        assert_eq!(part.thought_signature, None);
+    }
+
+    #[test]
+    fn content_block_to_part_converts_a_redacted_thinking_block() {
+        let part = content_block_to_part(&AnthropicResponseBlock::RedactedThinking {
+            data: "encrypted-blob".to_string(),
+        });
+        assert_eq!(part.thought, Some(true));
+        assert_eq!(
+            part.thought_signature,
+            Some(Value::String("encrypted-blob".to_string()))
+        );
+        assert_eq!(part.text, None);
+    }
+
+    #[test]
+    fn content_block_to_part_converts_a_tool_use_block() {
+        let part = content_block_to_part(&AnthropicResponseBlock::ToolUse {
+            id: Some("toolu_1".to_string()),
+            name: "roll_die".to_string(),
+            input: BTreeMap::from([("sides".to_string(), Value::UInt(6))]),
+        });
+        let function_call = part.function_call.unwrap();
+        assert_eq!(function_call.id.as_deref(), Some("toolu_1"));
+        assert_eq!(function_call.name.as_deref(), Some("roll_die"));
+        assert_eq!(
+            function_call.args,
+            Some(BTreeMap::from([("sides".to_string(), Value::UInt(6))]))
+        );
+    }
+
+    #[test]
+    fn part_and_response_block_round_trip_thinking() {
+        let original = Part {
+            text: Some("reasoning...".to_string()),
+            thought: Some(true),
+            thought_signature: Some(Value::String("sig".to_string())),
+            ..Default::default()
+        };
+        let block = part_to_message_block(&original).unwrap();
+        let (thinking, signature) = match block {
+            AnthropicMessageBlock::Thinking {
+                thinking,
+                signature,
+            } => (thinking, signature),
+            other => panic!("expected Thinking, got {other:?}"),
+        };
+        let round_tripped = content_block_to_part(&AnthropicResponseBlock::Thinking {
+            thinking,
+            signature: Some(signature),
+        });
+        assert_eq!(round_tripped, original);
     }
 }
