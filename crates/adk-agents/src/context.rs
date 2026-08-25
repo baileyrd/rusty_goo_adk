@@ -23,19 +23,22 @@
 //! mechanism at all, so there's nothing to inherit.
 //!
 //! **C0059/C0060 (`Context::run_node`), what's ported and what isn't**:
-//! see [`Context::run_node`]'s own doc for the Mode-1-vs-Mode-2 dispatch
-//! narrowing and the events-returned-not-enqueued adaptation.
-//! `_workflow_scheduler`/`_child_run_counters` (Mode 1's own
-//! Workflow-scheduled bookkeeping) stay omitted, matching that method's
-//! own disclosure — they have no reader in this port, since `Workflow`
-//! (C0298) and `DynamicNodeScheduler` (C0318/C0319) aren't built.
-//! `Context.node`/`Context.parent_ctx` (a permanent ancestry pair on
-//! every `Context`) are deliberately never added either —
+//! see [`Context::run_node`]'s own doc for the events-returned-not-
+//! enqueued adaptation. `_workflow_scheduler`/`_child_run_counters`
+//! (Mode 1's own dynamic-dispatch bookkeeping, C0318/C0319) are now real
+//! fields — `workflow_scheduler` inherited-or-created via
+//! [`Context::for_node`] (mirroring `_derive_scheduler`), so every node
+//! context gets one; only a root (node-less) `Context::new` context has
+//! `None`, taking Mode 2 (standalone) for any direct `ctx.run_node()`
+//! call. `Context.node`/`Context.parent_ctx` (a permanent ancestry pair
+//! on every `Context`) are still deliberately never added —
 //! `workflow_transfer_utils.rs`'s own module doc explains the local,
 //! per-call [`crate::workflow_transfer_utils::ChainFrame`] chain
-//! `run_node`'s own loop builds instead.
+//! `run_node`'s own loop builds instead; that adaptation doesn't depend
+//! on which dispatch mode is active.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use adk_events::node_path_builder::NodePathBuilder;
 use adk_events::ui_widget::UiWidget;
@@ -49,6 +52,7 @@ use crate::services::{self, AuthConfig, AuthCredential};
 use crate::state::State;
 use crate::workflow_agent_node::AgentNode;
 use crate::workflow_base_node::{BaseNode, NodeRunError};
+use crate::workflow_dynamic_node_scheduler::DynamicNodeScheduler;
 use crate::workflow_errors::WorkflowNodeError;
 use crate::workflow_node_runner::{workflow_error, NodeRunner};
 use crate::workflow_transfer_utils::{
@@ -142,6 +146,16 @@ pub enum RunNodeError {
     TransferTargetNotFound(String),
     #[error("Cannot transfer from '{0}' to unrelated agent '{1}'.")]
     UnrelatedTransfer(String, String),
+    #[error(
+        "Explicit run_id \"{1}\" for node \"{0}\" must contain non-numeric characters to prevent collision with auto-generated IDs."
+    )]
+    RunIdMustBeNonNumeric(String, String),
+    #[error(
+        "Node {0} is waiting for output but was called again with rerun_on_resume=False. This would cause it to auto-complete with empty output, which is likely a configuration error. Consider setting rerun_on_resume=True."
+    )]
+    WaitingNodeRerunOnResumeDisabled(String),
+    #[error("{0}")]
+    SequenceBarrierWait(String),
 }
 
 /// Bridges [`RunNodeError`] into a [`NodeRunError`] — the same
@@ -187,6 +201,8 @@ pub struct Context {
     error_message: Option<String>,
     error_node_path: String,
     node_rerun_on_resume: bool,
+    workflow_scheduler: Option<Arc<rusty_tokio::sync::Mutex<DynamicNodeScheduler>>>,
+    child_run_counters: HashMap<String, u32>,
 }
 
 impl Context {
@@ -217,6 +233,11 @@ impl Context {
             // `node.rerun_on_resume if node else True` — a node-less
             // (root) context defaults `True`.
             node_rerun_on_resume: true,
+            // `_derive_scheduler(parent_ctx)`: a root (node-less)
+            // context always has `None` — matches Mode 2/standalone
+            // dispatch for a direct `ctx.run_node()` call off the root.
+            workflow_scheduler: None,
+            child_run_counters: HashMap::new(),
         }
     }
 
@@ -237,6 +258,7 @@ impl Context {
         attempt_count: u32,
         use_as_output: bool,
         node_rerun_on_resume: bool,
+        parent_workflow_scheduler: Option<Arc<rusty_tokio::sync::Mutex<DynamicNodeScheduler>>>,
     ) -> Self {
         let run_id = run_id.into();
         let node_path = NodePathBuilder::from_string(parent_node_path)
@@ -258,6 +280,11 @@ impl Context {
         ctx.attempt_count = attempt_count;
         ctx.output_for_ancestors = output_for_ancestors;
         ctx.node_rerun_on_resume = node_rerun_on_resume;
+        // `_derive_scheduler`: inherit the parent's scheduler, or lazily
+        // create one — a node context always ends up with `Some`.
+        ctx.workflow_scheduler = Some(parent_workflow_scheduler.unwrap_or_else(|| {
+            Arc::new(rusty_tokio::sync::Mutex::new(DynamicNodeScheduler::new()))
+        }));
         ctx
     }
 
@@ -316,6 +343,16 @@ impl Context {
     /// re-runnable parent can wake up and retrieve the child's response).
     pub(crate) fn node_rerun_on_resume(&self) -> bool {
         self.node_rerun_on_resume
+    }
+
+    /// C0059/C0060/C0318/C0319: this context's dynamic-node scheduler —
+    /// `None` for a root (node-less) context, `Some` (inherited from the
+    /// parent, or freshly created) for any node context. Drives
+    /// [`Self::run_node`]'s Mode-1-vs-Mode-2 dispatch.
+    pub(crate) fn workflow_scheduler(
+        &self,
+    ) -> Option<Arc<rusty_tokio::sync::Mutex<DynamicNodeScheduler>>> {
+        self.workflow_scheduler.clone()
     }
 
     pub(crate) fn output_emitted(&self) -> bool {
@@ -485,16 +522,18 @@ impl Context {
     /// a node it transfers to) requests, and returns once the resulting
     /// branch finishes.
     ///
-    /// **Mode 1 (`Workflow`-scheduled dispatch), not ported**: the
-    /// source dispatches through `self._workflow_scheduler` when set —
-    /// only ever true once a node is running *under* a `Workflow`
-    /// orchestrator (C0298, not built) or `DynamicNodeScheduler`
-    /// (C0318/C0319, not built). Nothing in this port can produce a
-    /// non-`None` scheduler yet (this `Context` has no such field at
-    /// all — see `context.rs`'s own module doc), so that branch is
-    /// unconditionally dead code today; this method always takes the
-    /// source's Mode 2 (standalone, via [`NodeRunner`], C0310-C0312).
-    /// Revisit once `Workflow` lands.
+    /// **Mode 1 (`Workflow`-scheduled dispatch) vs Mode 2 (standalone)**:
+    /// mirrors the source's `if self._workflow_scheduler:` check — since
+    /// every node context now carries a scheduler (inherited or
+    /// freshly created, see [`Self::for_node`]), Mode 1 fires for any
+    /// dynamic dispatch from a *node's own* context; a direct call on a
+    /// root (node-less) `Context::new` context has no scheduler and
+    /// takes Mode 2 (standalone, via [`NodeRunner`] directly — the same
+    /// primitive [`crate::workflow_dynamic_node_scheduler::
+    /// DynamicNodeScheduler`] itself dispatches through internally, so
+    /// this never recurses back into Mode 1). The explicit `run_id`
+    /// digit-collision check and the `_child_run_counters` auto-increment
+    /// are Mode-1-only in the source and stay that way here.
     ///
     /// **Events, returned instead of enqueued**: the source streams
     /// every event straight onto the shared invocation event queue as
@@ -532,6 +571,8 @@ impl Context {
             self.set_output_delegated(true);
         }
 
+        let scheduler = self.workflow_scheduler();
+
         let mut chain: Vec<ChainFrame> = Vec::new();
         let mut ctxs: Vec<Context> = Vec::new();
         let mut all_events: Vec<Event> = Vec::new();
@@ -544,22 +585,70 @@ impl Context {
         loop {
             let curr_use_as_output = curr_parent_index.is_none() && options.use_as_output;
 
-            let mut runner = NodeRunner::new(curr_node.clone())
-                .with_use_as_output(curr_use_as_output)
-                .with_sub_branch(options.use_sub_branch)
-                .with_override_branch(options.override_branch.clone())
-                .with_override_isolation_scope(options.override_isolation_scope.clone());
-            if let Some(run_id) = &curr_run_id {
-                runner = runner.with_run_id(run_id.clone());
-            }
+            let (child_ctx, child_events) = if let Some(scheduler) = &scheduler {
+                // Mode 1: dispatch through the (inherited or freshly
+                // created) `DynamicNodeScheduler` — resolves the run id
+                // first (validated if caller-supplied, auto-incremented
+                // on `curr_parent_ctx`'s own counters otherwise).
+                let run_id = match &curr_run_id {
+                    Some(rid) => {
+                        if !rid.is_empty() && rid.chars().all(|c| c.is_ascii_digit()) {
+                            return Err(run_node_error(RunNodeError::RunIdMustBeNonNumeric(
+                                curr_node.name().to_string(),
+                                rid.clone(),
+                            )));
+                        }
+                        rid.clone()
+                    }
+                    None => {
+                        let counters = match curr_parent_index {
+                            None => &mut self.child_run_counters,
+                            Some(i) => &mut ctxs[i].child_run_counters,
+                        };
+                        let counter = counters.entry(curr_node.name().to_string()).or_insert(0);
+                        *counter += 1;
+                        counter.to_string()
+                    }
+                };
 
-            let parent_ctx: &Context = match curr_parent_index {
-                None => &*self,
-                Some(i) => &ctxs[i],
+                let parent_ctx: &Context = match curr_parent_index {
+                    None => &*self,
+                    Some(i) => &ctxs[i],
+                };
+                scheduler
+                    .lock()
+                    .await
+                    .call(
+                        parent_ctx,
+                        curr_node.clone(),
+                        curr_input.clone(),
+                        curr_use_as_output,
+                        run_id,
+                        options.use_sub_branch,
+                        options.override_branch.clone(),
+                        options.override_isolation_scope.clone(),
+                    )
+                    .await
+                    .map_err(run_node_error)?
+            } else {
+                // Mode 2: standalone, via `NodeRunner` directly.
+                let mut runner = NodeRunner::new(curr_node.clone())
+                    .with_use_as_output(curr_use_as_output)
+                    .with_sub_branch(options.use_sub_branch)
+                    .with_override_branch(options.override_branch.clone())
+                    .with_override_isolation_scope(options.override_isolation_scope.clone());
+                if let Some(run_id) = &curr_run_id {
+                    runner = runner.with_run_id(run_id.clone());
+                }
+
+                let parent_ctx: &Context = match curr_parent_index {
+                    None => &*self,
+                    Some(i) => &ctxs[i],
+                };
+                runner
+                    .run(parent_ctx, curr_input.clone(), BTreeMap::new())
+                    .await
             };
-            let (child_ctx, child_events) = runner
-                .run(parent_ctx, curr_input.clone(), BTreeMap::new())
-                .await;
             all_events.extend(child_events);
 
             let transfer_to_agent = child_ctx.actions().transfer_to_agent.clone();
@@ -1289,6 +1378,7 @@ mod tests {
                 1,
                 false,
                 rerun,
+                None,
             )
         }
 
@@ -1483,6 +1573,70 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(err.to_string().contains("cannot transfer to itself"));
+        }
+
+        struct DispatchesTwice;
+        impl FunctionNodeBody for DispatchesTwice {
+            fn call<'a>(
+                &'a self,
+                ctx: &'a mut Context,
+                _node_input: Value,
+            ) -> TestBoxFuture<'a, Result<Vec<NodeYield>, NodeRunError>> {
+                Box::pin(async move {
+                    let inner = function_node("inner", false, None, None, None, EchoBody).unwrap();
+                    // Same explicit `run_id` both times: without one,
+                    // each call auto-generates a fresh, distinct run id
+                    // (a *different* dynamic node dispatch, not the same
+                    // one called twice) — see `Context::run_node`'s own
+                    // doc for the auto-increment `_child_run_counters`
+                    // behavior this sidesteps.
+                    let same_run_id = || RunNodeOptions {
+                        run_id: Some("dyn-1".to_string()),
+                        ..Default::default()
+                    };
+                    let first = ctx
+                        .run_node(
+                            inner.clone(),
+                            Value::String("hi".to_string()),
+                            same_run_id(),
+                        )
+                        .await?;
+                    let second = ctx
+                        .run_node(inner, Value::String("hi".to_string()), same_run_id())
+                        .await?;
+                    let (
+                        RunNodeOutcome::Completed(first_out),
+                        RunNodeOutcome::Completed(second_out),
+                    ) = (first, second)
+                    else {
+                        panic!("expected both dispatches to complete");
+                    };
+                    assert_eq!(first_out.events.len(), 1);
+                    assert!(
+                        second_out.events.is_empty(),
+                        "a second dynamic dispatch for the same node_path should fast-forward, not re-run"
+                    );
+                    assert_eq!(first_out.output, second_out.output);
+                    Ok(vec![NodeYield::Data(
+                        second_out.output.unwrap_or(Value::Null),
+                    )])
+                })
+            }
+        }
+
+        #[rusty_tokio::test]
+        async fn a_node_context_dispatches_dynamically_via_mode_1_and_dedups_the_second_call() {
+            // Running `outer` via `NodeRunner` (not `BaseNode::run`
+            // directly) is what gives its body a *node* context —
+            // carrying an inherited-or-fresh `DynamicNodeScheduler` — so
+            // `ctx.run_node()` inside it takes Mode 1, not Mode 2.
+            let outer = function_node("outer", true, None, None, None, DispatchesTwice).unwrap();
+            let root = context();
+            let (_ctx, events) = crate::workflow_node_runner::NodeRunner::new(outer)
+                .run(&root, Value::Null, BTreeMap::new())
+                .await;
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].output, Some(Value::String("hi".to_string())));
         }
     }
 }

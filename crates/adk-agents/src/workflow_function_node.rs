@@ -258,6 +258,7 @@ mod tests {
             1,
             false,
             true,
+            None,
         );
 
         let events = node

@@ -4,21 +4,15 @@
 //! doc for why this batch (P7 Chunk 4) has no caller yet and is still a
 //! legitimate, independently-testable batch.
 //!
-//! **`current_run`, narrowed out entirely**: the source's `check_interception`
-//! takes an optional `current_run: DynamicNodeRun` — populated only by
-//! dynamic node dispatch (`Context.run_node()`, C0059/C0060). Confirmed
-//! before writing this batch: `DynamicNodeScheduler`/`DynamicNodeRun`
-//! (C0318/C0319) are themselves still blocked — their own `__call__`
-//! needs `Context._run_node_standalone` to dispatch over an arbitrary
-//! [`crate::workflow_base_node::BaseNode`] reference, and this port's
-//! `BaseNode` is a concrete struct with no dynamic-dispatch seam. Since
-//! nothing in this port can ever construct a same-turn dynamic run
-//! record, [`check_interception`] simply omits the parameter rather
-//! than threading through an always-`None` placeholder type invented
-//! for a subsystem that doesn't exist yet — the source's "Case 1"
-//! branch (same-turn completed/waiting interception) is dropped along
-//! with it, and Case 5's `current_run is not None` fallback collapses
-//! to its `else` arm (`should_run = False`) unconditionally.
+//! **`current_run`, now restored (C0318/C0319 landed)**: the source's
+//! `check_interception` takes an optional `current_run: DynamicNodeRun`
+//! for "Case 1" (same-turn completed/waiting interception). This was
+//! originally narrowed out — `DynamicNodeScheduler`/`DynamicNodeRun`
+//! didn't exist yet — and is restored here now that they do
+//! ([`crate::workflow_dynamic_node_scheduler`]). Takes a
+//! [`crate::workflow_dynamic_node_scheduler::DynamicNodeRunSnapshot`]
+//! (that module's own doc explains why a narrow snapshot rather than
+//! the full `DynamicNodeRun`), not the full type.
 //!
 //! **`isinstance(node, Workflow)`, narrowed**: `Workflow` itself
 //! (C0298-C0306) isn't built in this port, so no [`BaseNode`] value can
@@ -43,6 +37,8 @@ use rusty_serde::value::Value;
 
 use crate::context::Context;
 use crate::workflow_base_node::BaseNode;
+use crate::workflow_dynamic_node_scheduler::DynamicNodeRunSnapshot;
+use crate::workflow_node_status::NodeStatus;
 use crate::workflow_rehydration_utils::{process_rehydrated_output, ChildScanState};
 
 /// `InterceptionResult`: result of a replay interception check.
@@ -64,11 +60,34 @@ pub struct InterceptionResult {
 
 /// `check_interception`: determines if a node execution should be
 /// intercepted based on history. See this module's own doc for the
-/// `current_run`/`Workflow` narrowing.
-pub fn check_interception(
+/// `Workflow` narrowing (`current_run` is now fully ported).
+pub(crate) fn check_interception(
     node: &BaseNode,
     recovered: Option<&ChildScanState>,
+    current_run: Option<&DynamicNodeRunSnapshot>,
 ) -> InterceptionResult {
+    // Case 1: same-turn completed or waiting interception (dynamic
+    // nodes only). If a node already successfully executed or is
+    // currently blocked in the current turn, bypass execution and
+    // return its current-turn results.
+    if let Some(current_run) = current_run {
+        if current_run.status == NodeStatus::Completed {
+            return InterceptionResult {
+                should_run: false,
+                output: current_run.output.clone(),
+                transfer_to_agent: current_run.transfer_to_agent.clone(),
+                ..Default::default()
+            };
+        }
+        if current_run.status == NodeStatus::Waiting && !current_run.interrupts.is_empty() {
+            return InterceptionResult {
+                should_run: false,
+                interrupts: current_run.interrupts.iter().cloned().collect(),
+                ..Default::default()
+            };
+        }
+    }
+
     let Some(recovered) = recovered else {
         return InterceptionResult {
             should_run: true,
@@ -130,7 +149,10 @@ pub fn check_interception(
             should_run = true;
             resume_inputs = Some(recovered.resolved_responses.clone());
         } else {
-            should_run = false;
+            // Allow fresh execution for crashed/timeout dynamic nodes;
+            // static nodes with no outcome (e.g. return `None`) are
+            // fast-forwarded instead.
+            should_run = current_run.is_some();
         }
     }
 
@@ -173,6 +195,7 @@ pub fn create_mock_context(
         1,
         false,
         node.rerun_on_resume(),
+        None,
     );
 
     if let Some(output) = &result.output {
@@ -229,7 +252,51 @@ mod tests {
 
     #[test]
     fn no_recovered_state_always_runs() {
-        let result = check_interception(&node("n"), None);
+        let result = check_interception(&node("n"), None, None);
+        assert!(result.should_run);
+    }
+
+    #[test]
+    fn a_same_turn_completed_run_fast_forwards_without_touching_recovered_state() {
+        let current_run = DynamicNodeRunSnapshot {
+            status: NodeStatus::Completed,
+            interrupts: Vec::new(),
+            output: Some(Value::String("cached".to_string())),
+            transfer_to_agent: Some("other_agent".to_string()),
+        };
+        let result = check_interception(&node("n"), None, Some(&current_run));
+        assert!(!result.should_run);
+        assert_eq!(result.output, Some(Value::String("cached".to_string())));
+        assert_eq!(result.transfer_to_agent, Some("other_agent".to_string()));
+    }
+
+    #[test]
+    fn a_same_turn_waiting_run_with_interrupts_stays_waiting() {
+        let current_run = DynamicNodeRunSnapshot {
+            status: NodeStatus::Waiting,
+            interrupts: vec!["i1".to_string()],
+            output: None,
+            transfer_to_agent: None,
+        };
+        let result = check_interception(&node("n"), None, Some(&current_run));
+        assert!(!result.should_run);
+        assert!(result.interrupts.contains("i1"));
+    }
+
+    #[test]
+    fn a_crashed_dynamic_node_with_no_recovered_outcome_is_allowed_to_rerun() {
+        // Case 5's fallback: a dynamic node (current_run present) with no
+        // prior output/route/interrupts and not wait_for_output/rerun_on_
+        // resume still gets a fresh run, unlike a static node in the same
+        // situation (which fast-forwards with no output).
+        let current_run = DynamicNodeRunSnapshot {
+            status: NodeStatus::Failed,
+            interrupts: Vec::new(),
+            output: None,
+            transfer_to_agent: None,
+        };
+        let recovered = ChildScanState::default();
+        let result = check_interception(&node("n"), Some(&recovered), Some(&current_run));
         assert!(result.should_run);
     }
 
@@ -237,7 +304,7 @@ mod tests {
     fn unresolved_interrupts_with_no_progress_stay_waiting() {
         let mut recovered = ChildScanState::default();
         recovered.interrupt_ids.insert("i1".to_string());
-        let result = check_interception(&node("n"), Some(&recovered));
+        let result = check_interception(&node("n"), Some(&recovered), None);
         assert!(!result.should_run);
         assert!(result.interrupts.contains("i1"));
     }
@@ -251,7 +318,7 @@ mod tests {
         recovered
             .resolved_responses
             .insert("i1".to_string(), Value::String("answer".to_string()));
-        let result = check_interception(&node_with_rerun_on_resume("n"), Some(&recovered));
+        let result = check_interception(&node_with_rerun_on_resume("n"), Some(&recovered), None);
         assert!(result.should_run);
         assert_eq!(
             result.resume_inputs.unwrap().get("i1"),
@@ -265,7 +332,7 @@ mod tests {
             output: Some(ChildOutput::Value(Value::String("done".to_string()))),
             ..Default::default()
         };
-        let result = check_interception(&node("n"), Some(&recovered));
+        let result = check_interception(&node("n"), Some(&recovered), None);
         assert!(!result.should_run);
         assert_eq!(result.output, Some(Value::String("done".to_string())));
     }
@@ -278,7 +345,7 @@ mod tests {
         recovered
             .resolved_responses
             .insert("i1".to_string(), Value::Int(9));
-        let result = check_interception(&node("n"), Some(&recovered));
+        let result = check_interception(&node("n"), Some(&recovered), None);
         assert!(!result.should_run);
         assert_eq!(result.output, Some(Value::Int(9)));
     }
@@ -291,21 +358,21 @@ mod tests {
         recovered
             .resolved_responses
             .insert("i1".to_string(), Value::Int(9));
-        let result = check_interception(&node_with_rerun_on_resume("n"), Some(&recovered));
+        let result = check_interception(&node_with_rerun_on_resume("n"), Some(&recovered), None);
         assert!(result.should_run);
     }
 
     #[test]
     fn no_prior_outcome_fast_forwards_a_plain_node() {
         let recovered = ChildScanState::default();
-        let result = check_interception(&node("n"), Some(&recovered));
+        let result = check_interception(&node("n"), Some(&recovered), None);
         assert!(!result.should_run);
     }
 
     #[test]
     fn no_prior_outcome_reruns_a_rerun_on_resume_node() {
         let recovered = ChildScanState::default();
-        let result = check_interception(&node_with_rerun_on_resume("n"), Some(&recovered));
+        let result = check_interception(&node_with_rerun_on_resume("n"), Some(&recovered), None);
         assert!(result.should_run);
     }
 

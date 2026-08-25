@@ -188,6 +188,7 @@ pub mod telemetry_context;
 pub mod transcription_entry;
 pub mod workflow_agent_node;
 pub mod workflow_base_node;
+pub mod workflow_dynamic_node_scheduler;
 pub mod workflow_errors;
 pub mod workflow_function_node;
 pub mod workflow_graph;

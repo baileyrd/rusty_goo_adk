@@ -291,6 +291,7 @@ impl NodeRunner {
             attempt_count,
             self.use_as_output,
             self.node.rerun_on_resume(),
+            parent_ctx.workflow_scheduler(),
         );
 
         if let Some(scope) = &self.override_isolation_scope {
@@ -717,6 +718,7 @@ mod tests {
             1,
             false,
             false,
+            None,
         );
         let (ctx, _events) = runner.run(&parent, Value::Null, BTreeMap::new()).await;
         assert_eq!(ctx.node_path(), "parent@1/child@2");

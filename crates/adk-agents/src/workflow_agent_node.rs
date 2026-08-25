@@ -165,6 +165,7 @@ mod tests {
             1,
             false,
             true,
+            None,
         );
         let events = node.run(&mut ctx, Value::Null).await.unwrap();
         assert_eq!(events.len(), 1);

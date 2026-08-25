@@ -381,6 +381,7 @@ mod tests {
             1,
             false,
             false,
+            None,
         )
     }
 
