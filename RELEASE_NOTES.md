@@ -22,6 +22,23 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: wire LlmBackedUserSimulator into the provider registry (C0627)
+**2026-08-25**
+
+- **Added:** `UserSimulatorProvider` now genuinely resolves `"llm_backed"`
+  scenario cases to a real `LlmBackedUserSimulator` — previously that
+  path correctly failed with "no simulator registered" since nothing
+  wired it in yet. Since Rust has no module-import-time side effects,
+  this port seeds the built-in registration in the registry's own lazy
+  static instead, the same shape the metric-evaluator registry already
+  uses for its own built-ins.
+- **Known limitation, disclosed:** the audio-decorator composition
+  (`_LlmAudioUserSimulator`) still isn't ported — that type doesn't
+  exist in this port yet, so an audio-configured scenario still
+  correctly fails with "no simulator registered" until it lands.
+
+---
+
 ## PR #TBD — `evaluation/`: LLM-backed user simulator (C0628, DONE)
 **2026-08-25**
 
