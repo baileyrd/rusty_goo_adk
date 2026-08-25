@@ -4,5 +4,6 @@
 pub mod content;
 pub mod content_utils;
 pub mod json_utils;
+pub mod safe_part;
 pub mod schema_utils;
 pub mod serialization;

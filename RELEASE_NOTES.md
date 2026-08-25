@@ -22,6 +22,30 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `models/`: Gemini Live WebSocket handshake + request preprocessing (C0131 DONE, C0132 partial)
+**2026-08-25**
+
+- **Added:** `Gemini::connect_live` — opens the real Live API WebSocket
+  connection, sends the `BidiGenerateContentSetup` message, and returns
+  a ready connection. This is the handshake half `Gemini::connect()` was
+  missing since an earlier batch shipped only its config-prep half.
+  Wired as `Gemini`'s first real `BaseLlm::connect` override,
+  Gemini-API-key backend only (matching the existing Vertex AI
+  narrowing for real REST calls).
+- **Added:** `Gemini::preprocess_request` — strips unsupported
+  `labels`/inline `display_name` fields on the Gemini API backend and
+  sanitizes inline media parts before every real call.
+- **Known limitation, disclosed:** the computer-use `wait`-function
+  adaptation isn't ported — it needs `ComputerUseToolset`, not built in
+  this port at all yet (same blocker an earlier batch already named for
+  a related capability). The Live setup-envelope wire shape is a
+  best-effort reconstruction from the third-party `google-genai`
+  package, unverified against a live endpoint — Python's own ADK test
+  suite doesn't test this wire shape either, since it mocks the live
+  API client entirely.
+
+---
+
 ## PR #TBD — `evaluation/`: LLM-as-judge harness + RubricBasedEvaluator (C0600/C0601, both DONE)
 **2026-08-25**
 

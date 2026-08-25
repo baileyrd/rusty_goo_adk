@@ -1,4 +1,4 @@
-//! Capabilities C0132, C0135-C0139: `GeminiLlmConnection`, ported from
+//! Capabilities C0135-C0139: `GeminiLlmConnection`, ported from
 //! `google.adk.models.gemini_llm_connection`.
 //!
 //! **Scope of batch 5**: the send-side methods —
@@ -44,11 +44,11 @@
 //!
 //! **Scope note**: opening the actual connection (the WebSocket handshake
 //! to Google's Live endpoint, and the initial `BidiGenerateContentSetup`
-//! message) is still deferred, for the same confidence-caveat reason — see
-//! `gemini.rs`'s module doc. [`GeminiLlmConnection::new`] takes an
+//! message) is C0131, built in a later batch — see `gemini.rs::Gemini::connect_live`
+//! and `live_setup_request.rs`. [`GeminiLlmConnection::new`] takes an
 //! already-open [`crate::live_connection::LiveWsConnection`], the same way
 //! `GeminiApiClient` is constructed independently of any particular
-//! `Gemini` instance.
+//! `Gemini` instance — `connect_live` is exactly that later caller.
 
 use std::sync::{Arc, Mutex};
 
