@@ -189,6 +189,7 @@ pub mod workflow_base_node;
 pub mod workflow_errors;
 pub mod workflow_function_node;
 pub mod workflow_graph;
+pub mod workflow_graph_parser;
 pub mod workflow_graph_validation;
 pub mod workflow_hitl_utils;
 pub mod workflow_join_node;
