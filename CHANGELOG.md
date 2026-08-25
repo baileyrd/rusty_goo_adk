@@ -5,6 +5,31 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-flows/src/auth_preprocessor.rs`: the auth
+  request/response processor (C0511-C0515, all `DONE`), ported from
+  `auth/auth_preprocessor.py`. Handles the round-trip for a tool that
+  needs end-user credentials: scans the last user-authored event for
+  `adk_request_credential` responses (C0515), reconciles+pins each
+  response back onto server-issued `auth_scheme`/`credential_key`
+  values via `_merge_credential_oauth2_fields` (C0512, ignoring an
+  unrequested response), stores each credential
+  (`_store_auth_and_collect_resume_targets`, C0514), and re-executes
+  the original tool call(s) that needed it. **Fully ported including
+  tool re-execution, not stubbed**: `tools_dict: &ToolsDict` is a
+  caller-supplied parameter (the same adaptation
+  `request_confirmation.rs`'s C0172 batch already established for the
+  structurally identical confirmation round-trip), so the terminal
+  `handle_function_calls_async` step reuses the already-shipped
+  `functions::execute_function_calls` directly — still not wired into
+  `LlmFlow::preprocess`, pending the same `agent.canonical_tools()`
+  blocker (C0092) `request_confirmation.rs` discloses. `TOOLSET_AUTH_CREDENTIAL_ID_PREFIX`
+  (C0513) is kept as one shared constant, per that row's own note (the
+  source duplicates it independently in `base_llm_flow.py`). Narrowed,
+  disclosed: `_merge_credential_oauth2_fields`'s `token_endpoint_auth_method`
+  merge always adopts the source's value (this port has no
+  `model_fields_set`-equivalent "was this explicitly set" tracking).
+  13 new tests, including an end-to-end test exercising the full
+  store-credential → resume → re-execute path against a real tool.
 - New `crates/adk-genai/src/serialization.rs`: telemetry JSON
   serialization helpers (C0680), ported from `telemetry/_serialization.py`
   (`safe_json_serialize`/`serialize_content`) plus

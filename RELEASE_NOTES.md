@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `auth/`: the auth request/response processor (C0511-C0515, all DONE)
+**2026-08-25**
+
+- **Added:** `process_auth_responses`/`store_auth_and_collect_resume_targets`
+  (`crates/adk-flows/src/auth_preprocessor.rs`) — handles the round-trip
+  for a tool that needs end-user credentials: scans the last
+  user-authored event for `adk_request_credential` responses, pins each
+  response back onto the server-issued `auth_scheme`/`credential_key`
+  it originally requested (rejecting an unrequested response), stores
+  the credential, and re-executes the original tool call(s) that needed
+  it. The tool re-execution step is fully ported (not stubbed) —
+  `tools_dict` is a caller-supplied parameter, reusing the
+  already-shipped tool-execution machinery directly.
+- **Added:** `merge_credential_oauth2_fields` — merges OAuth2 fields
+  from a client's auth response into the server-issued credential only
+  where the server's own field is unset, preventing a client from
+  overriding a developer-configured secret.
+- **Added:** `TOOLSET_AUTH_CREDENTIAL_ID_PREFIX` — a single shared
+  constant marking toolset-level auth requests, where the source
+  duplicates the same string independently in two files.
+- **Known limitation, disclosed:** not yet wired into the LLM flow's
+  preprocessing pipeline — building the tool dictionary this processor
+  needs requires resolving an agent's full tool set, which needs
+  infrastructure this port doesn't have yet. `token_endpoint_auth_method`
+  is always adopted from the client's response during a merge, since
+  this port has no way to tell whether the server's own value was
+  explicitly set or just a default.
+
+---
+
 ## PR #TBD — `telemetry/`: JSON serialization helpers (C0680, DONE)
 **2026-08-25**
 

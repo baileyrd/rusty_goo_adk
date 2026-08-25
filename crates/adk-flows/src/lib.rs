@@ -18,6 +18,7 @@
 
 pub mod agent_transfer;
 pub mod apps_compaction;
+pub mod auth_preprocessor;
 pub mod basic;
 pub mod cache_performance_analyzer;
 pub mod canonical_model;
