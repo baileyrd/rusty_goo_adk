@@ -21,9 +21,12 @@
 //!   resolution built yet either. A tool error here simply propagates as
 //!   `Err`, rather than the source's callback-mediated recovery path.
 //! - Auth-request/tool-confirmation-request event synthesis, and the
-//!   long-running/`_defers_response` empty-response skip — the first
-//!   needs `AuthConfig` (Phase 9, not built, the same gap
-//!   `functions_utils.rs` already discloses); the second needs a way for
+//!   long-running/`_defers_response` empty-response skip. The first no
+//!   longer needs `AuthConfig` — `generate_auth_event`/
+//!   `generate_request_confirmation_event` (`functions_utils.rs`, C0504)
+//!   are real and callable; the actual gap is that `llm_flow.rs`'s turn
+//!   loop (`run_one_step`, C0148/C0149) doesn't call them yet, disclosed
+//!   in that file's own module doc. The second still needs a way for
 //!   [`adk_tools::base_tool::BaseTool::run_async`] to signal "no response
 //!   yet" distinct from a real `Value` result, which its current
 //!   `Result<Value, ToolError>` contract doesn't carry — flagged as a

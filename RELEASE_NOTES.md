@@ -22,6 +22,73 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/llm_flows/base_llm_flow.py`: the multi-step tool-calling turn loop (C0148/C0149/C0151/C0152), plus a stale-doc cluster fix
+**2026-08-25**
+
+- **Added:** `LlmFlow::run_async` — the outer turn loop, repeating
+  `run_one_step` (preprocess → call model → postprocess → execute any
+  function calls the response carries) until a step's last event is a
+  final response, mirroring the source's `run_async`/
+  `_run_one_step_async` two-level structure. `LlmFlow` gains a `pub
+  tools_dict: ToolsDict` field (empty by default) plus a
+  `with_tools_dict` builder — the resolved `name -> BaseTool` map the
+  loop dispatches function calls against. `run_one_step` now executes a
+  step's function calls via `execute_function_calls` and appends the
+  resulting function-response event.
+- **Adaptation, disclosed:** `tools_dict` is supplied by the caller
+  rather than auto-resolved from `agent.tools` — that resolution
+  (`_process_agent_tools`) is still blocked on C0092's tree-fusion gap
+  (`LlmAgent.tools` has no real `Arc<dyn BaseTool>` storage to resolve
+  from). This is the same "caller supplies the resolved bits" adaptation
+  `request_confirmation.rs`/`agent_transfer.rs` already established for
+  the same gap.
+- **Adaptation, disclosed:** since this port materializes each step's
+  events as a `Vec<Event>` all at once rather than yielding them
+  cooperatively (an already-established prior adaptation), `run_async`
+  explicitly appends each step's events onto `ctx.session` (via
+  `ctx.session_service.append_event`) between iterations, so the next
+  step's `preprocess` sees earlier steps' events through
+  `ctx.get_events()`. This means every event now flows through
+  `session_service.append_event` twice — once from this loop, once from
+  `Runner`'s own pre-existing top-level append after `agent.run_async`
+  returns — which is safe only because `InMemorySessionService` (the
+  only concrete `SessionService` this port has) already deduplicates a
+  redelivered event by id+full-equality before re-applying it. A future
+  second `SessionService` implementor would need the same guarantee.
+- **Not ported this batch, disclosed:** auth-request/tool-confirmation-
+  request event synthesis (`generate_auth_event`/
+  `generate_request_confirmation_event`, both real and callable,
+  `functions_utils.rs`, C0504 — just not yet wired into `run_one_step`);
+  transfer-to-agent recursion (a `transfer_to_agent` action from a tool
+  response doesn't yet trigger a recursive sub-agent run within the same
+  loop); `set_model_response` structured-output final-event synthesis.
+- **Stale-blocker cluster fix:** this batch's own existence falsifies
+  several prior claims that the turn loop couldn't be built "without
+  `BaseTool` (Phase 8)" — `BaseTool` has existed for many batches; the
+  real reason the loop didn't exist was simply that nobody had written
+  it. Corrected: `llm_flow.rs`'s own module doc; `functions.rs`'s module
+  doc (also corrected a second stale claim there, that auth-event
+  synthesis "needs `AuthConfig`, Phase 9, not built" — stale since
+  C0504 landed); `basic.rs`'s task-mode `output_schema` comment (now
+  correctly cites C0092, not `BaseTool`, as the actual remaining
+  blocker for reading a `FinishTaskTool` schema off `agent.tools`);
+  manifest rows C0148/C0149/C0150/C0151/C0152/C0156 (rewritten with real,
+  tested evidence); manifest rows C0842/C0843 (corrected from "N/A:
+  `App` doesn't exist" — false, `App` and `Runner::from_app` both landed
+  and are DONE — matching sibling rows C0841/C0846/C0848/C0849/C0850's
+  already-corrected treatment).
+- **4 new tests** in `crates/adk-flows/src/llm_flow.rs`: a full
+  multi-step scenario (function-call step → tool execution → final-text
+  step, asserting event count/ordering/`is_final_response` semantics);
+  the resolved tool's result appearing in the function-response event;
+  `ctx.session.events` correctly accumulating every step's events; and
+  the pre-existing no-function-calls single-step case (confirmed still
+  correct via the existing `run_async_impl_drives_a_full_agent_run_through_base_agent`
+  test, now exercising `run_async` instead of a single `run_one_step`
+  call).
+
+---
+
 ## PR #TBD — `tools/tool_configs.py`: `BaseToolConfig`/`ToolArgsConfig`/`ToolConfig` (C0417)
 **2026-08-25**
 
