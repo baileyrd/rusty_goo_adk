@@ -22,6 +22,39 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`: `ParallelAgent` early cancellation on escalate (C0336, DONE)
+**2026-08-25**
+
+- **Fixed:** `crates/adk-agents/src/parallel_agent.rs` — sub-agents now
+  spawn into a `rusty_tokio::task::JoinSet` instead of a plain
+  `Vec<JoinHandle<_>>`, drained via `join_next()` (completion order,
+  not spawn order, unlike the previous await-in-spawn-order loop). The
+  instant a completed sub-agent's events include one with
+  `actions.escalate`, every sibling still in the set — whether still
+  running or already finished but not yet drained — is aborted via
+  `abort_all()` and its events discarded. This closes the "a sibling
+  already in flight when one escalates finishes normally" gap the row
+  had been carrying since `ParallelAgent` first landed.
+- **Adaptation, still disclosed**: this port's `AgentBehavior` returns
+  a fully-collected `Vec<Event>` per sub-agent run rather than a live
+  stream, so escalate still can't be detected *within* a single
+  sub-agent's run — only once its whole run completes. That part of
+  the original gap is structural (tied to the streaming-vs-`Vec`
+  decision already disclosed in `base_agent.rs`) and isn't fixable
+  without revisiting that decision; what this change closes is the
+  other half — failing to cancel a sibling that's still running once
+  escalation is observed.
+- **Tests:** new `an_escalating_sibling_cancels_a_still_running_sibling`
+  — a 500ms-sleeping sibling is aborted well before its sleep
+  completes once its sibling escalates, verified both by elapsed
+  wall-clock time and by the slow sibling's event being absent from
+  the result.
+- Full local gate green: `cargo build --workspace`, `cargo test
+  --workspace`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo fmt --check`.
+
+---
+
 ## PR #TBD — `eval/`: `LlmAudioUserSimulator` (C0630, DONE)
 **2026-08-25**
 

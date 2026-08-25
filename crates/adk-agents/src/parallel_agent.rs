@@ -9,15 +9,27 @@
 //! [`crate::base_agent::AgentBehavior`] returns a fully-collected
 //! `Vec<Event>` per run rather than a live stream (an adaptation already
 //! disclosed back in `base_agent.rs`'s own module doc) — so there is no
-//! partial result to race against or cancel mid-flight; a sub-agent's
-//! `run_async` call is already atomic by the time anything can observe
-//! its output. Sub-agents still run with genuine concurrency (via
-//! `rusty_tokio::spawn`, one task per sub-agent), but: (1) escalate
-//! detection happens after every included sub-agent has already run to
-//! completion, not the instant it occurs, and (2) a sibling already
-//! mid-flight when one escalates is **not** cancelled — it finishes
-//! normally. Both are direct, disclosed consequences of the earlier
-//! streaming-vs-`Vec` decision, not a new gap this batch introduces.
+//! partial result to race against or cancel *within* a single
+//! sub-agent's run; a sub-agent's `run_async` call is already atomic by
+//! the time anything can observe its output. Escalate detection
+//! therefore still happens only once a whole sub-agent's run completes,
+//! not the instant escalate occurs inside it — a direct, disclosed
+//! consequence of the streaming-vs-`Vec` decision, not fixable without
+//! it.
+//!
+//! **Early cancellation of still-running siblings, now implemented**:
+//! sub-agents are spawned into a [`rusty_tokio::task::JoinSet`] rather
+//! than a plain `Vec<JoinHandle<_>>`, and results are drained via
+//! [`rusty_tokio::task::JoinSet::join_next`] — which resolves as *any*
+//! task finishes, not in spawn order — instead of awaiting each handle
+//! in turn. The instant a completed sub-agent's events include one with
+//! `actions.escalate`, every sibling still in the set (whether still
+//! running or already finished but not yet drained) is aborted via
+//! [`rusty_tokio::task::JoinSet::abort_all`] and its events are
+//! discarded, matching the source's "escalate cancels the remaining
+//! siblings early" intent as closely as this port's atomic-per-sub-agent
+//! model allows: only a sibling's fully-collected result can ever be
+//! observed or discarded as a whole, never a partial stream of it.
 //!
 //! **Adaptation, cross-branch state visibility**: each sub-agent runs
 //! against its own branched clone of the `InvocationContext` (matching
@@ -132,7 +144,7 @@ impl AgentBehavior for ParallelAgent {
                 events.push(marker);
             }
 
-            let mut handles = Vec::new();
+            let mut join_set = rusty_tokio::task::JoinSet::new();
             for sub_agent in &sub_agents {
                 if ctx
                     .end_of_agents
@@ -145,25 +157,32 @@ impl AgentBehavior for ParallelAgent {
                 }
                 let sub_ctx = branch_ctx_for_sub_agent(&agent, sub_agent, ctx);
                 let sub_agent = sub_agent.clone();
-                handles.push(rusty_tokio::spawn(async move {
-                    sub_agent.run_async(&sub_ctx).await
-                }));
+                join_set.spawn(async move { sub_agent.run_async(&sub_ctx).await });
             }
 
-            for handle in handles {
-                let produced = handle.await.map_err(|_| {
+            // Drained in completion order (not spawn order) so an
+            // escalate can be observed, and the rest of the set aborted,
+            // as soon as possible — see the module doc.
+            while let Some(result) = join_set.join_next().await {
+                let produced = result.map_err(|_| {
                     Box::new(ParallelAgentError::SubAgentTaskFailed) as AgentRunError
                 })??;
+                let mut escalated = false;
                 for event in produced {
-                    // Escalate detection isn't tracked here: the source's
-                    // `escalated or all(...)` end-of-agent gate collapses
-                    // to always-true at this point in this port's model
-                    // (see the module doc) — there's no early-cancellation
-                    // path for it to also gate.
+                    if event.actions.escalate {
+                        escalated = true;
+                    }
                     for (key, value) in event.actions.state_delta.iter() {
                         ctx.session.state.insert(key.clone(), value.clone());
                     }
                     events.push(event);
+                }
+                if escalated {
+                    // Cancel every sibling still in the set — running or
+                    // merely not yet drained — and stop merging further
+                    // events from any of them.
+                    join_set.abort_all();
+                    break;
                 }
             }
 
@@ -413,6 +432,70 @@ mod tests {
         let events = ParallelAgent.run_async_impl(&mut ctx).await.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].author, "b");
+    }
+
+    struct SlowBehavior {
+        name: &'static str,
+        delay: std::time::Duration,
+    }
+
+    impl AgentBehavior for SlowBehavior {
+        fn run_async_impl<'a>(
+            &'a self,
+            ctx: &'a mut InvocationContext,
+        ) -> BoxFuture<'a, Result<Vec<Event>, AgentRunError>> {
+            let name = self.name;
+            let delay = self.delay;
+            let invocation_id = ctx.invocation_id.clone();
+            Box::pin(async move {
+                rusty_tokio::time::sleep(delay).await;
+                Ok(vec![Event::new(invocation_id, name, NodeInfo::new(""))])
+            })
+        }
+
+        fn run_live_impl<'a>(
+            &'a self,
+            _ctx: &'a mut InvocationContext,
+        ) -> BoxFuture<'a, Result<Vec<Event>, AgentRunError>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn an_escalating_sibling_cancels_a_still_running_sibling() {
+        let fast = BaseAgent::new(
+            "fast",
+            RecordingBehavior {
+                name: "fast",
+                state_key: None,
+                escalate: true,
+            },
+        )
+        .unwrap();
+        let slow = BaseAgent::new(
+            "slow",
+            SlowBehavior {
+                name: "slow",
+                delay: std::time::Duration::from_millis(500),
+            },
+        )
+        .unwrap();
+        let par = parallel_with(vec![fast, slow]);
+
+        let started = std::time::Instant::now();
+        let events = par.run_async(&parent_ctx()).await.unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(400),
+            "expected the slow sibling to be aborted well before its 500ms sleep completed, \
+             took {elapsed:?}"
+        );
+        assert!(
+            events.iter().all(|event| event.author != "slow"),
+            "the slow sibling's event must not appear once its sibling escalated: {events:?}"
+        );
+        assert!(events.iter().any(|event| event.author == "fast"));
     }
 
     #[rusty_tokio::test]
