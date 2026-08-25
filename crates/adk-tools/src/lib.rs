@@ -193,6 +193,7 @@ pub mod skill_registry;
 pub mod skill_toolset;
 pub mod skills_models;
 pub mod skills_prompt;
+pub mod tool_configs;
 pub mod tool_confirmation;
 pub mod tool_connection_map;
 pub mod tool_context;

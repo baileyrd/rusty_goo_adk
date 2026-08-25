@@ -22,6 +22,43 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/tool_configs.py`: `BaseToolConfig`/`ToolArgsConfig`/`ToolConfig` (C0417)
+**2026-08-25**
+
+- **Added:** the declarative YAML/dict tool-reference data shape used by
+  an ADK app config's `tools:` list — a tool `name` (an ADK built-in
+  tool name, or a fully-qualified path to a user-defined tool
+  instance/class/factory/function) plus optional `args` (a free-form
+  key-value bag). `ToolArgsConfig` maps the source's `extra="allow"`
+  directly onto a flattened open map; `ToolConfig` and `BaseToolConfig`
+  match the source's `extra="forbid"` via `deny_unknown_fields`.
+- **`@experimental(FeatureName.TOOL_CONFIG)`, a real gate:** each type's
+  `new` constructor calls `adk_features::feature_decorator
+  ::check_feature_enabled` (C0647, already shipped) — matching the
+  source's `_make_feature_decorator`, which wraps `__init__` to raise
+  unless the feature is enabled. Disclosed narrowing: Pydantic's
+  `model_validate`/JSON parsing always routes through `__init__`, so the
+  source's gate covers construction *and* deserialization identically;
+  this port's derived `Deserialize` impls don't call the `new`
+  constructors, so only direct construction is gated — the same shape
+  `ResumabilityConfig::new` already discloses for its own identical gap.
+- **Disclosed-inapplicable, not "not built yet":** landing these three
+  types doesn't unblock `BaseTool.from_config`'s actual dynamic-dispatch
+  resolution (5 reference kinds — built-in name / instance path /
+  class+args / factory+args / function path), which needs Python's
+  `importlib` and has no Rust equivalent — the same precedent already
+  established for C0939's `_lazy.accessors`. `base_tool.rs` (C0402),
+  `base_toolset.rs` (C0403), and `example_tool.rs` (C0419) — all three
+  of which cited this row as their reason for not porting `from_config`
+  — updated to draw that distinction explicitly instead of saying
+  "C0417 not built."
+- **Testing:** 9 new tests covering JSON round-trips for all three
+  types, `deny_unknown_fields` rejection on both `BaseToolConfig` and
+  `ToolConfig`, free-form key collection on `ToolArgsConfig`, and the
+  feature gate's enabled/disabled behavior on all three constructors.
+
+---
+
 ## PR #TBD — `agents/llm/task/_finish_task_tool.py`: `FinishTaskTool` (C0099)
 **2026-08-25**
 
