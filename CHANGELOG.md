@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-genai/src/serialization.rs`: telemetry JSON
+  serialization helpers (C0680), ported from `telemetry/_serialization.py`
+  (`safe_json_serialize`/`serialize_content`) plus
+  `telemetry/_experimental_semconv.py`'s `_safe_json_serialize_no_whitespaces`.
+  Both `safe_json_serialize` functions fall back to the literal
+  `"<not serializable>"` string rather than propagating an error;
+  `serialize_content` dispatches across a new `ContentUnion` enum
+  (`Content`/`Text`/`List`/`Value`, the same `isinstance`-replacement
+  adaptation `content_utils::ToUserContentInput` already established),
+  matching the source's own type-inconsistent return (a structured value
+  for `Content`, a JSON string for the catch-all branch). Narrowed,
+  disclosed: the source's per-leaf `default`-hook recovery (a single
+  non-serializable object nested anywhere inside an otherwise-normal
+  structure falls back individually) has no port — a Rust `Serialize`
+  bound is a compile-time whole-type guarantee, so this port can only
+  fall back for the whole call; and `safe_json_serialize`/
+  `_safe_json_serialize_no_whitespaces` collapse to byte-identical
+  output, since `rusty_serde::json::to_string` has no
+  whitespace-including/custom-separator mode. No new dependency —
+  `adk-genai` depends only on `rusty_serde`. 8 new tests.
 - `crates/adk-runners/src/runner.rs`: four node-path resolution helpers
   from `runners.py` (C0834/C0856/C0857/C0858), all built ahead of their
   own caller (`_run_node_async`, the workflow/node/task-delegation turn

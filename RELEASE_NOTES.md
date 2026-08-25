@@ -22,6 +22,30 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `telemetry/`: JSON serialization helpers (C0680, DONE)
+**2026-08-25**
+
+- **Added:** `safe_json_serialize`/`safe_json_serialize_no_whitespaces`
+  (`crates/adk-genai/src/serialization.rs`) — serialize any `Serialize`
+  value to a JSON string, falling back to the literal
+  `"<not serializable>"` rather than propagating an error, for use as
+  span/log attribute values.
+- **Added:** `serialize_content` — serializes a `ContentUnion`-shaped
+  value (`Content`/plain text/a list/anything else) into an
+  attribute-friendly `Value`, replacing the source's runtime
+  `isinstance` dispatch across `types.ContentUnion` with an explicit
+  enum.
+- **Known limitation, disclosed:** the source's `default`-hook recovery
+  substitutes a fallback for one non-serializable object nested inside
+  an otherwise-normal structure while leaving the rest intact; this
+  port's compile-time `Serialize` bound can only fall back for an
+  entire call, not a single nested leaf. `safe_json_serialize` and its
+  no-whitespace sibling also collapse to identical output in this port,
+  since the underlying serializer has no whitespace-including mode to
+  distinguish them.
+
+---
+
 ## PR #TBD — `runners/`: node-path resolution helpers (C0834/C0856/C0857/C0858, all DONE)
 **2026-08-25**
 
