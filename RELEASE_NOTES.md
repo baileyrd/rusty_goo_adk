@@ -22,6 +22,52 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `models/`: P10 Apigee backend, first slice (C0549/C0550/C0551, all DONE)
+**2026-08-25**
+
+- **Added:** new `crates/adk-models/src/apigee_llm.rs` — the config and
+  identity layer of `ApigeeLlm(Gemini)`, the Apigee-proxy-routed model
+  backend.
+  - `ApiType` (`Unknown`/`ChatCompletions`/`Genai`) and
+    `validate_model_string` (C0549): validates the
+    `apigee/[<provider>/][<version>/]<model_id>` DSL, `provider` ∈
+    {`vertex_ai`, `gemini`, `openai`}, `version` starting with `v`.
+    `ApiType::parse` preserves the source's `_missing_` fallback shape
+    (empty string → `Unknown`, any other unrecognized string → error).
+  - `ApigeeLlm::new`/`ApigeeLlmConfig` (C0550): the full constructor —
+    `proxy_url` falling back to the `APIGEE_PROXY_URL` env var,
+    `custom_headers` defaulting empty, `retry_options`/`client`
+    passthrough to a held `Gemini`, `api_type` auto-inference from the
+    model string's provider prefix, and both conflicting-options
+    warnings (`client`+`proxy_url`/`custom_headers`, `client`+
+    `CHAT_COMPLETIONS`) as `eprintln!`, matching this codebase's
+    established ad hoc warning convention.
+  - `identify_vertexai`/`identify_api_version`/`get_model_id` (C0551):
+    Vertex-AI identification (explicit `vertex_ai` prefix or enterprise
+    mode, never for `gemini`/`openai`-prefixed models), the middle DSL
+    component, and the trailing model-id component. Vertex-routed
+    construction requires `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION`
+    to be set, erroring otherwise — reuses the already-shipped
+    `crate::capabilities::is_enterprise_mode_enabled()`.
+- **Adaptation:** `ApigeeLlm(Gemini)` is ported as composition (holds a
+  `Gemini` by value) rather than the source's subclassing — the same
+  adaptation `gemma.rs` already established for `Gemma`.
+- **Not ported, disclosed:** `ApigeeLlm` doesn't implement `BaseLlm` yet
+  and isn't registered into `default_registry` — this slice is
+  config/identity only. The HTTP-calling half (C0552's GENAI-path
+  `HttpOptions` override, C0553's `CompletionsHTTPClient`, C0554's
+  request-payload construction, C0555's response parsing, C0556's
+  non-Gemini preprocessing) needs a real async HTTP client wired into
+  `BaseLlm::generate_content_async` and is deliberately left for a
+  follow-up batch — the same "config layer first, wire calls later"
+  split already used for the native Gemini and Anthropic backends.
+- **Tests:** 35 new unit tests in `apigee_llm.rs`.
+- Full local gate green: `cargo build --workspace`, `cargo test
+  --workspace`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo fmt --check`.
+
+---
+
 ## PR #TBD — `models/`: P10 Anthropic (Claude) backend, third slice (C0538, partial)
 **2026-08-25**
 

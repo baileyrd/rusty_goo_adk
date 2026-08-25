@@ -47,8 +47,10 @@
 //! batch fixes, since a `Runner`-configured `PluginManager` would
 //! otherwise silently never run.
 //! `BaseAgent::from_config`/`_parse_config`/`BaseAgentConfig` (C0047, the
-//! deprecated YAML-loading pipeline) is a data-shape-only capability for now
-//! (see `base_agent_config.rs`); its dynamic agent/callback *resolution*
+//! deprecated YAML-loading pipeline) is not yet ported — it's blocked on
+//! the same still-deferred YAML-parsing dependency as the rest of P3's
+//! `yaml_utils`/config-loading surface (no `base_agent_config.rs` module
+//! exists in this crate yet); its dynamic agent/callback *resolution*
 //! (`config_agent_utils.py`, dotted-path dynamic loading with no Rust
 //! equivalent) is flagged, not silently dropped, as needing its own design
 //! decision before implementation.

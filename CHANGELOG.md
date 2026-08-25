@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P10 Apigee backend, first slice (C0549/C0550/C0551, all DONE): new
+  `crates/adk-models/src/apigee_llm.rs` — `ApiType`/`validate_model_string`
+  (the `apigee/[provider/][version/]model_id` DSL), `ApigeeLlm::new`'s
+  full constructor (proxy_url with `APIGEE_PROXY_URL` env fallback,
+  custom_headers, retry_options/client passthrough to a held `Gemini`,
+  the two conflicting-options `eprintln!` warnings), and
+  `identify_vertexai`/`identify_api_version`/`get_model_id` (including
+  the `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` required-env-var
+  checks when Vertex-routed). `ApigeeLlm(Gemini)` is ported as
+  composition (holds a `Gemini` by value) rather than the source's
+  subclassing, same adaptation `gemma.rs` already established. Not yet
+  implementing `BaseLlm` or registered into `default_registry` — this
+  slice is config/identity only; the HTTP-calling half (C0552-C0556)
+  is deliberately deferred to a follow-up batch. 35 new unit tests.
 - P10 Anthropic (Claude) backend, third slice (C0538, partial):
   `crates/adk-models/src/anthropic_conversion.rs` gains
   `AnthropicThinkingParam`/`build_anthropic_thinking_param` — maps genai
