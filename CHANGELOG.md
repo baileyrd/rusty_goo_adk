@@ -5,6 +5,23 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P10 Anthropic (Claude) backend, first slice (C0540/C0542, both DONE):
+  `crates/adk-models/src/anthropic_conversion.rs` — `ToolUseIdSanitizer`
+  (C0540, deterministic `toolu_fallback_N` placeholders for invalid
+  tool-use ids) and `to_google_genai_finish_reason`/`AnthropicUsage`/
+  `extract_prompt_token_count`/`extract_cached_token_count`/
+  `extract_cache_creation_token_count`/`extract_thinking_token_count`
+  (C0542, finish-reason mapping + token-usage extraction/reconciliation).
+  Both pure, self-contained, no new dependency — this port talks to
+  Anthropic's Messages API via plain `reqwest::blocking` (same recipe
+  `gemini.rs` already established), not the Python source's `anthropic`
+  SDK. Deliberately a small first slice of the 9-row P10 phase: the
+  actual `AnthropicLlm` `BaseLlm` backend, extended-thinking mapping,
+  tool-schema conversion, the full content↔block conversion (image/PDF/
+  tool-result media handling), and SSE streaming (C0536/C0537/C0538/
+  C0539/C0541/C0543/C0544) are disclosed at length on C0542's own
+  manifest row as separable, larger units of future work — not blocked,
+  just genuinely bigger than this batch.
 - P12 telemetry pure-logic batch (C0668/C0669/C0672/C0673, all DONE;
   C0661, partial): `crates/adk-models/src/token_usage.rs` (`TokenUsage`,
   C0668 — token-usage attribute names/aggregation, reading the same

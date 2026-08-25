@@ -14,6 +14,7 @@
 //! independently-scoped addition (not a manifest capability of its own —
 //! see its module doc).
 
+pub mod anthropic_conversion;
 pub mod base_llm;
 pub mod base_llm_connection;
 pub mod cache_metadata;
