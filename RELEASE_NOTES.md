@@ -22,6 +22,43 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `eval/`: `LlmAudioUserSimulator` (C0630, DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-eval/src/llm_audio_user_simulator.rs` —
+  `LlmAudioUserSimulatorConfig` (the full 9-field config: text-generation
+  fields that configure the wrapped inner simulator, plus
+  `audio_model`/`audio_model_configuration`/`include_text_with_audio`)
+  and `LlmAudioUserSimulator`, a decorator `UserSimulator`:
+  - `get_next_user_message` delegates to an injected inner
+    `text_simulator`, passing through any non-`Success` result
+    unchanged.
+  - On success, the extracted text is fed to `generate_audio` — a
+    judge-model call against a materialized `Vec<LlmResponse>` (this
+    port's `generate_content_async` doesn't stream; see the module doc)
+    — then wrapped via `to_audio_content`/`_audio_utils::to_live_input`
+    (C0625) into a live-input-ready `Content`.
+- **Added:** `GenerateContentConfigStub` gained a
+  `speech_config: Option<Value>` field (purely additive) for this row's
+  audio-config default.
+- **Adaptation, disclosed:** a small hand-rolled base64 codec is
+  duplicated locally in `adk-eval`, since it can't reach
+  `adk-agents::file_artifact_service`'s copy (the crate-dependency
+  direction runs the other way).
+- **Not wired, disclosed:** the `UserSimulatorProvider` composition
+  (building the inner text simulator from this config's own fields and
+  registering the `"llm_audio"` discriminator) — real, separable
+  follow-up work needing dispatch logic beyond the registry's uniform
+  `SimulatorFactory` shape. `_CloudTTSLlm` (C0631, needs live GCP TTS)
+  stays unregistered — this simulator is fully testable today against
+  any other registered/fake audio `BaseLlm`.
+- **Tests:** 9 new unit tests.
+- Full local gate green: `cargo build --workspace`, `cargo test
+  --workspace`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo fmt --check`.
+
+---
+
 ## PR #TBD — `agents/`: session-state conformance tests (C0242, DONE)
 **2026-08-25**
 
