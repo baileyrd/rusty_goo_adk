@@ -22,6 +22,42 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `models/`: P10 LiteLLM pure-function batch (C0561/C0562/C0569/C0571, all DONE)
+**2026-08-25**
+
+- **Added:** new `crates/adk-models/src/litellm_conversion.rs` — pure,
+  HTTP-free helper functions from `models/lite_llm.py`, the same
+  "declare pure conversion helpers ahead of the real HTTP-calling
+  backend" precedent `anthropic_conversion.rs` already established:
+  - `strip_proxy_prefix`/`get_provider_from_model` (C0561): unwraps a
+    `litellm_proxy/<provider>/<model>` routing prefix and extracts the
+    provider name (with `azure`/`gpt-`/`o1` naming-convention
+    fallbacks).
+  - `is_anthropic_provider`/`is_anthropic_model`/`is_anthropic_route`
+    (C0562): Anthropic-route detection across Bedrock/Vertex's
+    multi-model platforms — Anthropic formatting only applies when the
+    model name itself identifies Claude.
+  - `quote_unquoted_json_object_keys`/`parse_tool_call_arguments`
+    (C0569): a character-by-character transcription of the source's
+    streaming tool-call-argument JSON repair scanner. **Narrowed,
+    disclosed:** the source's middle `ast.literal_eval` step (a
+    Python-literal parser distinct from JSON) has no Rust equivalent
+    and is skipped — the common "unquoted identifier-shaped keys" case
+    this function exists for still repairs identically.
+  - `enforce_strict_openai_schema` (C0571): the OpenAI
+    strict-structured-output recursive schema transform
+    (`additionalProperties: false` + all-required + strips sibling-`$ref`
+    keys), operating on `rusty_serde::value::Value` in place.
+- **Corrected:** C0096/C0407's manifest evidence — investigation this
+  batch found both are genuinely blocked on the C0092 crate-cycle gap
+  (`LlmAgent.tools`/`.planner` are opaque `Value`s, and there's no
+  `BaseAgent`→`BaseNode` conversion for `Context::run_node` to dispatch
+  through), not merely blocked on missing types as their prior evidence
+  stated (`BaseNode`/`BaseTool`/`FinishTaskTool` all exist now).
+- 38 new tests.
+
+---
+
 ## PR #TBD — `models/`: P10 Anthropic Content↔block conversion (C0539, DONE)
 **2026-08-25**
 

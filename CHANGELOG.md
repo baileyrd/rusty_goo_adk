@@ -16,6 +16,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   test `an_escalating_sibling_cancels_a_still_running_sibling` verifies
   real cancellation by wall-clock time, not just event absence.
 ### Added
+- P10 LiteLLM pure-function batch (C0561/C0562/C0569/C0571, all DONE):
+  new `crates/adk-models/src/litellm_conversion.rs` — the `litellm_proxy/`
+  routing-prefix unwrap and provider-detection heuristics
+  (`strip_proxy_prefix`/`get_provider_from_model`), Anthropic-route
+  detection across Bedrock/Vertex's multi-model platforms
+  (`is_anthropic_provider`/`is_anthropic_model`/`is_anthropic_route`),
+  streaming tool-call-argument JSON repair
+  (`quote_unquoted_json_object_keys`/`parse_tool_call_arguments`,
+  narrowed to skip the source's Python-literal `ast.literal_eval` step),
+  and the OpenAI strict-structured-output schema transform
+  (`enforce_strict_openai_schema`). No new dependency — pure string/JSON
+  logic ahead of the still-deferred `LiteLlm(BaseLlm)` HTTP backend
+  (C0557/C0558), same precedent as the sibling Anthropic conversion
+  file. Also corrects C0096/C0407's manifest evidence: both are
+  genuinely blocked on the C0092 crate-cycle gap, not merely on missing
+  types as their prior evidence stated. 38 new tests.
 - P10 Anthropic `Content`↔block conversion (C0539, DONE): new
   request-side `part_to_message_block`/`content_to_message_param`
   (text, thinking-with-signature, redacted-thinking, tool_use,
