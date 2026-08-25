@@ -22,6 +22,24 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: offline session replay + final eval status (C0617, C0624, both partial)
+**2026-08-25**
+
+- **Added:** `EvaluationGenerator::process_query_with_session` replays a
+  recorded `Session`'s events to fill in `actual_tool_use`/`response`
+  for eval-dataset entries, without invoking a `Runner` — offline
+  evaluation mode. `LocalEvalService::generate_final_eval_status` rolls
+  up a list of per-metric results into one overall pass/fail status
+  (any `Passed` result passes, unless a `Failed` result short-circuits
+  the scan first).
+- **Known limitation, disclosed:** `generate_responses_from_session`'s
+  file-reading wrapper isn't ported (no real callers, and `Session`
+  isn't deserializable yet); `LocalEvalService`'s actual
+  inference/evaluation orchestration stays unbuilt — both need the
+  still-open `Runner`-driven inference work (C0621/C0622).
+
+---
+
 ## PR #TBD — `flows/`: general code-executor response path (C0180, DONE)
 **2026-08-25**
 

@@ -5,6 +5,31 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-eval/src/local_eval_service.rs`: `generate_final_eval_status`
+  (C0617, partial), ported from `evaluation/local_eval_service.py`'s
+  `LocalEvalService._generate_final_eval_status` — the one synchronous,
+  dependency-free method on that `@experimental` orchestrator class.
+  Rolls up a list of per-metric `EvalMetricResult`s into one overall
+  `EvalStatus`: a `Passed` result keeps scanning (a later result can
+  still override it), `NotEvaluated` is skipped, and a `Failed` result
+  short-circuits immediately, even before results that would otherwise
+  have passed. `LocalEvalService`'s remaining nine methods stay
+  unported — all `async`, needing semaphore-bounded concurrency and a
+  `Runner`-driven inference generator (C0621/C0622, still `REQUIRED`).
+  6 new tests.
+- `crates/adk-eval/src/evaluation_generator.rs`: `process_query_with_session`
+  (C0624, partial), ported from `evaluation_generator.py`'s
+  `EvaluationGenerator._process_query_with_session` — replays recorded
+  `Session` events to fill in `actual_tool_use`/`response` for a list of
+  eval-dataset entries without invoking a `Runner`, matching the
+  source's own accumulate-across-every-matching-user-event behavior
+  exactly. `adk-eval` gains a new dependency on `adk-agents` for the
+  real `Session` type (verified: no cycle — `adk-agents`'s own
+  dependency chain never reaches back to `adk-eval`). Not ported:
+  `generate_responses_from_session`'s JSON-file-reading wrapper —
+  disclosed in the module doc as genuinely out of scope, since it has
+  zero callers besides its own test and `Session` doesn't derive
+  `Deserialize` yet. 4 new tests.
 - `crates/adk-flows/src/code_execution.rs`: the general (non-built-in)
   code-executor response path (C0180, `DONE`), ported from
   `flows/llm_flows/_code_execution.py`'s general-executor branch.

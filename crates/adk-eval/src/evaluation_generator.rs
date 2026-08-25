@@ -1,10 +1,23 @@
-//! C0623: `evaluation.evaluation_generator`, ported from
-//! `google.adk.evaluation.evaluation_generator`. Only the pure
-//! event→`Invocation` grouping algorithm is ported — the file's other
-//! static methods (`_generate_inferences_from_root_agent`/`_live`, `
-//! _process_query_with_session`, `_get_app_details_by_invocation_id`)
-//! drive a real `Runner`/`Session`/a request-interception plugin (C0621/
-//! C0622/C0624, all still `REQUIRED`), which this batch doesn't build.
+//! C0623/C0624: `evaluation.evaluation_generator`, ported from
+//! `google.adk.evaluation.evaluation_generator`. The pure
+//! event→`Invocation` grouping algorithm (`convert_events_to_eval_invocations`)
+//! and the offline session-replay algorithm (`process_query_with_session`,
+//! C0624) are both ported. The file's other static methods
+//! (`_generate_inferences_from_root_agent`/`_live`,
+//! `_get_app_details_by_invocation_id`) still drive a real `Runner`/a
+//! request-interception plugin (C0621/C0622, still `REQUIRED`), which
+//! this batch doesn't build.
+//!
+//! **`generate_responses_from_session`, not ported**: the source's thin
+//! file-reading wrapper (`Session.model_validate_json` over a JSON file
+//! path, then a loop calling `_process_query_with_session` per dataset)
+//! is left unported — it has zero callers in the source besides its own
+//! test, and `adk_agents::session::Session` doesn't derive `Deserialize`
+//! yet (that struct's own module doc calls it a deliberate placeholder
+//! to be replaced, not extended, once real Phase-5 session backends
+//! land). `process_query_with_session` itself takes `&Session` directly,
+//! so a caller that already has a `Session` in hand (however it got
+//! there) can use it without this wrapper.
 //!
 //! **`HashMap` → `Vec<(String, Vec<Event>)>`, disclosed**: unlike the
 //! `HashMap`-for-grouping choices already disclosed elsewhere in this
@@ -19,14 +32,102 @@
 
 use std::collections::HashMap;
 
+use adk_agents::session::Session;
 use adk_events::Event;
 use adk_genai::content::Content;
+use rusty_serde::value::Value;
 
 use crate::app_details::AppDetails;
+use crate::constants::eval_constants;
 use crate::eval_case::{Invocation, InvocationEvent, InvocationEvents};
 
 const USER_AUTHOR: &str = "user";
 const DEFAULT_AUTHOR: &str = "agent";
+
+/// C0624: `evaluation_generator.EvaluationGenerator._process_query_with_session`
+/// — replays recorded `Session` events to fill in `actual_tool_use`/
+/// `response` for each entry in `data`, without invoking a `Runner`. Each
+/// `data` entry is a `Value::Map` dict (mirroring the source's
+/// `dict[str, object]`) that must carry a string `"query"` key; the
+/// returned entries are the same dicts with `"actual_tool_use"` and
+/// `"response"` set (or overwritten).
+///
+/// Matches the source's own (slightly odd) matching behavior exactly: a
+/// `query` that occurs on more than one `user` event accumulates tool
+/// uses / overwrites `response` across every match, not just the first.
+pub fn process_query_with_session(
+    session_data: &Session,
+    data: &[Value],
+) -> Result<Vec<Value>, EvaluationGeneratorError> {
+    let mut responses = data.to_vec();
+
+    for entry in responses.iter_mut() {
+        let query = entry
+            .get("query")
+            .and_then(Value::as_str)
+            .ok_or(EvaluationGeneratorError::MissingQuery)?
+            .to_string();
+
+        let mut actual_tool_uses: Vec<Value> = Vec::new();
+        let mut response: Option<String> = None;
+
+        for event in &session_data.events {
+            let matches_query = event.author == "user"
+                && event
+                    .content
+                    .as_ref()
+                    .and_then(|content| content.parts.first())
+                    .and_then(|part| part.text.as_deref())
+                    == Some(query.as_str());
+            if !matches_query {
+                continue;
+            }
+
+            for subsequent in &session_data.events {
+                if subsequent.invocation_id != event.invocation_id {
+                    continue;
+                }
+                let Some(content) = subsequent.content.as_ref() else {
+                    continue;
+                };
+                let Some(first_part) = content.parts.first() else {
+                    continue;
+                };
+                if let Some(call) = &first_part.function_call {
+                    let args = call
+                        .args
+                        .clone()
+                        .map(|map| Value::Map(map.into_iter().collect()))
+                        .unwrap_or(Value::Null);
+                    actual_tool_uses.push(Value::Map(vec![
+                        (
+                            eval_constants::TOOL_NAME.to_string(),
+                            call.name.clone().map(Value::String).unwrap_or(Value::Null),
+                        ),
+                        (eval_constants::TOOL_INPUT.to_string(), args),
+                    ]));
+                } else if subsequent.author != "user" {
+                    response = first_part.text.clone();
+                }
+            }
+        }
+
+        entry.insert("actual_tool_use", Value::Seq(actual_tool_uses));
+        entry.insert(
+            "response",
+            response.map(Value::String).unwrap_or(Value::Null),
+        );
+    }
+
+    Ok(responses)
+}
+
+/// Error type for [`process_query_with_session`].
+#[derive(Debug, Clone, PartialEq, Eq, rusty_err::Error)]
+pub enum EvaluationGeneratorError {
+    #[error("each evaluation entry must contain a string query")]
+    MissingQuery,
+}
 
 /// `evaluation_generator.EvaluationGenerator._collect_events_by_invocation_id`
 /// — groups `events` by `invocation_id`, preserving each id's first-seen
@@ -299,5 +400,103 @@ mod tests {
         let invocations =
             convert_events_to_eval_invocations(&events, Some(&app_details_map)).unwrap();
         assert_eq!(invocations[0].app_details, Some(AppDetails::default()));
+    }
+
+    fn session(events: Vec<Event>) -> Session {
+        let mut session = Session::new("app", "user-1", "session-1");
+        session.events = events;
+        session
+    }
+
+    fn query_entry(query: &str) -> Value {
+        Value::Map(vec![(
+            "query".to_string(),
+            Value::String(query.to_string()),
+        )])
+    }
+
+    #[test]
+    fn process_query_with_session_errors_when_query_is_missing() {
+        let data = vec![Value::Map(vec![])];
+        let err = process_query_with_session(&session(vec![]), &data).unwrap_err();
+        assert_eq!(err, EvaluationGeneratorError::MissingQuery);
+    }
+
+    #[test]
+    fn process_query_with_session_leaves_response_unset_when_the_query_is_not_found() {
+        let events = vec![event("inv-1", "user", Some(Content::user_text("hello")))];
+        let data = vec![query_entry("goodbye")];
+        let results = process_query_with_session(&session(events), &data).unwrap();
+        assert_eq!(results[0].get("actual_tool_use"), Some(&Value::Seq(vec![])));
+        assert_eq!(results[0].get("response"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn process_query_with_session_collects_a_tool_call_and_the_final_response() {
+        let mut with_call = Content::new("model", vec![]);
+        with_call.parts.push(Part::function_call(FunctionCall {
+            id: Some("c1".to_string()),
+            name: Some("roll_die".to_string()),
+            args: Some(std::collections::BTreeMap::from([(
+                "sides".to_string(),
+                Value::UInt(6),
+            )])),
+            ..Default::default()
+        }));
+
+        let events = vec![
+            event("inv-1", "user", Some(Content::user_text("Roll a die"))),
+            event("inv-1", "agent", Some(with_call)),
+            event(
+                "inv-1",
+                "agent",
+                Some(Content::new("model", vec![Part::text("You rolled a 4.")])),
+            ),
+        ];
+        let data = vec![query_entry("Roll a die")];
+        let results = process_query_with_session(&session(events), &data).unwrap();
+
+        let expected_tool_use = Value::Seq(vec![Value::Map(vec![
+            (
+                eval_constants::TOOL_NAME.to_string(),
+                Value::String("roll_die".to_string()),
+            ),
+            (
+                eval_constants::TOOL_INPUT.to_string(),
+                Value::Map(vec![("sides".to_string(), Value::UInt(6))]),
+            ),
+        ])]);
+        assert_eq!(results[0].get("actual_tool_use"), Some(&expected_tool_use));
+        assert_eq!(
+            results[0].get("response"),
+            Some(&Value::String("You rolled a 4.".to_string()))
+        );
+    }
+
+    #[test]
+    fn process_query_with_session_accumulates_across_every_matching_user_event() {
+        let events = vec![
+            event("inv-1", "user", Some(Content::user_text("hi"))),
+            event(
+                "inv-1",
+                "agent",
+                Some(Content::new("model", vec![Part::text("first reply")])),
+            ),
+            event("inv-2", "user", Some(Content::user_text("hi"))),
+            event(
+                "inv-2",
+                "agent",
+                Some(Content::new("model", vec![Part::text("second reply")])),
+            ),
+        ];
+        let data = vec![query_entry("hi")];
+        let results = process_query_with_session(&session(events), &data).unwrap();
+
+        // The source overwrites `response` on every match rather than
+        // keeping only the first -- the last invocation scanned wins.
+        assert_eq!(
+            results[0].get("response"),
+            Some(&Value::String("second reply".to_string()))
+        );
     }
 }
