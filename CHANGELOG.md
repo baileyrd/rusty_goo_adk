@@ -5,6 +5,82 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `Workflow` LOOP driver + completion handling (C0301/C0304/C0305, all
+  DONE — see below for disclosed adaptations): `Workflow::run_loop`
+  (C0301) schedules ready nodes and drains pending tasks until none
+  remain, processing every batch of simultaneous completions in
+  deterministic order (recovered-sequence first via the new
+  `ReplaySequenceBarrier::sequence` accessor, then stable insertion
+  order for anything not in the recovered sequence). On the first node
+  error in a batch it marks that node `FAILED`, sets `WorkflowLoopState
+  ::error_shut_down`, and stops — without processing any other
+  completions in the same batch, matching the source's own behavior.
+  New free fn `wait_for_completions`: a hand-rolled `std::future::
+  poll_fn` combinator (no `rusty_tokio::task::JoinSet` — `Send +
+  'static` incompatible with `PendingNodeFuture`'s non-`'static`
+  `&Context` borrow — and no `rusty_tokio::select!`, a fixed-arity
+  macro) that polls every entry in `pending_tasks` and collects **all**
+  that are `Ready` in one pass, not just the first, since the
+  deterministic-order sort only matters when more than one completion
+  can be observed per call. `Workflow::handle_completion` (C0304) ports
+  the source's exact 3-way outcome routing (interrupt → `WAITING` +
+  propagate interrupt ids; `wait_for_output` with nothing yet →
+  `WAITING`; else → `COMPLETED`, caching output/branch then buffering
+  downstream triggers) — no longer `async`, since the checkpoint
+  builders it calls are already pure `Option<Event>` functions.
+  `Workflow::buffer_downstream_triggers` (C0305) finds downstream edges
+  via `Graph::get_next_pending_nodes` and buffers a `Trigger` per
+  target: normal successors get the completing node's own output/branch
+  (sub-branching on fan-out), a `JoinNode`-like target only fires once
+  every predecessor has `COMPLETED`, with input built as a
+  `{predecessor_name: output}` map and branch set to the common prefix
+  of every predecessor's cached branch — reusing the already-shipped
+  `workflow_join_node::common_branch_prefix` rather than porting a
+  second copy of the source's module-level `get_common_branch_prefix`
+  (the same n-ary common-prefix computation, one pairwise-reduced, one
+  all-at-once, over the same associative operation). New
+  `crate::workflow_graph::value_to_route_spec` converts a completed
+  node's raw, dynamically-typed emitted `ctx.route` into the typed
+  `RouteSpec` `get_next_pending_nodes` needs.
+- **Disclosed divergence:** `run_loop` takes `ctx: &Context`, not
+  `&mut Context` — every pending node future borrows `ctx` immutably
+  for as long as it's outstanding (new tasks can be scheduled on any
+  loop iteration), so an `&mut Context` parameter would conflict with
+  those outstanding borrows for the loop's entire duration. The
+  captured error is returned as `RunLoopOutcome{events, error:
+  Option<(message, node_path)>}` instead of being written onto `ctx`
+  inline the way the source's `_run_loop` does — the caller (the
+  not-yet-built `NodeBehavior` wiring) applies it onto its own
+  `&mut Context` once every pending future has gone out of scope.
+- **Disclosed no-op:** the source's final "await fire-and-forget
+  dynamic tasks" step in `_run_loop` has no equivalent here — this
+  port's `Context::run_node` (Mode 1) always executes and awaits a
+  `DynamicNodeScheduler::call` inline (already-disclosed C0318/C0319
+  narrowing), so there is no separately-scheduled dynamic task list to
+  await.
+- **Changed:** `ReplaySequenceBarrier::check_and_advance` widened from
+  `&mut self` to `&self` (its `current_index`/`unblocked` state moved
+  into an interior `std::sync::Mutex`, never held across an `.await`),
+  and gained a `sequence()` accessor — both needed once `run_loop`
+  reads/advances the `Arc`-shared barrier across concurrently pending
+  node futures.
+- **Known limitation:** still not wired into a `BaseNode`/
+  `NodeBehavior`. `Workflow._finalize`/`_cleanup_all_tasks` (C0306) —
+  terminal-output collection, remaining-interrupt propagation, and
+  leftover-task cleanup — and the `NodeBehavior` wiring itself are
+  separate follow-up work.
+- **Tests:** `crates/adk-agents/src/workflow_workflow.rs::tests::
+  {run_loop_drives_a_linear_workflow_to_completion,
+  run_loop_stops_and_returns_the_first_error,
+  handle_completion_moves_to_waiting_and_collects_interrupt_ids_on_interrupt,
+  handle_completion_waits_when_a_wait_for_output_node_has_nothing_yet,
+  handle_completion_completes_and_buffers_a_downstream_trigger,
+  buffer_downstream_triggers_fans_out_with_sub_branching,
+  buffer_downstream_triggers_fires_a_join_only_once_every_predecessor_completes}`;
+  `crates/adk-agents/src/workflow_graph.rs::tests::
+  {value_to_route_spec_converts_each_scalar_variant,
+  value_to_route_spec_converts_a_seq_to_many_filtering_unconvertible_entries,
+  value_to_route_spec_is_none_for_unconvertible_values}`.
 - `Workflow` node-scheduling primitives (C0302/C0303, both DONE — see
   below for narrowings): `Workflow::schedule_ready_nodes`/
   `start_node_task` and their helpers (`has_waiting_task_agent`,

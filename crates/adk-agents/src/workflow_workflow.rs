@@ -222,13 +222,11 @@ impl Workflow {
     fn validate_state_schema(&self) {}
 }
 
-/// `workflow._workflow._LoopState`, now including the static-node
-/// scheduling fields C0302/C0303 read/write — see this module's own doc
-/// for why `pending_tasks` borrows `'a` (tied to the `ctx: &'a Context`
-/// [`Workflow::schedule_ready_nodes`]/[`Workflow::start_node_task`] are
-/// called with), and for the fields still not here
-/// (`node_outputs`/`node_branches`/`error_shut_down` — completion-
-/// handling state, C0304).
+/// `workflow._workflow._LoopState`, now including the LOOP-driver/
+/// completion-handling fields C0301/C0304/C0305 read/write — see this
+/// module's own doc for why `pending_tasks` borrows `'a` (tied to the
+/// `ctx: &'a Context` [`Workflow::schedule_ready_nodes`]/[`Workflow::
+/// start_node_task`] are called with).
 pub struct WorkflowLoopState<'a> {
     pub nodes: HashMap<String, NodeState>,
     pub recovered_executions: BTreeMap<String, ChildScanState>,
@@ -242,6 +240,27 @@ pub struct WorkflowLoopState<'a> {
     /// `Vec` of pairs rather than a `HashMap`/`BTreeMap`.
     pub trigger_buffer: Vec<(String, Vec<Trigger>)>,
     pub replayed_nodes: HashSet<String>,
+    /// `_LoopState.error_shut_down`: set once [`Workflow::run_loop`] sees
+    /// the first node error in a completion batch — the loop returns
+    /// immediately afterward without scheduling further work.
+    pub error_shut_down: bool,
+    /// `_LoopState.node_outputs`: cached completed-node outputs, read by
+    /// [`Workflow::buffer_downstream_triggers`]'s join-node aggregation.
+    pub node_outputs: HashMap<String, Value>,
+    /// `_LoopState.node_branches`: cached completed-node branches, read
+    /// by the same join-node aggregation for its common-prefix
+    /// computation.
+    pub node_branches: HashMap<String, String>,
+    /// `_LoopState.interrupt_ids` (inherited from `DynamicNodeState` in
+    /// the source, via `_LoopState(DynamicNodeState)`): interrupt ids
+    /// collected from *static* graph nodes that went WAITING. A separate
+    /// accumulator from [`DynamicNodeScheduler::interrupt_ids`] (which
+    /// collects from *dynamic* `ctx.run_node()` nodes) — the same
+    /// "fused, not shared" split already disclosed in
+    /// `workflow_dynamic_node_scheduler.rs`'s own module doc. A future
+    /// FINALIZE batch (C0306) must union both sources when propagating
+    /// onto `ctx`.
+    pub interrupt_ids: HashSet<String>,
     pending_tasks: Vec<(String, PendingNodeFuture<'a>)>,
     scheduler: Arc<rusty_tokio::sync::Mutex<DynamicNodeScheduler>>,
 }
@@ -352,6 +371,58 @@ fn node_state_checkpoint_value(node_state: &NodeState) -> Value {
     }
 }
 
+/// `asyncio.wait(loop_state.pending_tasks.values(), return_when=
+/// FIRST_COMPLETED)`'s Rust shape: polls every pending node future in
+/// `pending_tasks` and returns **all** that are `Ready` in this same
+/// poll pass (removed from `pending_tasks`, in their original relative
+/// order), not just the first — [`Workflow::run_loop`]'s own
+/// simultaneous-completion sort (mirroring the source's own comment
+/// about `asyncio.wait` losing insertion order when several tasks
+/// finish at once) only does anything useful if more than one
+/// completion can be observed per call. No `rusty_tokio::task::JoinSet`
+/// (see this module's own doc — `Send + 'static` incompatible with
+/// `PendingNodeFuture`'s borrow) and no `rusty_tokio::select!` (a
+/// fixed-arity macro, unusable over a dynamically-sized `Vec`); this is
+/// the same "manually poll every entry, remove what's `Ready`" shape
+/// `rusty_tokio::task::JoinSet::poll_join_next` itself uses internally,
+/// generalized to collect every ready entry instead of stopping at the
+/// first.
+async fn wait_for_completions(
+    pending_tasks: &mut Vec<(String, PendingNodeFuture<'_>)>,
+) -> Vec<(String, Context, Vec<Event>)> {
+    std::future::poll_fn(|cx| {
+        let mut ready = Vec::new();
+        let mut i = 0;
+        while i < pending_tasks.len() {
+            match pending_tasks[i].1.as_mut().poll(cx) {
+                std::task::Poll::Ready((child_ctx, events)) => {
+                    let (name, _future) = pending_tasks.remove(i);
+                    ready.push((name, child_ctx, events));
+                }
+                std::task::Poll::Pending => {
+                    i += 1;
+                }
+            }
+        }
+        if ready.is_empty() {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(ready)
+        }
+    })
+    .await
+}
+
+/// [`Workflow::run_loop`]'s result — see that method's own doc for why
+/// the error is returned here rather than written directly onto a
+/// `&mut Context` the way the source's `_run_loop` writes `ctx._error`
+/// inline. `(message, node_path)`, mirroring [`Context::error_message`]/
+/// [`Context::error_node_path`]/[`Context::set_error`]'s own shape.
+pub struct RunLoopOutcome {
+    pub events: Vec<Event>,
+    pub error: Option<(String, String)>,
+}
+
 impl Workflow {
     /// `Workflow._run_impl`'s SETUP phase: resumes from session events
     /// (or starts fresh), seeds START's successors as triggers, and
@@ -388,6 +459,10 @@ impl Workflow {
             sequence_barrier,
             trigger_buffer: Vec::new(),
             replayed_nodes: HashSet::new(),
+            error_shut_down: false,
+            node_outputs: HashMap::new(),
+            node_branches: HashMap::new(),
+            interrupt_ids: HashSet::new(),
             pending_tasks: Vec::new(),
             scheduler: Arc::new(rusty_tokio::sync::Mutex::new(DynamicNodeScheduler::new())),
         };
@@ -721,6 +796,319 @@ impl Workflow {
         };
         Some(event)
     }
+
+    /// `Workflow._get_static_node_by_name`: looks up a node in the built
+    /// graph by name. Returns `None` rather than the source's own
+    /// `raise ValueError` — callers that treat a miss as an invariant
+    /// violation (the source's own assumption too, since every name it
+    /// looks up came from `self.graph` in the first place) use
+    /// `.expect(...)` at the call site, matching this module's existing
+    /// convention (see [`Self::start_node_task`]).
+    fn static_node_by_name(&self, name: &str) -> Option<BaseNode> {
+        self.graph
+            .as_ref()?
+            .nodes
+            .iter()
+            .find(|node| node.name() == name)
+            .cloned()
+    }
+
+    /// `Workflow._run_loop` (C0301): schedules ready nodes and drains
+    /// pending tasks until none remain, processing every batch of
+    /// simultaneous completions in **deterministic order** — recovered-
+    /// sequence order first (so a resumed run replays history in the
+    /// same order it originally happened), then insertion order for
+    /// anything not in the recovered sequence (fresh executions, sorted
+    /// stably by [`Vec::sort_by_key`] — a stable sort, matching the
+    /// source's own reliance on Python's stable `sorted()`).
+    ///
+    /// On the first node error in a batch: marks that node `FAILED`,
+    /// sets [`WorkflowLoopState::error_shut_down`], and returns
+    /// immediately with [`RunLoopOutcome::error`] set — **without**
+    /// processing any other completions in the same batch, even ones
+    /// that succeeded. This is a disclosed, faithful port of the
+    /// source's own behavior (`_run_loop:336-361`): only the first error
+    /// in a simultaneously-completing batch is ever surfaced.
+    ///
+    /// **`ctx` is `&Context`, not `&mut Context` — the error is
+    /// returned, not written onto `ctx` directly, a disclosed
+    /// divergence from the source's own inline `ctx._error = ...`**:
+    /// every pending node future in [`WorkflowLoopState::pending_tasks`]
+    /// borrows `ctx` immutably for as long as it's outstanding (the same
+    /// constraint [`Self::schedule_ready_nodes`]/[`Self::
+    /// start_node_task`] already establish, since new tasks can be
+    /// scheduled on any iteration of this very loop) — an `&mut Context`
+    /// parameter here would conflict with those outstanding immutable
+    /// borrows for the loop's entire duration, not just at the point of
+    /// the error. The caller (the not-yet-built `NodeBehavior` wiring)
+    /// applies [`RunLoopOutcome::error`] onto its own `&mut Context`
+    /// once `loop_state` — and every future borrowing `ctx` through it —
+    /// has gone out of scope.
+    ///
+    /// Returns every event produced along the way — the child-execution
+    /// events `NodeRunner::run` returns for each completed node, plus
+    /// the checkpoint/replayed-output events [`Self::handle_completion`]
+    /// builds — for the caller to fold into its own accumulator (this
+    /// module's own "eagerly collected `Vec`" adaptation).
+    ///
+    /// **Dynamic fire-and-forget tasks, structurally inapplicable,
+    /// disclosed**: the source's final step awaits `loop_state.
+    /// get_dynamic_tasks()` — dynamic nodes dispatched via `ctx.
+    /// run_node()` that were spawned as separate `asyncio.Task`s. This
+    /// port's [`crate::context::Context::run_node`] (Mode 1) always
+    /// executes and awaits a [`DynamicNodeScheduler::call`] inline (see
+    /// that module's own already-disclosed narrowing) — there is no
+    /// separately-scheduled dynamic task list to await here, so this
+    /// step is simply absent rather than ported against a list that
+    /// can't exist in this port.
+    pub async fn run_loop<'a>(
+        &'a self,
+        loop_state: &mut WorkflowLoopState<'a>,
+        ctx: &'a Context,
+    ) -> RunLoopOutcome {
+        let mut events = Vec::new();
+
+        let recovered_sequence_indices: HashMap<String, usize> = loop_state
+            .sequence_barrier
+            .as_ref()
+            .map(|barrier| {
+                barrier
+                    .sequence()
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(i, key)| (key, i))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        loop {
+            self.schedule_ready_nodes(loop_state, ctx);
+
+            if loop_state.pending_task_count() == 0 {
+                break;
+            }
+
+            let mut done = wait_for_completions(&mut loop_state.pending_tasks).await;
+
+            done.sort_by_key(|(name, child_ctx, _)| {
+                let run_id = child_ctx.run_id();
+                recovered_sequence_indices
+                    .get(&format!("{name}@{run_id}"))
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+
+            let mut error_to_raise: Option<(String, String)> = None;
+            for (name, child_ctx, child_events) in done {
+                events.extend(child_events);
+
+                if let Some(barrier) = &loop_state.sequence_barrier {
+                    barrier.check_and_advance(&format!("{name}@{}", child_ctx.run_id()));
+                }
+
+                if let Some(message) = child_ctx.error_message() {
+                    if let Some(node_state) = loop_state.nodes.get_mut(&name) {
+                        node_state.status = NodeStatus::Failed;
+                    }
+                    if error_to_raise.is_none() {
+                        error_to_raise =
+                            Some((message.to_string(), child_ctx.error_node_path().to_string()));
+                    }
+                } else {
+                    let node = self
+                        .static_node_by_name(&name)
+                        .expect("run_loop only completes nodes it scheduled from the graph");
+                    if let Some(event) =
+                        self.handle_completion(loop_state, &name, &node, &child_ctx, ctx)
+                    {
+                        events.push(event);
+                    }
+                }
+            }
+
+            if let Some(error) = error_to_raise {
+                loop_state.error_shut_down = true;
+                return RunLoopOutcome {
+                    events,
+                    error: Some(error),
+                };
+            }
+        }
+
+        RunLoopOutcome {
+            events,
+            error: None,
+        }
+    }
+
+    /// `Workflow._handle_completion` (C0304): updates node state and
+    /// buffers downstream triggers after a node completes without
+    /// error, in the source's exact 3-way order — interrupt → `WAITING`
+    /// (propagating interrupt ids), `wait_for_output` with nothing yet →
+    /// `WAITING`, else → `COMPLETED` (caching output/branch, then
+    /// buffering downstream triggers). Returns the checkpoint or
+    /// replayed-output `Event` this completion produces, if any, for
+    /// [`Self::run_loop`] to push into its own accumulator — the same
+    /// enqueue-to-builder redesign [`Self::node_checkpoint_event`]'s own
+    /// doc discloses (this method needs no `async` of its own as a
+    /// result, unlike the source's `async def`).
+    fn handle_completion(
+        &self,
+        loop_state: &mut WorkflowLoopState,
+        node_name: &str,
+        node: &BaseNode,
+        child_ctx: &Context,
+        ctx: &Context,
+    ) -> Option<Event> {
+        let replayed = loop_state.replayed_nodes.remove(node_name);
+
+        let interrupt_ids = child_ctx.interrupt_ids();
+        if !interrupt_ids.is_empty() {
+            if let Some(node_state) = loop_state.nodes.get_mut(node_name) {
+                node_state.status = NodeStatus::Waiting;
+                node_state.interrupts = interrupt_ids.iter().cloned().collect();
+            }
+            loop_state.interrupt_ids.extend(interrupt_ids);
+            return self.node_checkpoint_event(loop_state, ctx);
+        }
+
+        if node.wait_for_output() && child_ctx.output().is_none() && child_ctx.route().is_none() {
+            if let Some(node_state) = loop_state.nodes.get_mut(node_name) {
+                node_state.status = NodeStatus::Waiting;
+            }
+            return self.node_checkpoint_event(loop_state, ctx);
+        }
+
+        if let Some(node_state) = loop_state.nodes.get_mut(node_name) {
+            node_state.status = NodeStatus::Completed;
+            node_state.resume_inputs.clear();
+        }
+        if let Some(output) = child_ctx.output() {
+            loop_state
+                .node_outputs
+                .insert(node_name.to_string(), output.clone());
+        }
+        loop_state.node_branches.insert(
+            node_name.to_string(),
+            child_ctx.branch().unwrap_or_default().to_string(),
+        );
+
+        let checkpoint_event = if !replayed {
+            self.node_checkpoint_event(loop_state, ctx)
+        } else {
+            self.maybe_reemit_replayed_output_event(child_ctx, ctx)
+        };
+
+        self.buffer_downstream_triggers(
+            loop_state,
+            node_name,
+            child_ctx.output(),
+            child_ctx.route(),
+            child_ctx.branch(),
+        );
+
+        checkpoint_event
+    }
+
+    /// `Workflow._buffer_downstream_triggers` (C0305): finds `node_name`'s
+    /// downstream edges (matching `route`, via
+    /// [`crate::workflow_graph::Graph::get_next_pending_nodes`]) and
+    /// buffers a [`Trigger`] for each — normal successors get the
+    /// completing node's own `output`/`branch` straight through (with
+    /// sub-branching when this completion fans out to more than one
+    /// successor); a `JoinNode`-like target (`BaseNode::
+    /// requires_all_predecessors`) only gets triggered once **every**
+    /// one of its predecessors has `COMPLETED`, with its input built as
+    /// a `{predecessor_name: output}` map and its branch set to the
+    /// common prefix of every predecessor's cached branch (reusing the
+    /// already-shipped [`crate::workflow_join_node::common_branch_prefix`]
+    /// — see this module's own doc for why no second copy of `Workflow
+    /// .get_common_branch_prefix` is needed: both are the same n-ary
+    /// common-prefix computation, one calling it pairwise-reduced, the
+    /// other all-at-once, over the same associative operation).
+    fn buffer_downstream_triggers(
+        &self,
+        loop_state: &mut WorkflowLoopState,
+        node_name: &str,
+        output: Option<&Value>,
+        route: Option<&Value>,
+        branch: Option<&str>,
+    ) {
+        let graph = self
+            .graph
+            .as_ref()
+            .expect("buffer_downstream_triggers requires a built graph");
+        let route_spec = route.and_then(crate::workflow_graph::value_to_route_spec);
+        let next_nodes = graph.get_next_pending_nodes(node_name, route_spec.as_ref());
+        let use_sub_branch = next_nodes.len() > 1;
+
+        for target_name in &next_nodes {
+            let Some(target_node) = graph.nodes.iter().find(|n| n.name() == target_name) else {
+                continue;
+            };
+
+            if target_node.requires_all_predecessors() {
+                let predecessors: Vec<String> = graph
+                    .edges
+                    .iter()
+                    .filter(|edge| edge.to_node.name() == target_name)
+                    .map(|edge| edge.from_node.name().to_string())
+                    .collect();
+                let all_completed = predecessors.iter().all(|predecessor| {
+                    loop_state
+                        .nodes
+                        .get(predecessor)
+                        .is_some_and(|state| state.status == NodeStatus::Completed)
+                });
+                if all_completed {
+                    let outputs: Vec<(String, Value)> = predecessors
+                        .iter()
+                        .map(|predecessor| {
+                            (
+                                predecessor.clone(),
+                                loop_state
+                                    .node_outputs
+                                    .get(predecessor)
+                                    .cloned()
+                                    .unwrap_or(Value::Null),
+                            )
+                        })
+                        .collect();
+                    let branches: Vec<String> = predecessors
+                        .iter()
+                        .map(|predecessor| {
+                            loop_state
+                                .node_branches
+                                .get(predecessor)
+                                .cloned()
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    let common_branch = crate::workflow_join_node::common_branch_prefix(&branches);
+                    loop_state.push_trigger(
+                        target_name.clone(),
+                        Trigger {
+                            input: Value::Map(outputs),
+                            use_sub_branch: false,
+                            branch: Some(common_branch),
+                            isolation_scope: None,
+                        },
+                    );
+                }
+            } else {
+                loop_state.push_trigger(
+                    target_name.clone(),
+                    Trigger {
+                        input: output.cloned().unwrap_or(Value::Null),
+                        use_sub_branch,
+                        branch: branch.map(str::to_string),
+                        isolation_scope: None,
+                    },
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -837,6 +1225,10 @@ mod tests {
             sequence_barrier: None,
             trigger_buffer: Vec::new(),
             replayed_nodes: HashSet::new(),
+            error_shut_down: false,
+            node_outputs: HashMap::new(),
+            node_branches: HashMap::new(),
+            interrupt_ids: HashSet::new(),
             pending_tasks: Vec::new(),
             scheduler: Arc::new(rusty_tokio::sync::Mutex::new(DynamicNodeScheduler::new())),
         };
@@ -1028,5 +1420,282 @@ mod tests {
         let c = resumable_ctx();
         let event = workflow.end_of_agent_event(&c).unwrap();
         assert!(event.actions.end_of_agent);
+    }
+
+    type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+    struct AlwaysFails;
+    impl crate::workflow_base_node::NodeBehavior for AlwaysFails {
+        fn run_impl<'a>(
+            &'a self,
+            _ctx: &'a mut Context,
+            _node_input: Value,
+        ) -> BoxFuture<
+            'a,
+            Result<
+                Vec<crate::workflow_base_node::NodeYield>,
+                crate::workflow_base_node::NodeRunError,
+            >,
+        > {
+            Box::pin(async { Err("boom".into()) })
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn run_loop_drives_a_linear_workflow_to_completion() {
+        let workflow = Workflow::new("wf", linear_edges(node("a"), node("b")), None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow
+            .setup(&mut c, Value::String("hi".to_string()))
+            .await
+            .unwrap();
+
+        let outcome = workflow.run_loop(&mut loop_state, &c).await;
+
+        assert!(outcome.error.is_none());
+        assert!(!loop_state.error_shut_down);
+        assert_eq!(loop_state.pending_task_count(), 0);
+        assert_eq!(loop_state.nodes["a"].status, NodeStatus::Completed);
+        assert_eq!(loop_state.nodes["b"].status, NodeStatus::Completed);
+    }
+
+    #[rusty_tokio::test]
+    async fn run_loop_stops_and_returns_the_first_error() {
+        let failing = BaseNode::new("a", AlwaysFails).unwrap();
+        let edges = vec![EdgeItem::Edge(Edge::new(start(), failing.clone(), None))];
+        let workflow = Workflow::new("wf", edges, None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+
+        let outcome = workflow.run_loop(&mut loop_state, &c).await;
+
+        let (message, node_path) = outcome.error.expect("expected a captured error");
+        assert_eq!(message, "boom");
+        assert_eq!(node_path, "a@1");
+        assert!(loop_state.error_shut_down);
+        assert_eq!(loop_state.nodes["a"].status, NodeStatus::Failed);
+    }
+
+    #[rusty_tokio::test]
+    async fn handle_completion_moves_to_waiting_and_collects_interrupt_ids_on_interrupt() {
+        let workflow = Workflow::new("wf", linear_edges(node("a"), node("b")), None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+        loop_state.nodes.insert(
+            "a".to_string(),
+            NodeState {
+                status: NodeStatus::Running,
+                ..Default::default()
+            },
+        );
+
+        let mut child_ctx = ctx();
+        child_ctx.add_interrupt_ids(["i1".to_string()]);
+
+        let node_a = node("a");
+        let event = workflow.handle_completion(&mut loop_state, "a", &node_a, &child_ctx, &c);
+
+        assert!(event.is_none());
+        assert_eq!(loop_state.nodes["a"].status, NodeStatus::Waiting);
+        assert_eq!(loop_state.nodes["a"].interrupts, vec!["i1".to_string()]);
+        assert!(loop_state.interrupt_ids.contains("i1"));
+        assert!(loop_state
+            .trigger_buffer
+            .iter()
+            .all(|(name, _)| name != "b"));
+    }
+
+    #[rusty_tokio::test]
+    async fn handle_completion_waits_when_a_wait_for_output_node_has_nothing_yet() {
+        let node_a = BaseNode::build(
+            "a",
+            "",
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            NoopNodeBehavior,
+        )
+        .unwrap();
+        let edges = vec![
+            EdgeItem::Edge(Edge::new(start(), node_a.clone(), None)),
+            EdgeItem::Edge(Edge::new(node_a.clone(), node("b"), None)),
+        ];
+        let workflow = Workflow::new("wf", edges, None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+        loop_state.nodes.insert(
+            "a".to_string(),
+            NodeState {
+                status: NodeStatus::Running,
+                ..Default::default()
+            },
+        );
+
+        let child_ctx = ctx();
+        let event = workflow.handle_completion(&mut loop_state, "a", &node_a, &child_ctx, &c);
+
+        assert!(event.is_none());
+        assert_eq!(loop_state.nodes["a"].status, NodeStatus::Waiting);
+        // `setup` already seeded a trigger for "a" itself (START's own
+        // successor) — untouched here since this test calls
+        // `handle_completion` directly rather than going through
+        // `schedule_ready_nodes`. What matters is that a WAITING node
+        // with nothing yet never buffers a trigger for ITS OWN
+        // downstream successor.
+        assert!(loop_state
+            .trigger_buffer
+            .iter()
+            .all(|(name, _)| name != "b"));
+    }
+
+    #[rusty_tokio::test]
+    async fn handle_completion_completes_and_buffers_a_downstream_trigger() {
+        let workflow = Workflow::new("wf", linear_edges(node("a"), node("b")), None, true).unwrap();
+        let mut c = resumable_ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+        loop_state.nodes.insert(
+            "a".to_string(),
+            NodeState {
+                status: NodeStatus::Running,
+                ..Default::default()
+            },
+        );
+
+        let mut child_ctx = ctx();
+        child_ctx
+            .set_output(Value::String("done".to_string()))
+            .unwrap();
+
+        let node_a = node("a");
+        let event = workflow.handle_completion(&mut loop_state, "a", &node_a, &child_ctx, &c);
+
+        assert!(event.is_some());
+        assert_eq!(loop_state.nodes["a"].status, NodeStatus::Completed);
+        assert_eq!(
+            loop_state.node_outputs["a"],
+            Value::String("done".to_string())
+        );
+        let (_, triggers) = loop_state
+            .trigger_buffer
+            .iter()
+            .find(|(name, _)| name == "b")
+            .expect("expected b to be triggered");
+        assert_eq!(triggers[0].input, Value::String("done".to_string()));
+    }
+
+    #[rusty_tokio::test]
+    async fn buffer_downstream_triggers_fans_out_with_sub_branching() {
+        let a = node("a");
+        let b = node("b");
+        let d = node("d");
+        let edges = vec![
+            EdgeItem::Edge(Edge::new(start(), a.clone(), None)),
+            EdgeItem::Edge(Edge::new(a.clone(), b.clone(), None)),
+            EdgeItem::Edge(Edge::new(a.clone(), d.clone(), None)),
+        ];
+        let workflow = Workflow::new("wf", edges, None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+
+        workflow.buffer_downstream_triggers(
+            &mut loop_state,
+            "a",
+            Some(&Value::String("out".to_string())),
+            None,
+            Some("root"),
+        );
+
+        for name in ["b", "d"] {
+            let (_, triggers) = loop_state
+                .trigger_buffer
+                .iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("expected {name} to be triggered"));
+            assert!(triggers[0].use_sub_branch);
+            assert_eq!(triggers[0].input, Value::String("out".to_string()));
+            assert_eq!(triggers[0].branch, Some("root".to_string()));
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn buffer_downstream_triggers_fires_a_join_only_once_every_predecessor_completes() {
+        let a = node("a");
+        let c_node = node("c");
+        let join = BaseNode::new("join", crate::workflow_join_node::JoinNode).unwrap();
+        let edges = vec![
+            EdgeItem::Edge(Edge::new(start(), a.clone(), None)),
+            EdgeItem::Edge(Edge::new(start(), c_node.clone(), None)),
+            EdgeItem::Edge(Edge::new(a.clone(), join.clone(), None)),
+            EdgeItem::Edge(Edge::new(c_node.clone(), join.clone(), None)),
+        ];
+        let workflow = Workflow::new("wf", edges, None, true).unwrap();
+        let mut lc = ctx();
+        let mut loop_state = workflow.setup(&mut lc, Value::Null).await.unwrap();
+
+        loop_state.nodes.insert(
+            "a".to_string(),
+            NodeState {
+                status: NodeStatus::Completed,
+                ..Default::default()
+            },
+        );
+        loop_state
+            .node_outputs
+            .insert("a".to_string(), Value::String("out-a".to_string()));
+        loop_state
+            .node_branches
+            .insert("a".to_string(), "branch.a".to_string());
+        workflow.buffer_downstream_triggers(
+            &mut loop_state,
+            "a",
+            Some(&Value::String("out-a".to_string())),
+            None,
+            Some("branch.a"),
+        );
+        assert!(loop_state
+            .trigger_buffer
+            .iter()
+            .all(|(name, _)| name != "join"));
+
+        loop_state.nodes.insert(
+            "c".to_string(),
+            NodeState {
+                status: NodeStatus::Completed,
+                ..Default::default()
+            },
+        );
+        loop_state
+            .node_outputs
+            .insert("c".to_string(), Value::String("out-c".to_string()));
+        loop_state
+            .node_branches
+            .insert("c".to_string(), "branch.c".to_string());
+        workflow.buffer_downstream_triggers(
+            &mut loop_state,
+            "c",
+            Some(&Value::String("out-c".to_string())),
+            None,
+            Some("branch.c"),
+        );
+
+        let (_, triggers) = loop_state
+            .trigger_buffer
+            .iter()
+            .find(|(name, _)| name == "join")
+            .expect("expected join to be triggered once both predecessors completed");
+        assert_eq!(triggers.len(), 1);
+        let trigger = &triggers[0];
+        assert!(!trigger.use_sub_branch);
+        assert_eq!(trigger.branch, Some("branch".to_string()));
+        let Value::Map(outputs) = &trigger.input else {
+            panic!("expected a map input, got {:?}", trigger.input);
+        };
+        assert_eq!(outputs.len(), 2);
+        assert!(outputs.contains(&("a".to_string(), Value::String("out-a".to_string()))));
+        assert!(outputs.contains(&("c".to_string(), Value::String("out-c".to_string()))));
     }
 }
