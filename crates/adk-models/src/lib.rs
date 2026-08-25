@@ -28,6 +28,7 @@ pub mod gemma;
 pub mod generate_content_request;
 pub mod generate_content_response;
 pub mod google_client_headers;
+pub mod litellm_conversion;
 pub mod live_connection;
 pub mod live_server_message;
 pub mod live_setup_request;
