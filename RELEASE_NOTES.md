@@ -22,6 +22,47 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/simulation/user_simulator_provider.py`: `UserSimulatorProvider` (C0627, partial)
+**2026-08-25**
+
+- **Added:** `UserSimulatorProvider` in `crates/adk-eval/src/user_simulator.rs`
+  — routes a per-`EvalCase` `UserSimulator`. A case carrying a static
+  `conversation` always gets a `StaticUserSimulator` (config-agnostic); a
+  case carrying a `conversation_scenario` dispatches through
+  `create_user_simulator` (C0626, already built) keyed by the configured
+  `type` discriminator string. When no config is supplied, defaults to
+  `"llm_backed"` — `LlmBackedUserSimulatorConfig`'s own discriminator
+  literal, matching the source's `_LEGACY_DEFAULT_CONFIG_TYPE` fallback.
+  Errors for a case with neither or both of `conversation`/
+  `conversation_scenario`, matching the source's own two distinct
+  messages.
+- **Adaptation, disclosed:** stores the config as an opaque `Value` and
+  reads its `"type"` field at dispatch time, rather than a typed
+  `BaseUserSimulatorConfig` instance read by `type(config)` — the same
+  registry-by-discriminator-string shape `create_user_simulator` itself
+  already established over the source's registry-by-class-object shape.
+- **Not ported, disclosed:** the audio-decorator composition (the
+  source's `if simulator_cls is _LlmAudioUserSimulator: ...` branches,
+  wrapping the resolved inner text simulator in `_LlmAudioUserSimulator`)
+  — neither `LlmBackedUserSimulator` (C0628) nor
+  `_LlmAudioUserSimulator`/`LlmAudioUserSimulatorConfig` (C0630) exist in
+  this port yet, so no config type ever resolves to that decorator;
+  `create_user_simulator`'s existing "no simulator registered" error is
+  the correct behavior for both the audio-config and non-audio-config
+  cases until those two types land.
+- No new dependency, no breaking API change.
+- **6 new tests** in `crates/adk-eval/src/user_simulator.rs`: the static
+  path for a conversation case; the "neither" and "both" error cases; a
+  scenario case dispatching through the registry; the legacy default
+  config type when none is supplied; and the "no simulator registered"
+  error surfacing correctly for an unregistered scenario config type.
+- **Also fixed:** a Status/Evidence mismatch on `capability-manifest.md`
+  row C0200 (Status stayed `REQUIRED` but the Evidence text started with
+  a stale `"DONE:"` prefix instead of the `"Partial:"` convention every
+  sibling row uses) — found incidentally while scoping this batch.
+
+---
+
 ## PR #TBD — `flows/llm_flows/_code_execution.py`: the `BuiltInCodeExecutor` request/response processor branches (C0177/C0180, partial)
 **2026-08-25**
 
