@@ -185,6 +185,7 @@ pub mod load_memory_tool;
 pub mod load_web_page;
 pub mod local_environment;
 pub mod long_running_tool;
+pub mod mcp_connection_params;
 pub mod mcp_conversion_utils;
 pub mod memory_entry_utils;
 pub mod model_name_utils;

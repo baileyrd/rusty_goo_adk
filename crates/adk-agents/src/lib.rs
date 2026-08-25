@@ -140,6 +140,7 @@
 pub mod active_streaming_tool;
 pub mod adk_attributes;
 pub mod agent_optimizer;
+pub mod agents;
 pub mod app;
 pub mod app_configs;
 pub mod artifact_util;

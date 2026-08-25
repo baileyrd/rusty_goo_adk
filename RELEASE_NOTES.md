@@ -22,6 +22,46 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`+`tools/`: export facade + MCP connection-param models (C0034/C0451, both DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-agents/src/agents.rs` — the `agents` package's
+  public export facade, ported from `google.adk.agents.__init__`. Every
+  buildable type re-exported as a plain `pub use`: `Agent` (alias for
+  `LlmAgent`, matching the source's own `Agent = LlmAgent`),
+  `BaseAgent`, `Context`, `InvocationContext`, `LiveRequest`,
+  `LiveRequestQueue`, `LlmAgent`, `LoopAgent`, `ParallelAgent`,
+  `RunConfig`, `SequentialAgent` — same "lazy has no Rust equivalent,
+  drop it" adaptation `plugins.rs` already established for
+  `google.adk.plugins.__init__`.
+- **Not re-exported, disclosed:** `ManagedAgent` (Managed Agents API),
+  `McpInstructionProvider` (needs a real MCP client transport), and the
+  4 `*AgentConfig` classes (the deprecated YAML-config pipeline,
+  blocked on the same still-deferred YAML dependency as C0047) — none
+  exist as Rust types in this port yet.
+- **Added:** `crates/adk-tools/src/mcp_connection_params.rs` —
+  `StdioConnectionParams`/`SseConnectionParams`/
+  `StreamableHttpConnectionParams`, the MCP connection-parameter data
+  models, each with the source's exact default timeouts
+  (`timeout=5.0`; `sse_read_timeout=300.0` on the SSE/HTTP pair;
+  `terminate_on_close=true` on the HTTP one). `StdioServerParameters`
+  is this port's own minimal reimplementation of the upstream `mcp`
+  Python SDK's dataclass shape (`command`/`args`/`env`/`cwd`) — no
+  `mcp` crate added as a dependency.
+- **Not ported, disclosed:** `httpx_client_factory` (both SSE/HTTP
+  variants) — no HTTP-client-factory abstraction decided for MCP
+  transports yet, same gap `_DebugHttpxClientFactory` (C0453) is
+  already blocked on. Nothing in this port yet constructs a live MCP
+  session from one of these — a real client-side MCP transport
+  (`McpToolset`) stays a separate, larger, unbuilt capability.
+- **Tests:** 6 new unit tests (2 in `agents.rs`, 4 in
+  `mcp_connection_params.rs`).
+- Full local gate green: `cargo build --workspace`, `cargo test
+  --workspace`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo fmt --check`.
+
+---
+
 ## PR #TBD — `eval/`: `hallucinations_v1` metric (C0594, DONE)
 **2026-08-25**
 
