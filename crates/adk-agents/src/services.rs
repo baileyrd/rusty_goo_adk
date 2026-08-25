@@ -39,27 +39,44 @@
 //! than using native `async fn` (not object-safe) — the same pattern
 //! `adk_tools::base_tool::BaseTool` already uses for the same reason.
 //!
-//! **Narrowed, disclosed**: no app:/user: state-prefix scoping
-//! (`State.APP_PREFIX`/`USER_PREFIX`, `_session_util.extract_state_delta`,
-//! the source's cross-session shared `app_state`/`user_state` maps) —
-//! `Session`/`State` here have no prefix-scoping concept yet (a Phase 5
-//! concern of their own), so `create_session`'s `state` is stored as flat,
-//! session-scoped state only. No `get_user_state` (depends on the same
-//! app:/user: architecture). No `last_update_time` field on the
-//! placeholder `Session`, so `list_sessions` returns insertion order
-//! (grouped by user id, then session id) rather than the source's
-//! last-update-time sort. `append_event`'s `StaleSessionError` path is
-//! N/A for this in-memory backend — the source's own `InMemorySessionService`
-//! never raises it either (the docstring's warning is for a *persistent*
-//! backend detecting a concurrent write, which a simple in-memory map
-//! can't contend on). `GetSessionConfig` (`num_recent_events`/
-//! `after_timestamp` event trimming, C0207) is now real — see
-//! [`SessionService::get_session_with_config`] — but `RunConfig.get_session_config`
-//! is still an opaque `Value` placeholder (its own disclosed scope cut,
-//! C0875), so no call site in this crate or `adk-runners` threads a real
-//! `GetSessionConfig` through yet; the trait method exists and is tested
-//! ahead of its own caller, the same "widen once a real consumer needs
-//! the structure" pattern this port applies elsewhere.
+//! **State-scoping batch (C0208/C0212/C0214)**: `InMemorySessionService`
+//! now carries `app_state`/`user_state` — cross-session maps shared by
+//! every session under the same `app_name` (and `app_name`/`user_id`,
+//! respectively) — and routes `app:`/`user:`-prefixed state deltas into
+//! them via C0209's `extract_state_delta` (`create_session`'s initial
+//! `state` and `append_event`'s `state_delta` alike); `merge_state`
+//! re-applies that shared state onto a session's own state on every read
+//! (`get_session`/`list_sessions`/`create_session`'s return value),
+//! matching the source's `_merge_state`. [`SessionService::get_user_state`]
+//! is a new trait method reading `user_state` directly (raw, unprefixed
+//! keys) without needing an active session id — defaults to
+//! [`GetUserStateError::NotSupported`] for a backend that doesn't override
+//! it, mirroring the source's `NotImplementedError` default.
+//! `Session::last_update_time` (C0204, added in `session.rs`) is now set
+//! at creation and bumped on every `append_event`, so `list_sessions`
+//! sorts by `(last_update_time, user_id, id)` ascending — the source's
+//! actual `ListSessionsResponse` ordering, not insertion order.
+//! `copy_session`'s `IN_MEMORY_SESSION_SERVICE_LIGHT_COPY` feature check
+//! (C0212) is genuinely read but behaviorally inert here — see
+//! [`copy_session`]'s own doc for why this port's owned, non-aliased
+//! `Session` has no cheaper "shallow copy" tier to opt into.
+//!
+//! **Still narrowed, disclosed**: `append_event`'s `StaleSessionError`
+//! path is N/A for this in-memory backend — the source's own
+//! `InMemorySessionService` never raises it either (the docstring's
+//! warning is for a *persistent* backend detecting a concurrent write,
+//! which a simple in-memory map can't contend on). `GetSessionConfig`
+//! (`num_recent_events`/`after_timestamp` event trimming, C0207) is real —
+//! see [`SessionService::get_session_with_config`] — but
+//! `RunConfig.get_session_config` is still an opaque `Value` placeholder
+//! (its own disclosed scope cut, C0875), so no call site in this crate or
+//! `adk-runners` threads a real `GetSessionConfig` through yet; the trait
+//! method exists and is tested ahead of its own caller, the same "widen
+//! once a real consumer needs the structure" pattern this port applies
+//! elsewhere. `Session` itself still doesn't have camelCase field
+//! aliasing, `extra='forbid'`, or the private `_storage_update_marker`
+//! optimistic-concurrency field (C0204 stays partial — see `session.rs`'s
+//! own module doc).
 
 use adk_errors::already_exists::AlreadyExistsError;
 use adk_events::ui_widget::UiWidget;
@@ -274,6 +291,39 @@ pub trait SessionService: Send + Sync {
     fn flush(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }
+
+    /// C0214: returns the user-scoped state for `(app_name, user_id)` —
+    /// raw keys, without the `user:` prefix — without requiring an active
+    /// session id. Matches the source's own default: most backends don't
+    /// support this independently of enumerating sessions, so the default
+    /// here returns [`GetUserStateError::NotSupported`] rather than an
+    /// empty map (which would look like "no state" rather than "can't
+    /// tell"). [`InMemorySessionService`] overrides this with a real
+    /// implementation.
+    fn get_user_state<'a>(
+        &'a self,
+        _app_name: &'a str,
+        _user_id: &'a str,
+    ) -> BoxFuture<'a, Result<BTreeMap<String, Value>, GetUserStateError>> {
+        Box::pin(async { Err(GetUserStateError::NotSupported) })
+    }
+}
+
+/// C0214: the error [`SessionService::get_user_state`]'s default
+/// implementation returns for a backend that can't read user state
+/// independently of a session id — mirrors the source's `NotImplementedError`,
+/// whose message names the concrete backend's type via `type(self).__name__`;
+/// this port has no runtime type-name reflection for an arbitrary trait
+/// object, so the message here is generic rather than backend-named (a real,
+/// disclosed narrowing).
+#[derive(Debug, rusty_err::Error)]
+pub enum GetUserStateError {
+    #[error(
+        "This SessionService does not support get_user_state. To read user \
+         state, enumerate sessions via list_sessions and call get_session on \
+         each result to access the merged state."
+    )]
+    NotSupported,
 }
 
 fn apply_session_event(session: &mut Session, mut event: Event) -> Event {
@@ -298,6 +348,50 @@ fn apply_session_event(session: &mut Session, mut event: Event) -> Event {
 
 /// `app_name -> user_id -> session_id -> Session`.
 type SessionsByAppAndUser = BTreeMap<String, BTreeMap<String, BTreeMap<String, Session>>>;
+/// `app_name -> user_id -> key -> value`.
+type UserStateByAppAndUser = BTreeMap<String, BTreeMap<String, BTreeMap<String, Value>>>;
+/// `app_name -> key -> value`.
+type AppStateByApp = BTreeMap<String, BTreeMap<String, Value>>;
+
+/// C0212: returns a copy of `session` isolated from the original, matching
+/// the source's `_copy_session` (gated on
+/// `FeatureName::InMemorySessionServiceLightCopy`, deep-copy vs a shallow
+/// `model_copy` plus a shallow copy of `events`/`state`).
+///
+/// **Narrowed to an observed-but-inert flag check, disclosed**: the
+/// source's two strategies differ because Python's `list`/`dict` are
+/// reference types — a shallow copy shares the *same* nested event/state
+/// objects with the original, cheaper than `copy.deepcopy` recursively
+/// duplicating every one of them, at the cost of the copy and original
+/// aliasing those nested objects. This port's `Session` holds owned
+/// `Vec<Event>`/`BTreeMap<String, Value>` with no `Rc`/`Arc` sharing, so
+/// `Session::clone()` already both (a) allocates fresh containers and (b)
+/// clones every element — there is no cheaper "shallow" tier to opt into,
+/// and no aliasing risk either strategy could introduce. The flag is still
+/// read here (real parity with the source's runtime check, and ready for a
+/// future `Session` that does adopt shared substructures) but both
+/// branches produce an identical, fully isolated copy.
+fn copy_session(session: &Session) -> Session {
+    if adk_features::feature_registry::is_feature_enabled(
+        adk_features::feature_registry::FeatureName::InMemorySessionServiceLightCopy,
+    ) {
+        light_copy(session)
+    } else {
+        deep_copy(session)
+    }
+}
+
+/// See [`copy_session`]'s doc — collapses to the same owned clone as
+/// [`deep_copy`] in this port.
+fn light_copy(session: &Session) -> Session {
+    session.clone()
+}
+
+/// See [`copy_session`]'s doc — collapses to the same owned clone as
+/// [`light_copy`] in this port.
+fn deep_copy(session: &Session) -> Session {
+    session.clone()
+}
 
 /// An in-memory [`SessionService`] — for testing/development only, same
 /// as the source's own `InMemorySessionService`. See the module doc for
@@ -305,11 +399,82 @@ type SessionsByAppAndUser = BTreeMap<String, BTreeMap<String, BTreeMap<String, S
 #[derive(Default)]
 pub struct InMemorySessionService {
     sessions: Mutex<SessionsByAppAndUser>,
+    /// C0214: `app_name -> user_id -> raw (unprefixed) key -> value`,
+    /// shared across every session for that `(app_name, user_id)`.
+    user_state: Mutex<UserStateByAppAndUser>,
+    /// C0214: `app_name -> raw (unprefixed) key -> value`, shared across
+    /// every session (and every user) for that `app_name`.
+    app_state: Mutex<AppStateByApp>,
 }
 
 impl InMemorySessionService {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// C0214/C0209: merges the shared `app:`/`user:`-prefixed state back
+    /// onto `session.state` — mirrors the source's `_merge_state`, called
+    /// on every read (`get_session`/`list_sessions`) so a change to shared
+    /// app/user state (however it was written) is visible through any
+    /// session's merged view without needing to re-fetch that session.
+    fn merge_state(&self, app_name: &str, user_id: &str, session: &mut Session) {
+        if let Some(app) = self.app_state.lock().unwrap().get(app_name) {
+            for (key, value) in app {
+                session.state.insert(
+                    format!("{}{key}", crate::state::State::APP_PREFIX),
+                    value.clone(),
+                );
+            }
+        }
+        if let Some(user) = self
+            .user_state
+            .lock()
+            .unwrap()
+            .get(app_name)
+            .and_then(|by_user| by_user.get(user_id))
+        {
+            for (key, value) in user {
+                session.state.insert(
+                    format!("{}{key}", crate::state::State::USER_PREFIX),
+                    value.clone(),
+                );
+            }
+        }
+    }
+
+    /// C0209/C0214: splits `delta` by scope (`extract_state_delta`) and
+    /// merges the app/user shares into the shared cross-session maps,
+    /// returning the session-scoped share for the caller to apply to a
+    /// single session's own `state`.
+    fn apply_scoped_state_delta(
+        &self,
+        app_name: &str,
+        user_id: &str,
+        delta: &BTreeMap<String, Value>,
+    ) -> BTreeMap<String, Value> {
+        let mut deltas = crate::session_util::extract_state_delta(delta);
+        let app_delta = deltas.remove("app").unwrap_or_default();
+        let user_delta = deltas.remove("user").unwrap_or_default();
+        let session_delta = deltas.remove("session").unwrap_or_default();
+        if !app_delta.is_empty() {
+            self.app_state
+                .lock()
+                .unwrap()
+                .entry(app_name.to_string())
+                .or_default()
+                .extend(app_delta);
+        }
+        if !user_delta.is_empty() {
+            self.user_state
+                .lock()
+                .unwrap()
+                .entry(app_name.to_string())
+                .or_default()
+                .entry(user_id.to_string())
+                .or_default()
+                .extend(user_delta);
+        }
+        session_delta
     }
 }
 
@@ -337,12 +502,15 @@ impl SessionService for InMemorySessionService {
                 }
                 _ => new_uuid().to_string(),
             };
+            let session_state =
+                self.apply_scoped_state_delta(app_name, user_id, &state.unwrap_or_default());
             let session = Session {
                 id: session_id.clone(),
                 app_name: app_name.to_string(),
                 user_id: user_id.to_string(),
-                state: state.unwrap_or_default(),
+                state: session_state,
                 events: Vec::new(),
+                last_update_time: adk_platform::time::get_time(),
             };
             sessions
                 .entry(app_name.to_string())
@@ -350,7 +518,11 @@ impl SessionService for InMemorySessionService {
                 .entry(user_id.to_string())
                 .or_default()
                 .insert(session_id, session.clone());
-            Ok(session)
+            drop(sessions);
+
+            let mut merged = copy_session(&session);
+            self.merge_state(app_name, user_id, &mut merged);
+            Ok(merged)
         })
     }
 
@@ -361,13 +533,16 @@ impl SessionService for InMemorySessionService {
         session_id: &'a str,
     ) -> BoxFuture<'a, Option<Session>> {
         Box::pin(async move {
-            self.sessions
+            let mut session = self
+                .sessions
                 .lock()
                 .unwrap()
                 .get(app_name)
                 .and_then(|by_user| by_user.get(user_id))
                 .and_then(|by_session| by_session.get(session_id))
-                .cloned()
+                .map(copy_session)?;
+            self.merge_state(app_name, user_id, &mut session);
+            Some(session)
         })
     }
 
@@ -387,11 +562,22 @@ impl SessionService for InMemorySessionService {
                     continue;
                 }
                 for session in by_session.values() {
-                    let mut without_events = session.clone();
+                    let mut without_events = copy_session(session);
                     without_events.events.clear();
+                    self.merge_state(app_name, uid, &mut without_events);
                     result.push(without_events);
                 }
             }
+            drop(sessions);
+            // C0208: `ListSessionsResponse` is ordered by `last_update_time`
+            // ascending (oldest first), tie-broken by `user_id` then `id`,
+            // matching the source's own sort key exactly.
+            result.sort_by(|a, b| {
+                a.last_update_time
+                    .total_cmp(&b.last_update_time)
+                    .then_with(|| a.user_id.cmp(&b.user_id))
+                    .then_with(|| a.id.cmp(&b.id))
+            });
             result
         })
     }
@@ -427,15 +613,25 @@ impl SessionService for InMemorySessionService {
     /// source logs a warning in that last case; this port has no logging
     /// framework adopted yet (the same disclosed substitution used
     /// elsewhere in this migration), so it's silent instead.
+    ///
+    /// **C0209/C0214**: `event.actions.state_delta` is split by scope
+    /// (`app:`/`user:`/plain) — the app/user shares merge into the shared
+    /// cross-session maps, and only the plain session-scoped share is
+    /// written onto the canonical stored session's `state` (matching the
+    /// source's `storage_session.state.update(session_state_delta)`,
+    /// which deliberately excludes the app:/user: shares from the
+    /// per-session record).
     fn append_event<'a>(&'a self, session: &'a mut Session, event: Event) -> BoxFuture<'a, Event> {
         Box::pin(async move {
             if event.partial.unwrap_or(false) {
                 return event;
             }
+            let app_name = session.app_name.clone();
+            let user_id = session.user_id.clone();
             let mut sessions = self.sessions.lock().unwrap();
             let Some(storage_session) = sessions
-                .get_mut(&session.app_name)
-                .and_then(|by_user| by_user.get_mut(&session.user_id))
+                .get_mut(&app_name)
+                .and_then(|by_user| by_user.get_mut(&user_id))
                 .and_then(|by_session| by_session.get_mut(&session.id))
             else {
                 return event;
@@ -449,9 +645,43 @@ impl SessionService for InMemorySessionService {
             }
 
             let trimmed = apply_session_event(session, event);
-            storage_session.state = session.state.clone();
+            session.last_update_time = trimmed.timestamp;
             storage_session.events.push(trimmed.clone());
+            storage_session.last_update_time = trimmed.timestamp;
+
+            if !trimmed.actions.state_delta.is_empty() {
+                let delta: BTreeMap<String, Value> = trimmed
+                    .actions
+                    .state_delta
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                let session_delta = self.apply_scoped_state_delta(&app_name, &user_id, &delta);
+                if !session_delta.is_empty() {
+                    storage_session.state.extend(session_delta);
+                }
+            }
+
             trimmed
+        })
+    }
+
+    /// C0214: overrides the default `NotSupported` error with the actual
+    /// shared user-state map, matching the source's own override.
+    fn get_user_state<'a>(
+        &'a self,
+        app_name: &'a str,
+        user_id: &'a str,
+    ) -> BoxFuture<'a, Result<BTreeMap<String, Value>, GetUserStateError>> {
+        Box::pin(async move {
+            Ok(self
+                .user_state
+                .lock()
+                .unwrap()
+                .get(app_name)
+                .and_then(|by_user| by_user.get(user_id))
+                .cloned()
+                .unwrap_or_default())
         })
     }
 }
@@ -1447,5 +1677,210 @@ mod tests {
             .get_session("app", "user", "never-created")
             .await
             .is_none());
+    }
+
+    // --- C0209/C0214: app:/user: state scoping ---
+
+    #[rusty_tokio::test]
+    async fn create_session_splits_initial_state_by_scope() {
+        let service = InMemorySessionService::new();
+        let state = BTreeMap::from([
+            ("app:theme".to_string(), Value::String("dark".to_string())),
+            ("user:locale".to_string(), Value::String("en".to_string())),
+            ("count".to_string(), Value::Int(1)),
+        ]);
+        let session = service
+            .create_session("app", "user", Some(state), Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            session.state.get("app:theme"),
+            Some(&Value::String("dark".to_string()))
+        );
+        assert_eq!(
+            session.state.get("user:locale"),
+            Some(&Value::String("en".to_string()))
+        );
+        assert_eq!(session.state.get("count"), Some(&Value::Int(1)));
+    }
+
+    #[rusty_tokio::test]
+    async fn app_and_user_state_are_shared_across_sessions_of_the_same_scope() {
+        let service = InMemorySessionService::new();
+        let state = BTreeMap::from([
+            ("app:theme".to_string(), Value::String("dark".to_string())),
+            ("user:locale".to_string(), Value::String("en".to_string())),
+        ]);
+        service
+            .create_session("app", "alice", Some(state), Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        // A second session for the same app (but a different user) sees
+        // the app-scoped state; a session for a different user does not
+        // see alice's user-scoped state.
+        let bobs_session = service
+            .create_session("app", "bob", None, Some("s2".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(
+            bobs_session.state.get("app:theme"),
+            Some(&Value::String("dark".to_string()))
+        );
+        assert!(!bobs_session.state.contains_key("user:locale"));
+
+        // A fresh get_session for alice re-merges her user-scoped state too.
+        let alice_refetched = service.get_session("app", "alice", "s1").await.unwrap();
+        assert_eq!(
+            alice_refetched.state.get("user:locale"),
+            Some(&Value::String("en".to_string()))
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn append_event_with_scoped_state_delta_propagates_to_a_sibling_session_on_read() {
+        let service = InMemorySessionService::new();
+        let mut session = service
+            .create_session("app", "user", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+        service
+            .create_session("app", "user", None, Some("s2".to_string()))
+            .await
+            .unwrap();
+
+        let mut event = Event::new("inv-1", "agent", NodeInfo::new("root"));
+        event
+            .actions
+            .state_delta
+            .insert("user:locale".to_string(), Value::String("fr".to_string()));
+        service.append_event(&mut session, event).await;
+
+        // The sibling session (never directly touched) sees the
+        // user-scoped update on its next read, since user state is
+        // shared across every session for that (app_name, user_id).
+        let refetched_sibling = service.get_session("app", "user", "s2").await.unwrap();
+        assert_eq!(
+            refetched_sibling.state.get("user:locale"),
+            Some(&Value::String("fr".to_string()))
+        );
+
+        // The originating session's own storage doesn't carry the
+        // prefixed key directly (it lives only in the shared map).
+        let refetched_origin = service.get_session("app", "user", "s1").await.unwrap();
+        assert_eq!(
+            refetched_origin.state.get("user:locale"),
+            Some(&Value::String("fr".to_string()))
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn list_sessions_orders_by_last_update_time_then_user_id_then_id() {
+        let service = InMemorySessionService::new();
+        let mut third = service
+            .create_session("app", "user-b", None, Some("s3".to_string()))
+            .await
+            .unwrap();
+        let mut first = service
+            .create_session("app", "user-a", None, Some("s1".to_string()))
+            .await
+            .unwrap();
+        let mut second = service
+            .create_session("app", "user-a", None, Some("s2".to_string()))
+            .await
+            .unwrap();
+
+        // Force a deterministic ordering independent of wall-clock
+        // resolution by appending events with explicit timestamps.
+        service
+            .append_event(&mut first, timestamped_event(1.0))
+            .await;
+        service
+            .append_event(&mut second, timestamped_event(2.0))
+            .await;
+        service
+            .append_event(&mut third, timestamped_event(2.0))
+            .await;
+
+        let listed = service.list_sessions("app", None).await;
+        let ids: Vec<&str> = listed.iter().map(|s| s.id.as_str()).collect();
+        // second (user-a, ts=2.0) sorts before third (user-b, ts=2.0):
+        // same timestamp, tie-broken by user_id.
+        assert_eq!(ids, vec!["s1", "s2", "s3"]);
+    }
+
+    // --- C0214: get_user_state ---
+
+    #[rusty_tokio::test]
+    async fn get_user_state_returns_raw_unprefixed_keys() {
+        let service = InMemorySessionService::new();
+        let state = BTreeMap::from([("user:locale".to_string(), Value::String("en".to_string()))]);
+        service
+            .create_session("app", "user", Some(state), Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        let user_state = service.get_user_state("app", "user").await.unwrap();
+        assert_eq!(
+            user_state.get("locale"),
+            Some(&Value::String("en".to_string()))
+        );
+        assert!(!user_state.contains_key("user:locale"));
+    }
+
+    #[rusty_tokio::test]
+    async fn get_user_state_is_empty_for_an_unknown_user() {
+        let service = InMemorySessionService::new();
+        let user_state = service.get_user_state("app", "missing").await.unwrap();
+        assert!(user_state.is_empty());
+    }
+
+    struct MinimalSessionService;
+
+    impl SessionService for MinimalSessionService {
+        fn create_session<'a>(
+            &'a self,
+            _app_name: &'a str,
+            _user_id: &'a str,
+            _state: Option<BTreeMap<String, Value>>,
+            _session_id: Option<String>,
+        ) -> BoxFuture<'a, Result<Session, AlreadyExistsError>> {
+            Box::pin(async { unimplemented!() })
+        }
+
+        fn get_session<'a>(
+            &'a self,
+            _app_name: &'a str,
+            _user_id: &'a str,
+            _session_id: &'a str,
+        ) -> BoxFuture<'a, Option<Session>> {
+            Box::pin(async { None })
+        }
+
+        fn list_sessions<'a>(
+            &'a self,
+            _app_name: &'a str,
+            _user_id: Option<&'a str>,
+        ) -> BoxFuture<'a, Vec<Session>> {
+            Box::pin(async { Vec::new() })
+        }
+
+        fn delete_session<'a>(
+            &'a self,
+            _app_name: &'a str,
+            _user_id: &'a str,
+            _session_id: &'a str,
+        ) -> BoxFuture<'a, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn get_user_state_defaults_to_not_supported() {
+        let service = MinimalSessionService;
+        let err = service.get_user_state("app", "user").await.unwrap_err();
+        assert!(matches!(err, GetUserStateError::NotSupported));
+        assert!(err.to_string().contains("get_user_state"));
     }
 }

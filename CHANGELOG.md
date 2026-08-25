@@ -5,6 +5,31 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-agents/src/services.rs`/`session.rs`: completed the
+  in-memory session-service's state-scoping architecture (C0208/C0212/
+  C0214, C0204 partial), ported from `sessions/in_memory_session_service.py`
+  and `sessions/session.py`. `InMemorySessionService` now carries shared
+  `app_state`/`user_state` maps and routes `app:`/`user:`-prefixed state
+  deltas into them (via the already-shipped C0209 `extract_state_delta`)
+  from both `create_session`'s initial state and `append_event`'s
+  `state_delta`; every read (`get_session`/`list_sessions`/
+  `create_session`'s own return value) re-merges that shared state back
+  onto the session, matching the source's `_merge_state` — verified with
+  a test where a change made through one session becomes visible on a
+  completely different, never-touched sibling session's next read.
+  `SessionService::get_user_state` (C0214) is a new trait method
+  defaulting to `GetUserStateError::NotSupported` (mirroring the source's
+  `NotImplementedError` default), with `InMemorySessionService` overriding
+  it with a real read of the shared user-state map. `Session::last_update_time`
+  (C0204, partial) is set at creation and bumped on every `append_event`,
+  so `list_sessions` (C0208) now sorts by `(last_update_time, user_id, id)`
+  ascending — the source's real `ListSessionsResponse` ordering, not
+  insertion order. `copy_session`'s `IN_MEMORY_SESSION_SERVICE_LIGHT_COPY`
+  feature check (C0212) is genuinely read at every one of the source's
+  three copy call sites, but disclosed as behaviorally inert in this
+  port: this port's owned, non-aliased `Session` has no cheaper "shallow
+  copy" tier the way Python's reference-typed `list`/`dict` do, so both
+  strategies converge to the same `.clone()`. 8 new tests.
 - New `crates/adk-agents/src/credential_manager.rs`: `CredentialManager`
   (C0517/C0519/C0520/C0521, C0518 partial) — the master credential-
   resolution orchestrator, ported from `auth/credential_manager.py`.

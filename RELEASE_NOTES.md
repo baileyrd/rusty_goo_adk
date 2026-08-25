@@ -22,6 +22,44 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `sessions/`: `InMemorySessionService` state-scoping (C0208/C0212/C0214, DONE — C0204 partial)
+**2026-08-25**
+
+- **Added:** `InMemorySessionService` now models the source's cross-session
+  `app_state`/`user_state` architecture — shared maps that every session
+  under the same `app_name` (and `app_name`/`user_id`) reads through.
+  `app:`/`user:`-prefixed keys in `create_session`'s initial state and
+  `append_event`'s state delta route into those shared maps instead of a
+  single flat per-session map; every read (`get_session`/`list_sessions`,
+  and `create_session`'s own return value) re-merges the shared state back
+  in, matching the source's `_merge_state`. A change made through one
+  session is now visible on a different, never-touched sibling session's
+  next read — verified by a dedicated parity test.
+- **Added:** `SessionService::get_user_state` (C0214) — reads user-scoped
+  state for an `(app_name, user_id)` pair without needing an active
+  session id. Defaults to a `NotSupported` error, mirroring the source's
+  `NotImplementedError` default on `BaseSessionService`; `InMemorySessionService`
+  overrides it with a real read of the shared user-state map.
+- **Added:** `Session::last_update_time` (C0204, partial) — set at
+  creation, bumped on every `append_event`. `list_sessions` (C0208) now
+  sorts its result by `(last_update_time, user_id, id)` ascending, the
+  source's real `ListSessionsResponse` ordering, replacing the prior
+  insertion-order behavior.
+- **Added:** the `IN_MEMORY_SESSION_SERVICE_LIGHT_COPY` feature flag
+  (C0212) is now read at every session-copy call site, matching the
+  source's runtime check.
+- **Known limitation, disclosed:** the light-copy feature flag has no
+  observable effect in this port — Python's shallow-vs-deep copy
+  distinction exists because `list`/`dict` are reference types, but this
+  port's `Session` holds owned containers with no shared/reference-counted
+  substructure, so both strategies already produce an identical, fully
+  isolated clone. `Session` still lacks camelCase field aliasing,
+  `extra='forbid'`, and the private `_storage_update_marker`
+  optimistic-concurrency field (C0204 stays partial, pending the real
+  Phase-5 persistent-backend schema work).
+
+---
+
 ## PR #TBD — `auth/`: `CredentialManager`, the credential-resolution orchestrator (C0517/C0519/C0520/C0521, DONE — C0518 partial)
 **2026-08-25**
 
