@@ -13,6 +13,27 @@
 use crate::code_execution_utils::{CodeExecutionInput, CodeExecutionResult};
 use adk_agents::invocation_context::InvocationContext;
 
+/// Trait-object-safe `as_any` — the same mechanism
+/// `adk-agents::base_agent::AsAny`/`adk-models::base_llm::AsAny` already
+/// established for downcasting a type-erased trait object back onto a
+/// concrete implementor. Needed here so `adk-flows::code_execution` can
+/// detect whether a resolved `&dyn BaseCodeExecutor` is actually a
+/// `BuiltInCodeExecutor` (its request/response handling is a completely
+/// different branch from a general executor, matching the source's own
+/// `isinstance(code_executor, BuiltInCodeExecutor)` checks) without
+/// `adk-tools` needing to know about `adk-flows` or vice versa. Purely
+/// additive: every existing `BaseCodeExecutor` implementor needs no
+/// changes, since `AsAny` is blanket-implemented for every `'static` type.
+pub trait AsAny: std::any::Any {
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T: std::any::Any> AsAny for T {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// C0383: `BaseCodeExecutor`'s 6 config attributes, with the source's
 /// own defaults.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,7 +73,7 @@ impl Default for CodeExecutorConfig {
 
 /// C0383: `code_executors.base_code_executor.BaseCodeExecutor` — the
 /// abstract interface every concrete code executor implements.
-pub trait BaseCodeExecutor {
+pub trait BaseCodeExecutor: AsAny {
     /// The executor's shared config attributes. See [`CodeExecutorConfig`].
     fn config(&self) -> &CodeExecutorConfig;
 

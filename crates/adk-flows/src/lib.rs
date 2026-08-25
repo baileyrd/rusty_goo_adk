@@ -21,6 +21,7 @@ pub mod apps_compaction;
 pub mod basic;
 pub mod cache_performance_analyzer;
 pub mod canonical_model;
+pub mod code_execution;
 pub mod compaction;
 pub mod compaction_request_processor;
 pub mod contents;
