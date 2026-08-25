@@ -5,11 +5,35 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `DynamicNodeScheduler`/`ScheduleDynamicNode` (C0318, DONE — concurrent-
+  task dedup disclosed as not ported) and its rehydration/execution/
+  outcome-classification internals (C0319, DONE — cancellation clean-
+  removal disclosed as not applicable): new `crates/adk-agents/src/
+  workflow_dynamic_node_scheduler.rs`. Backs `Context::run_node`'s Mode 1
+  (Workflow-scheduled dynamic dispatch), previously disclosed as
+  unconditional dead code — `Context` now gains `workflow_scheduler`
+  (inherited-or-freshly-created per node context, via `Context::for_node`,
+  mirroring the source's `_derive_scheduler`) and `child_run_counters`
+  fields, and `Context::run_node`'s loop branches on whether a scheduler
+  is present: Mode 1 through `DynamicNodeScheduler::call` for any node
+  context, Mode 2 (standalone, via `NodeRunner` directly) still for a
+  direct call on a root context. Fresh/completed-dedup/waiting-resume
+  3-case dispatch and the 5-way run-outcome classification are fully
+  ported and tested end-to-end (a node body dynamically dispatching the
+  same target twice with the same run id fast-forwards the second call).
+  `check_interception` (C0321) regains its "Case 1" (same-turn completed/
+  waiting interception), restored now that `DynamicNodeRun` exists to
+  back it — previously narrowed out for lack of a `current_run` type.
+  Concurrent-task dedup (`asyncio.Task`-based "await the already-in-flight
+  call") stays unported: nothing in this port spawns concurrent tasks
+  that could race on the same dynamic-node path, and `Workflow`'s own
+  concurrent LOOP phase (C0300-C0306, the only future source of that) isn't
+  built. Corrected a stale disclosure in C0059/C0060's own evidence along
+  the way (Mode 1 is no longer dead code) and in C0146's (the multi-step
+  tool-call loop and before/after-model callback dispatch were already
+  shipped, contrary to what that row's text still said).
 - Dynamic workflow-node dispatch: `Context::run_node` (C0059, DONE) and
-  its in-place agent-transfer loop (C0060, DONE — Mode 1/Workflow-scheduled
-  dispatch disclosed as not ported, since `Workflow`/C0298 and
-  `DynamicNodeScheduler`/C0318-C0319 don't exist yet; always takes Mode 2,
-  standalone via `NodeRunner`). New `RunNodeOptions`/`RunNodeOutcome`/
+  its in-place agent-transfer loop (C0060, DONE). New `RunNodeOptions`/`RunNodeOutcome`/
   `RunNodeOutput` on `context.rs`: events are returned (not enqueued, this
   port's usual "eagerly collected `Vec`" adaptation) and an interrupted
   child surfaces as `RunNodeOutcome::Interrupted` rather than the source's

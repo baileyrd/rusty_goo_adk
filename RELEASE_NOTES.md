@@ -50,9 +50,40 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
   local per-call ancestry chain rather than a permanent `Context.node`/
   `Context.parent_ctx` pair (deliberately never added to this port's
   `Context` — see the module's own doc for why).
-- **Known limitation:** Mode 1 (`Workflow`-scheduled dynamic dispatch)
-  is not ported — revisit once `Workflow` (C0298) and
-  `DynamicNodeScheduler` (C0318/C0319) land.
+- **Known limitation (resolved in the next PR):** Mode 1 (`Workflow`-
+  scheduled dynamic dispatch) was not ported here — landed by
+  `DynamicNodeScheduler` (C0318/C0319) below.
+
+---
+
+## PR #TBD — `agents/`: `DynamicNodeScheduler` — Mode 1 dynamic node dispatch (C0318/C0319, both DONE)
+**2026-08-25**
+
+- **Added:** `DynamicNodeScheduler`/`ScheduleDynamicNode`
+  (`workflow_dynamic_node_scheduler.rs`) — backs `Context::run_node`'s
+  previously-disclosed-dead Mode 1: fresh execution, same-turn/cross-turn
+  dedup (fast-forwarding a node that already completed or is waiting),
+  and interrupt-resume, all reusing the already-shipped `ReplayManager`/
+  rehydration/replay-interception stack. `Context` gains a
+  `workflow_scheduler` field (inherited from the parent node context, or
+  freshly created — every node context gets one) and `child_run_counters`
+  (auto-generates a run id when the caller doesn't supply one); `Context::
+  run_node`'s loop now branches Mode 1 vs Mode 2 on whether one is
+  present, matching the source's own `if self._workflow_scheduler:` check.
+- **Added:** `check_interception`'s "Case 1" (same-turn completed/waiting
+  interception) — narrowed out when it was first ported since nothing
+  could supply a `current_run` yet; restored now.
+- **Known limitation:** concurrent-task dedup (the source's `asyncio.
+  Task`-based "await the call that's already in flight for this node")
+  isn't ported — nothing in this port spawns concurrent tasks that could
+  race on the same dynamic-node path yet, and `Workflow`'s own concurrent
+  LOOP phase (C0300-C0306), the only future source of that, doesn't
+  exist. Same-turn dedup for a node that already ran *sequentially*
+  earlier in the turn is unaffected.
+- **Fixed:** corrected stale "not ported yet" claims in C0059/C0060's own
+  tracked evidence (Mode 1 is no longer dead code) and in C0146's (the
+  multi-step tool-call loop and before/after-model callback dispatch in
+  `LlmFlow` were already shipped in an earlier PR).
 
 ---
 
