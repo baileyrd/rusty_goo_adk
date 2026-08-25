@@ -42,8 +42,15 @@ pub fn create_request_input_event(request_input: &RequestInput) -> Event {
     if let Some(message) = &request_input.message {
         args.insert("message".to_string(), Value::String(message.clone()));
     }
+    // Snake_case, not the camelCase every other `RequestInput` field
+    // dumps as: the source's own `create_request_input_event` explicitly
+    // re-adds this key as `args['response_schema'] = ...` *after*
+    // `model_dump(exclude={'response_schema'}, by_alias=True)` already
+    // dropped its aliased (camelCase) form — so the wire key really is
+    // `response_schema`, read back by this same name in
+    // `workflow_rehydration_utils::extract_schema_from_event`.
     args.insert(
-        "responseSchema".to_string(),
+        "response_schema".to_string(),
         request_input.response_schema.clone().unwrap_or(Value::Null),
     );
 
