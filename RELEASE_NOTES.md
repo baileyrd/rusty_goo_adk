@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `eval/`: P11 user-simulator prompt + GEPA helper batch (C0633/C0642, both DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-eval/src/per_turn_user_simulator_quality_prompts.rs`
+  — the per-turn user-simulator-quality evaluator's flat, no-persona
+  prompt template (transcribed byte-for-byte from
+  `per_turn_user_simulator_quality_prompts.py`) plus
+  `get_per_turn_user_simulator_quality_prompt`. The persona-decorated
+  template (`{% for b in persona.behaviors %}` + a custom
+  `render_string_filter`) needs real Jinja2 this port doesn't have, so
+  it isn't transcribed as a dead literal — the function returns
+  `PersonaTemplateUnsupported` instead of a silent mis-render, the same
+  shape `llm_backed_user_simulator.rs`'s own persona template already
+  established.
+- **Corrected:** C0633's manifest evidence was blank even though its
+  `llm_backed_user_simulator_prompts` half was already ported under
+  C0628 — filled in now, citing that file directly.
+- **Added:** `crates/adk-eval/src/gepa_utils.rs` —
+  `require_static_instruction` (narrowed to take `&Instruction` rather
+  than a whole `&LlmAgent`, since the source only ever reads
+  `agent.instruction`) and `generate_reflection_response` (narrowed to
+  take `&str` rather than the source's `str | list[dict]` `GEPAPrompt`
+  alias, since the source itself immediately casts to `str`). Lands in
+  `adk-eval` rather than `adk-agents` (where the sibling
+  `agent_optimizer.rs`/C0636 lives) since it needs
+  `BaseLlm::generate_content_async` and `adk-agents` cannot depend on
+  `adk-models` without a cycle.
+- **Not ported, disclosed:** the GEPA optimizers themselves
+  (C0640/C0641) — they need the optional third-party `gepa` package, a
+  new-dependency stop-and-ask trigger this dependency-free helper pair
+  doesn't hit.
+- **Changed:** `substitute_placeholders` in `llm_backed_user_simulator.rs`
+  widened from private to `pub(crate)` so the new prompt module can
+  reuse it instead of duplicating it.
+- **Tests:** 6 new unit tests (2 in `per_turn_user_simulator_quality_prompts.rs`,
+  4 in `gepa_utils.rs`).
+- Full local gate green: `cargo build --workspace`, `cargo test
+  --workspace`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo fmt --check`.
+
+---
+
 ## PR #TBD — `models/`: P10 Apigee backend, first slice (C0549/C0550/C0551, all DONE)
 **2026-08-25**
 
