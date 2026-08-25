@@ -16,6 +16,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   test `an_escalating_sibling_cancels_a_still_running_sibling` verifies
   real cancellation by wall-clock time, not just event absence.
 ### Added
+- P10 Anthropic `Content`↔block conversion (C0539, DONE): new
+  request-side `part_to_message_block`/`content_to_message_param`
+  (text, thinking-with-signature, redacted-thinking, tool_use,
+  tool_result with media, image/PDF, executable_code/
+  code_execution_result rendered as fenced text) and response-side
+  `content_block_to_part` in `crates/adk-models/src/anthropic_conversion.rs`.
+  New wire-shape stand-ins (`AnthropicMessageBlock`/
+  `AnthropicMessageParam`/`AnthropicToolResultBlock`/
+  `AnthropicToolResultContent`/`AnthropicBase64Source`/
+  `AnthropicResponseBlock`), declared ahead of the still-deferred
+  `AnthropicLlm` HTTP backend. No new dependency and no
+  `GenerateContentConfigStub` widening needed, correcting this row's
+  own prior manifest evidence. 33 new tests.
 - P11 `UserSimulatorProvider` audio-decorator composition (C0627, DONE):
   `crates/adk-eval/src/user_simulator.rs`'s `registry()` now seeds a
   built-in `"llm_audio"` registration alongside `"llm_backed"`, building
