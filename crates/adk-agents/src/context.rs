@@ -18,6 +18,7 @@ use adk_events::ui_widget::UiWidget;
 use adk_events::EventActions;
 use rusty_serde::value::Value;
 
+use crate::auth_handler::{AuthHandler, AuthHandlerError};
 use crate::invocation_context::InvocationContext;
 use crate::services::{self, AuthConfig, AuthCredential};
 use crate::state::State;
@@ -32,6 +33,8 @@ pub enum ContextError {
     CredentialServiceUnset,
     #[error("request_credential requires function_call_id. This method can only be used in a tool context, not a callback context. Consider using save_credential/load_credential instead.")]
     RequestCredentialNeedsFunctionCallId,
+    #[error("{0}")]
+    AuthHandler(#[from] AuthHandlerError),
     #[error("request_confirmation requires function_call_id. This method can only be used in a tool context.")]
     RequestConfirmationNeedsFunctionCallId,
     #[error("Cannot add session to memory: memory service is not available.")]
@@ -310,19 +313,31 @@ impl Context {
         Ok(service.load_credential(auth_config, self).await)
     }
 
+    /// C0062: gets the auth response credential from session state —
+    /// a previously-completed OAuth (or other) flow's stored credential.
+    pub fn get_auth_response(&self, auth_config: &AuthConfig) -> Option<AuthCredential> {
+        AuthHandler::new(auth_config.clone()).get_auth_response(self.state())
+    }
+
     /// C0062: requests a credential for the current tool call. Requires
     /// `function_call_id` — for callback contexts, use
-    /// `save_credential`/`load_credential` instead.
+    /// `save_credential`/`load_credential` instead. Stores
+    /// [`AuthHandler::generate_auth_request`]'s result, not `auth_config`
+    /// verbatim: for an OAuth2/OIDC scheme this validates the raw
+    /// credential and may substitute a freshly generated
+    /// `exchanged_auth_credential`, matching the source's own
+    /// `AuthHandler(auth_config).generate_auth_request()` call.
     pub fn request_credential(&mut self, auth_config: AuthConfig) -> Result<(), ContextError> {
         let function_call_id = self
             .function_call_id
             .clone()
             .ok_or(ContextError::RequestCredentialNeedsFunctionCallId)?;
+        let auth_request = AuthHandler::new(auth_config).generate_auth_request()?;
         // `EventActions.requested_auth_configs` (`adk-events`) is `Value`-typed
         // and out of scope for this batch to widen — serialize the now-real
         // `AuthConfig` on the way in, same as this crate's other
         // real-struct-into-a-`Value`-typed-field sites.
-        let auth_config_value = rusty_serde::json::to_value(&auth_config).unwrap_or(Value::Null);
+        let auth_config_value = rusty_serde::json::to_value(&auth_request).unwrap_or(Value::Null);
         self.event_actions
             .requested_auth_configs
             .insert(function_call_id, auth_config_value);
@@ -506,6 +521,87 @@ mod tests {
         ctx.set_function_call_id(Some("fc-1".to_string()));
         ctx.request_credential(test_auth_config()).unwrap();
         assert!(ctx.actions().requested_auth_configs.contains_key("fc-1"));
+    }
+
+    fn oauth2_auth_config(raw_auth_credential: Option<AuthCredential>) -> AuthConfig {
+        use crate::auth_schemes::{
+            AuthScheme, OAuth2Scheme, OAuthFlow, OAuthFlows, SecurityScheme,
+        };
+
+        AuthConfig::new(
+            AuthScheme::Security(Box::new(SecurityScheme::OAuth2(Box::new(OAuth2Scheme {
+                description: None,
+                flows: OAuthFlows {
+                    authorization_code: Some(OAuthFlow {
+                        authorization_url: Some("https://example.com/authorize".to_string()),
+                        token_url: Some("https://example.com/token".to_string()),
+                        refresh_url: None,
+                        scopes: Default::default(),
+                    }),
+                    ..Default::default()
+                },
+            })))),
+            raw_auth_credential,
+            None,
+            Some("oauth2_key".to_string()),
+        )
+    }
+
+    #[test]
+    fn request_credential_routes_through_auth_handler_and_errors_without_a_raw_credential() {
+        let mut ctx = context();
+        ctx.set_function_call_id(Some("fc-1".to_string()));
+        let err = ctx
+            .request_credential(oauth2_auth_config(None))
+            .unwrap_err();
+        assert!(matches!(err, ContextError::AuthHandler(_)));
+    }
+
+    #[test]
+    fn request_credential_stores_auth_handlers_generated_request_not_the_input_verbatim() {
+        use crate::auth_credential::{AuthCredentialTypes, OAuth2Auth};
+
+        let mut ctx = context();
+        ctx.set_function_call_id(Some("fc-1".to_string()));
+        let raw_credential = AuthCredential {
+            oauth2: Some(OAuth2Auth {
+                client_id: Some("id".to_string()),
+                client_secret: Some("secret".to_string()),
+                ..OAuth2Auth::default()
+            }),
+            ..AuthCredential::new(AuthCredentialTypes::OAuth2)
+        };
+        ctx.request_credential(oauth2_auth_config(Some(raw_credential.clone())))
+            .unwrap();
+
+        let stored = ctx.actions().requested_auth_configs.get("fc-1").unwrap();
+        let stored: AuthConfig = rusty_serde::json::from_value(stored.clone()).unwrap();
+        // `generate_auth_uri` (this port always takes the source's own
+        // `not AUTHLIB_AVAILABLE` fallback, see `auth_handler.rs`) deep
+        // copies the raw credential into `exchanged_auth_credential` --
+        // proving `request_credential` stored `AuthHandler`'s output, not
+        // `auth_config` verbatim (which had no `exchanged_auth_credential`
+        // at all).
+        assert_eq!(stored.exchanged_auth_credential, Some(raw_credential));
+    }
+
+    #[test]
+    fn get_auth_response_returns_none_when_nothing_was_stored() {
+        let ctx = context();
+        assert_eq!(ctx.get_auth_response(&test_auth_config()), None);
+    }
+
+    #[test]
+    fn get_auth_response_reads_a_credential_stored_under_the_temp_key() {
+        let mut ctx = context();
+        let auth_config = test_auth_config();
+        let credential = AuthCredential::api_key("secret");
+        ctx.state_mut().set(
+            "temp:key",
+            rusty_serde::json::to_value(&credential).unwrap(),
+        );
+
+        assert_eq!(ctx.get_auth_response(&auth_config), Some(credential));
     }
 
     #[test]

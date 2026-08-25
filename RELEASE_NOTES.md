@@ -22,6 +22,42 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/context.py`: wire `Context` through the real `AuthHandler` (C0062 correction)
+**2026-08-25**
+
+- **Fixed:** `Context::request_credential` was serializing the caller's
+  raw `AuthConfig` straight into `EventActions.requested_auth_configs`
+  instead of routing it through `AuthHandler::generate_auth_request` —
+  for an OAuth2/OIDC scheme, the source validates the raw credential
+  (raising when `raw_auth_credential`/its `oauth2`/`client_id`/
+  `client_secret` are missing) and substitutes a freshly generated
+  `exchanged_auth_credential`; none of that ran here. Fixed by calling
+  `AuthHandler::new(auth_config).generate_auth_request()` and storing
+  its result, propagating any error via a new
+  `ContextError::AuthHandler(#[from] AuthHandlerError)` variant — the
+  same unhandled-error-propagation shape the source itself has (no
+  `try`/`except` around the call).
+- **Added:** `Context::get_auth_response` — this port had no such
+  method at all, despite `capability-manifest.md`'s own C0062 row
+  naming it. It's the source's exact two-line wrapper:
+  `AuthHandler(auth_config).get_auth_response(self.state())`.
+- **Why now:** C0062 was marked `DONE` back when `AuthConfig` was still
+  a `Value` placeholder and `AuthHandler` didn't exist yet in this
+  port; once `auth_handler.rs` landed (C0506-C0508, this session) the
+  row was never revisited to actually wire it up. Caught by re-reading
+  every P9-adjacent row against the current code rather than trusting
+  its `DONE` status at face value — corrected the manifest evidence to
+  cite the real coverage instead of the pre-`AuthHandler` placeholder
+  test.
+- **Testing:** 4 new tests — `request_credential` erroring through
+  `AuthHandler` for an OAuth2 scheme with no raw credential, storing
+  `AuthHandler`'s generated request rather than the input verbatim
+  (proven via the `exchanged_auth_credential` deep-copy `generate_auth_uri`
+  always produces), and `get_auth_response` both empty and reading a
+  credential back from stored state.
+
+---
+
 ## PR #TBD — `auth/auth_handler.py`: `AuthHandler` (C0506 partial, C0507, C0508 partial)
 **2026-08-25**
 
