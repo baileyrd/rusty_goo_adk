@@ -166,6 +166,7 @@ pub fn build_auth_request_event(
             _ => BTreeMap::new(),
         };
         let request_euc_function_call = FunctionCall {
+            partial_args: None,
             id: Some(request_id.clone()),
             name: Some(REQUEST_EUC_FUNCTION_CALL_NAME.to_string()),
             args: Some(args),
@@ -286,6 +287,7 @@ pub fn generate_request_confirmation_event(
         args.insert("toolConfirmation".to_string(), tool_confirmation_value);
 
         let request_confirmation_function_call = FunctionCall {
+            partial_args: None,
             id: Some(request_id.clone()),
             name: Some(REQUEST_CONFIRMATION_FUNCTION_CALL_NAME.to_string()),
             args: Some(args),
@@ -471,6 +473,7 @@ mod tests {
 
     fn fc_part(id: Option<&str>, name: &str) -> adk_genai::content::Part {
         adk_genai::content::Part::function_call(FunctionCall {
+            partial_args: None,
             id: id.map(str::to_string),
             name: Some(name.to_string()),
             args: None,
@@ -546,12 +549,14 @@ mod tests {
     fn collects_ids_of_long_running_tool_calls_only() {
         let calls = vec![
             FunctionCall {
+                partial_args: None,
                 id: Some("id1".to_string()),
                 name: Some("slow_tool".to_string()),
                 args: None,
                 will_continue: None,
             },
             FunctionCall {
+                partial_args: None,
                 id: Some("id2".to_string()),
                 name: Some("fast_tool".to_string()),
                 args: None,

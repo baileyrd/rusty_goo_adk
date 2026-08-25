@@ -801,6 +801,7 @@ mod tests {
 
     fn fc_part(id: &str, name: &str) -> Part {
         Part::function_call(FunctionCall {
+            partial_args: None,
             id: Some(id.to_string()),
             name: Some(name.to_string()),
             args: None,
@@ -1088,6 +1089,7 @@ mod tests {
 
     fn fc_with_args(id: &str, args: Vec<(&str, Value)>) -> Part {
         Part::function_call(FunctionCall {
+            partial_args: None,
             id: Some(id.to_string()),
             name: Some("delegate".to_string()),
             args: Some(args.into_iter().map(|(k, v)| (k.to_string(), v)).collect()),

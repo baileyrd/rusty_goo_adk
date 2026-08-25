@@ -53,6 +53,7 @@ fn convert_invocation_to_pydantic_schema(old_invocation: &Value) -> Invocation {
                 id: None,
                 name: Some(name),
                 args,
+                partial_args: None,
                 will_continue: None,
             });
         }

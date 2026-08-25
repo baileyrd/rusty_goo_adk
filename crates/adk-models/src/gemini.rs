@@ -1781,6 +1781,18 @@ mod tests {
     #[rusty_tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn generate_content_stream_yields_partials_then_a_final_aggregate() {
+        // This test asserts the legacy (non-progressive) aggregation shape
+        // (a separate flushed-merged-text event mid-stream) — force the
+        // flag off, since `FeatureName::ProgressiveSseStreaming` defaults
+        // on and produces a different response count/shape. See
+        // `streaming_utils.rs`'s own tests for progressive-mode coverage.
+        let _streaming_lock = crate::streaming_utils::PROGRESSIVE_SSE_TEST_LOCK
+            .lock()
+            .unwrap();
+        let _streaming_override = adk_features::feature_registry::TemporaryFeatureOverride::new(
+            adk_features::feature_registry::FeatureName::ProgressiveSseStreaming,
+            false,
+        );
         let _guard = ENV_VAR_GUARD.lock().unwrap();
         clear_auth_env_vars();
         std::env::set_var("GOOGLE_API_KEY", "test-key");

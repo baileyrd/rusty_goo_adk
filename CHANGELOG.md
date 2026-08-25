@@ -4,7 +4,35 @@ All notable changes to this repo are documented here.
 Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
+### Added
+- `crates/adk-genai/src/content.rs`: new `PartialArg` type and a
+  `partial_args: Option<Vec<PartialArg>>` field on `FunctionCall`, needed
+  for progressive SSE streaming's incrementally-streamed function-call
+  arguments.
+- `crates/adk-models/src/streaming_utils.rs`: `StreamingResponseAggregator`
+  now ports the source's progressive SSE streaming mode
+  (`FeatureName::ProgressiveSseStreaming`, closing out the rest of C0125)
+  alongside the already-shipped legacy mode — ordered part accumulation
+  (only merging consecutive text parts of the same thought/non-thought
+  type), and JSONPath-addressed incremental function-call argument
+  assembly (`$.location`, `$.units.precision`, ...) via a new
+  `value_from_partial_arg`/`set_value_by_json_path` pair. Corrects a stale
+  blocker claim (same pattern as C0172/C0178/C0196): the module doc said
+  this needed "typed function-call/tool machinery (C0116, Phase 8's
+  `BaseTool`)" — false, progressive mode never touches `BaseTool` at all.
+  `adk-models` gained direct `adk-features`/`adk-events` dependencies (both
+  already transitive via `adk-agents`, so no new crate cycle) for the
+  feature check and for reproducing `generate_client_function_call_id`
+  locally (its real home, `adk-flows`, depends on `adk-models`, not the
+  reverse — disclosed duplication, not a dependency). 10 new
+  progressive-mode tests; all 11 pre-existing legacy-mode tests now
+  explicitly force the flag off, since `ProgressiveSseStreaming` defaults
+  on and would otherwise change their behavior.
 ### Fixed
+- `crates/adk-models/src/gemini.rs`: one pre-existing streaming test
+  (`generate_content_stream_yields_partials_then_a_final_aggregate`)
+  hardcoded the legacy aggregation mode's response shape; now explicitly
+  forces `ProgressiveSseStreaming` off, since the flag defaults on.
 - `crates/adk-flows/src/functions_utils.rs`: closed out the remaining gap
   in C0196 — `build_auth_request_event`, `generate_auth_event`, and
   `generate_request_confirmation_event` are now real, tested code.

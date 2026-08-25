@@ -53,8 +53,41 @@ pub struct FunctionCall {
     pub name: Option<String>,
     #[rusty_serde(default)]
     pub args: Option<std::collections::BTreeMap<String, Value>>,
+    /// Streaming-only: the incremental argument chunks this call's `args`
+    /// are being assembled from — see [`PartialArg`]. Added for C0125's
+    /// progressive-SSE-streaming half.
+    #[rusty_serde(default)]
+    pub partial_args: Option<Vec<PartialArg>>,
     /// Streaming-only: whether this call's `args` are still being
     /// incrementally assembled.
+    #[rusty_serde(default)]
+    pub will_continue: Option<bool>,
+}
+
+/// `types.PartialArg` — one incrementally-streamed chunk of a
+/// [`FunctionCall`]'s arguments, addressed by a JSONPath (RFC 9535) into
+/// the eventual assembled `args` object. Exactly one of `string_value`/
+/// `number_value`/`bool_value`/`null_value` is meaningfully set per chunk
+/// (a `oneof`-style union, same convention as [`Part`]). Added for C0125's
+/// progressive-SSE-streaming half (`adk-models::streaming_utils`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[rusty_serde(rename_all = "camelCase")]
+pub struct PartialArg {
+    #[rusty_serde(default)]
+    pub json_path: Option<String>,
+    #[rusty_serde(default)]
+    pub string_value: Option<String>,
+    #[rusty_serde(default)]
+    pub number_value: Option<f64>,
+    #[rusty_serde(default)]
+    pub bool_value: Option<bool>,
+    /// The source types this `Literal['NULL_VALUE']` — always that one
+    /// string when present, never inspected beyond presence by ADK's own
+    /// code, so it stays a plain `Option<String>` rather than a
+    /// single-variant enum.
+    #[rusty_serde(default)]
+    pub null_value: Option<String>,
+    /// Whether another `PartialArg` for the same `json_path` follows.
     #[rusty_serde(default)]
     pub will_continue: Option<bool>,
 }
@@ -319,6 +352,7 @@ mod tests {
                 id: Some("fc-1".to_string()),
                 name: Some("tool".to_string()),
                 args: None,
+                partial_args: None,
                 will_continue: None,
             })],
         );
@@ -335,6 +369,7 @@ mod tests {
                 id: None,
                 name: Some("tool".to_string()),
                 args: None,
+                partial_args: None,
                 will_continue: Some(true),
             })],
         );

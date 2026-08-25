@@ -350,6 +350,7 @@ mod tests {
             "model",
             vec![Part {
                 function_call: Some(FunctionCall {
+                    partial_args: None,
                     id: None,
                     name: Some("test_function".to_string()),
                     args: Some(function_call_args()),

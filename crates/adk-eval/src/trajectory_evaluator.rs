@@ -201,6 +201,7 @@ mod tests {
 
     fn call(name: &str) -> FunctionCall {
         FunctionCall {
+            partial_args: None,
             id: None,
             name: Some(name.to_string()),
             args: None,
@@ -212,6 +213,7 @@ mod tests {
         let mut args = BTreeMap::new();
         args.insert(key.to_string(), Value::String(value.to_string()));
         FunctionCall {
+            partial_args: None,
             id: None,
             name: Some(name.to_string()),
             args: Some(args),
