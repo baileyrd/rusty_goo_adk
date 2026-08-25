@@ -22,6 +22,71 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/llm_flows/base_llm_flow.py`: transfer-to-agent recursion in the turn loop (rest of C0158, now DONE), plus a stale-doc cluster fix
+**2026-08-25**
+
+- **Added:** `LlmFlow::run_one_step` now handles the last piece of
+  `_postprocess_handle_function_calls_async` — when a function-response
+  event's `transfer_to_agent` action is set, it resolves the target agent
+  via `agent_transfer::get_agent_to_run` (C0159) and recursively calls
+  `agent_to_run.run_async(ctx)`, extending the step's events with
+  whatever the target run produced. This runs unconditionally after the
+  auth/confirmation/`set_model_response` synthesis wired in the previous
+  PR, matching the source's own order exactly.
+- **Why this isn't blocked by C0092** (the `LlmAgent`/`BaseAgent`
+  tree-fusion gap most Phase 4 processors are blocked on): the target
+  resolution only needs the *current* agent's own `disallow_transfer_to_
+  peers` (already owned by `LlmFlow.llm_agent`), not a cross-tree lookup
+  of another agent's `LlmAgent` config — `get_agent_to_run` itself already
+  operates on plain `BaseAgent` tree pointers.
+- **A genuine finding, confirmed against the Python source**: no branch
+  extension happens for a transfer — `_create_invocation_context` (what
+  `run_async` calls internally) is just an agent swap, not a branch
+  mutation; branch extension is a `ParallelAgent`/`SequentialAgent`-
+  specific *caller* convention, not part of `run_async`'s own contract.
+  This port's `BaseAgent::run_async(&self, parent_context: &InvocationContext)`
+  already does exactly this agent-swap-only behavior internally
+  (`parent_context.with_agent(self.clone())`), so passing `ctx` straight
+  through to the recursive call was correct with no extra adaptation
+  needed.
+- **Added, additive only:** two new `LlmFlowError` variants
+  (`GetAgentToRun`, wrapping `agent_transfer::GetAgentToRunError`;
+  `NestedAgentRun`, carrying the nested run's rendered error string,
+  since `AgentRunError` — `Box<dyn std::error::Error + Send + Sync>` —
+  can't satisfy `rusty_err::Error`'s derive directly). `run_one_step`'s
+  own signature is unchanged. No new dependency.
+- **2 new tests** in `crates/adk-flows/src/llm_flow.rs`: a two-agent tree
+  (root agent's tool call transfers to a child agent, whose own turn
+  produces the final text response — asserting exactly 3 events: the
+  function call, the function response, and the target's response,
+  authored by the target agent); an error case asserting a transfer to a
+  nonexistent agent name surfaces the resolution error.
+- **Stale-doc cluster fix** — corrections found and fixed across two
+  scoping passes, several predating this batch: `adk-agents/src/app.rs`
+  and `lib.rs`, plus manifest row C0280, no longer claim `App` is
+  "deliberately not wired into `Runner`'s constructor" (it is, via
+  `Runner::from_app`, C0846/C0849, DONE); `agent_transfer.rs` no longer
+  claims `TransferToAgentTool` needs `BaseTool` (it's fully built,
+  C0436) or cross-references a `SetModelResponseTool` blocker that no
+  longer exists (C0178 closed); `functions_utils.rs`'s
+  `get_long_running_function_calls` doc now correctly cites the C0092
+  tree-fusion gap (no automatic `tools_dict` resolution) instead of a
+  nonexistent "`BaseTool` doesn't exist" claim; `functions.rs` no longer
+  claims auth-event synthesis isn't wired into the turn loop (fixed by
+  the previous PR, C0158); `llm_request.rs`/`generate_content_request.rs`/
+  `gemini.rs`/`debug_log.rs` no longer claim `append_tools`/`BaseTool`
+  (C0116) don't exist — they're built and populate `LlmRequest.config
+  .tools`; the real remaining gap is that nothing downstream reads that
+  opaque placeholder back into a typed REST-body/log field yet;
+  `services.rs`'s `MemoryEntry` doc no longer claims the backing memory
+  service is unbuilt (`InMemoryMemoryService` already produces real
+  values; `VertexAiMemoryBankService` is the genuinely out-of-scope,
+  GCP-blocked remainder); `llm_agent.rs`'s `ToolUnion` doc no longer
+  claims `BaseTool`/`BaseToolset` don't exist (they do; the real,
+  still-accurate gap is C0092).
+
+---
+
 ## PR #TBD — `flows/llm_flows/base_llm_flow.py`: auth/confirmation/`set_model_response` event synthesis in the turn loop (C0158), plus the `end_invocation` short-circuit (C0149)
 **2026-08-25**
 

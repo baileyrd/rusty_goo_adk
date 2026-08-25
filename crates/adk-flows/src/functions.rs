@@ -20,17 +20,15 @@
 //!   batch 1's module doc), and `LlmAgent` has no canonical tool-callback
 //!   resolution built yet either. A tool error here simply propagates as
 //!   `Err`, rather than the source's callback-mediated recovery path.
-//! - Auth-request/tool-confirmation-request event synthesis, and the
-//!   long-running/`_defers_response` empty-response skip. The first no
-//!   longer needs `AuthConfig` — `generate_auth_event`/
-//!   `generate_request_confirmation_event` (`functions_utils.rs`, C0504)
-//!   are real and callable; the actual gap is that `llm_flow.rs`'s turn
-//!   loop (`run_one_step`, C0148/C0149) doesn't call them yet, disclosed
-//!   in that file's own module doc. The second still needs a way for
-//!   [`adk_tools::base_tool::BaseTool::run_async`] to signal "no response
-//!   yet" distinct from a real `Value` result, which its current
-//!   `Result<Value, ToolError>` contract doesn't carry — flagged as a
-//!   design gap to revisit, not silently narrowed.
+//! - The long-running/`_defers_response` empty-response skip — still
+//!   needs a way for [`adk_tools::base_tool::BaseTool::run_async`] to
+//!   signal "no response yet" distinct from a real `Value` result, which
+//!   its current `Result<Value, ToolError>` contract doesn't carry —
+//!   flagged as a design gap to revisit, not silently narrowed.
+//!   (Auth-request/tool-confirmation-request event synthesis, previously
+//!   also disclosed here as unported, is now wired — `llm_flow.rs`'s
+//!   `run_one_step` calls `generate_auth_event`/
+//!   `generate_request_confirmation_event` directly, C0158.)
 //! - Computer-use image decoding (`_try_decode_computer_use_image`) —
 //!   `ComputerUseTool` doesn't exist in this port yet, so there's nothing
 //!   to special-case against. Multimodal-part extraction itself (C0195)

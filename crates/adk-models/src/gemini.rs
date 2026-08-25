@@ -78,8 +78,10 @@
 //!     adaptation note below) — but that decision is made when the
 //!     connection itself is built, not before.
 //!   - `config.tools`/`FunctionDeclaration` in the request body — not
-//!     modeled yet (C0116, Phase 8's `BaseTool`); see
-//!     `generate_content_request.rs`'s module doc.
+//!     modeled yet; `append_tools`/`BaseTool` (C0116) are already built
+//!     and populate `LlmRequest.config.tools` as an opaque `Value`,
+//!     nothing downstream reads it back out into the outgoing REST body
+//!     yet, see `generate_content_request.rs`'s module doc.
 //!
 //! **Adaptation**: the source's `api_client` is a `cached_property`
 //! returning a full `google.genai.Client` (itself wrapping `httpx`/

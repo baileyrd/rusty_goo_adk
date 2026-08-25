@@ -5,6 +5,44 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-flows/src/llm_flow.rs`: wired transfer-to-agent recursion
+  into `LlmFlow::run_one_step` (rest of C0158, now DONE) — when a
+  function-response event's `transfer_to_agent` action is set, resolves
+  the target via `agent_transfer::get_agent_to_run` (C0159; uses the
+  current agent's own `disallow_transfer_to_peers`, so this doesn't touch
+  the C0092 tree-fusion gap) and recursively calls
+  `agent_to_run.run_async(ctx)`, extending the step with the nested run's
+  events — matching the source's `_postprocess_handle_function_calls_
+  async` exactly, including running unconditionally after auth/
+  confirmation/`set_model_response` synthesis. Confirmed against the
+  Python source that no branch extension happens for this path (only
+  `ctx.agent` swaps, inside the target's own `run_async`) — a genuinely
+  new finding this batch, since `ParallelAgent`/`SequentialAgent`'s own
+  branch-extension convention is a caller-side choice, not part of
+  `run_async`'s contract. Adds two additive `LlmFlowError` variants
+  (`GetAgentToRun`, `NestedAgentRun`); `run_one_step`'s own signature is
+  unchanged. No new dependency, no breaking change. 2 new tests: a
+  two-agent tree where the root transfers to a child agent that produces
+  the final response; an error case for an unknown transfer target.
+  Also fixed a cluster of stale "needs `BaseTool`/`App` (Phase N, not
+  built)" claims this and the prior two batches' own existence falsify:
+  `app.rs`/`lib.rs` (adk-agents) and manifest row C0280 no longer claim
+  `App` isn't wired into `Runner` (it is, via `Runner::from_app`);
+  `agent_transfer.rs` no longer claims `TransferToAgentTool` needs
+  `BaseTool` (it's built, C0436); `functions_utils.rs`'s
+  `get_long_running_function_calls` doc now correctly cites C0092 (no
+  automatic `tools_dict` resolution) rather than a nonexistent `BaseTool`
+  gap; `functions.rs` no longer claims auth-event synthesis isn't wired
+  into the turn loop (it is, C0158); `llm_request.rs`/
+  `generate_content_request.rs`/`gemini.rs`/`debug_log.rs` no longer
+  claim `append_tools`/`BaseTool` (C0116) don't exist — they do; the real
+  remaining gap is that nothing downstream reads `config.tools` back out
+  of its opaque placeholder into a typed REST body/log; `services.rs`'s
+  `MemoryEntry` doc no longer claims the backing memory service is
+  unbuilt (`InMemoryMemoryService` already produces real values;
+  `VertexAiMemoryBankService` is the genuinely out-of-scope remainder);
+  `llm_agent.rs`'s `ToolUnion` doc no longer claims `BaseTool`/
+  `BaseToolset` don't exist (they do; the real gap is still C0092).
 - `crates/adk-flows/src/llm_flow.rs`: wired auth-request/tool-confirmation-
   request/`set_model_response`-final-event synthesis into `LlmFlow::run_one_step`
   (C0158), plus the `end_invocation` short-circuit (rest of C0149) — a

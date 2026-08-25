@@ -192,10 +192,13 @@ pub fn canonical_global_instruction(
 }
 
 /// C0083: placeholder for `ToolUnion = Union[Callable, BaseTool,
-/// BaseToolset]` — `BaseTool`/`BaseToolset` are Phase 8. Each variant is an
-/// opaque `Value` since nothing resolves or calls a tool yet; the
-/// three-way split is kept so the shape distinction survives to when a
-/// real `canonical_tools` resolution (C0092) is implemented.
+/// BaseToolset]`. `BaseTool`/`BaseToolset` exist now (`adk-tools`), but
+/// `LlmAgent.tools` can't hold them as typed values without the C0092
+/// tree-fusion resolution (`adk-tools` depends on `adk-agents`, not the
+/// reverse) — so each variant stays an opaque `Value` since nothing here
+/// resolves or calls a tool from this field yet; the three-way split is
+/// kept so the shape distinction survives to when a real `canonical_tools`
+/// resolution (C0092) is implemented.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolUnion {
     Function(Value),

@@ -43,12 +43,21 @@
 //! outer loop would otherwise issue one more (invalid) model call after an
 //! auth request.
 //!
+//! **Transfer-to-agent recursion, now wired (rest of C0158, resolution via
+//! C0159)**: when the function-response event's `transfer_to_agent` action
+//! is set, `run_one_step` resolves the target via
+//! [`crate::agent_transfer::get_agent_to_run`] (using `self.llm_agent
+//! .disallow_transfer_to_peers` — the *current* agent's own already-owned
+//! config, not a cross-tree lookup, so this doesn't touch the C0092
+//! tree-fusion gap) and recursively calls `agent_to_run.run_async(ctx)`,
+//! extending the step's events with whatever the target run produced —
+//! matching the source's `async with Aclosing(agent_to_run.run_async(...))
+//! ` block exactly, including running unconditionally after auth/
+//! confirmation/`set_model_response` synthesis (an `end_invocation`
+//! already set by an auth event is itself honored by the target's own
+//! `BaseAgent::run_async`, so no extra gating is needed here).
+//!
 //! **Scope, disclosed** — even with the loop wired, these remain narrowed:
-//!   - **Recursive re-run of a transferred sub-agent** (the rest of
-//!     C0158/C0159): a `transfer_to_agent` action from a tool response
-//!     doesn't yet trigger a recursive sub-agent run within the same loop
-//!     (`_get_agent_to_run` + a nested `agent_to_run.run_async` call in the
-//!     source) — genuine follow-up work, not silently dropped.
 //!   - **`_process_agent_tools`'s automatic `tools_dict` resolution from
 //!     `agent.tools`** is still blocked on C0092 (`LlmAgent.tools` has no
 //!     real `Arc<dyn BaseTool>` storage to resolve from) — see
@@ -104,6 +113,7 @@ use adk_models::base_llm::{BaseLlm, BaseLlmError};
 use adk_models::llm_request::LlmRequest;
 use adk_models::llm_response::LlmResponse;
 
+use crate::agent_transfer::{self, GetAgentToRunError};
 use crate::apps_compaction::CompactionTriggerError;
 use crate::canonical_model::{canonical_model, CanonicalModelError};
 use crate::compaction_request_processor::apply_compaction_processor;
@@ -140,6 +150,16 @@ pub enum LlmFlowError {
     InvocationContext(#[from] InvocationContextError),
     #[error("model call failed: {0}")]
     ModelCall(#[from] BaseLlmError),
+    #[error("{0}")]
+    GetAgentToRun(#[from] GetAgentToRunError),
+    // Not `#[from] AgentRunError` (`Box<dyn std::error::Error + Send +
+    // Sync>`): `rusty_err::Error`'s derive requires the wrapped type to
+    // itself implement `rusty_err::Error`, which a boxed trait object
+    // doesn't — the same reason `BoxedLlmFlowError` above exists, just in
+    // the opposite direction. Rendered via `.to_string()` at the call
+    // site instead.
+    #[error("transferred-agent run failed: {0}")]
+    NestedAgentRun(String),
     #[error("live mode isn't implemented yet in this port (C0161-C0167)")]
     LiveNotImplemented,
 }
@@ -567,7 +587,9 @@ impl LlmFlow {
                         // Mirrors `_postprocess_handle_function_calls_async`'s
                         // exact yield order: auth event, then confirmation
                         // event, then the function-response event itself,
-                        // then (conditionally) a synthesized final event.
+                        // then (conditionally) a synthesized final event,
+                        // then (conditionally) a recursive transferred-agent
+                        // run.
                         if let Some(auth_event) = generate_auth_event(ctx, &response_event) {
                             events.push(auth_event);
                             ctx.end_invocation = true;
@@ -581,6 +603,8 @@ impl LlmFlow {
                             events.push(confirmation_event);
                         }
 
+                        let transfer_target = response_event.actions.transfer_to_agent.clone();
+
                         if let Some(json_response) = get_structured_model_response(&response_event)
                         {
                             events.push(response_event);
@@ -592,6 +616,29 @@ impl LlmFlow {
                             ));
                         } else {
                             events.push(response_event);
+                        }
+
+                        // NOTE (matching the source's own comment on this
+                        // block): preserved as a backward-compatible
+                        // fallback for legacy flows that don't run under a
+                        // scheduler wrapper intercepting `transfer_to_agent`
+                        // at an outer frame — this port has no such
+                        // scheduler, so this is the only transfer path.
+                        if let Some(target_name) = transfer_target {
+                            let current_agent = ctx
+                                .agent
+                                .clone()
+                                .expect("ctx.agent is set by BaseAgent::run_async before any AgentBehavior runs");
+                            let agent_to_run = agent_transfer::get_agent_to_run(
+                                &current_agent,
+                                &target_name,
+                                self.llm_agent.disallow_transfer_to_peers,
+                            )?;
+                            let nested_events = agent_to_run
+                                .run_async(ctx)
+                                .await
+                                .map_err(|error| LlmFlowError::NestedAgentRun(error.to_string()))?;
+                            events.extend(nested_events);
                         }
                     }
                 }
@@ -1400,5 +1447,97 @@ mod tests {
             .as_deref()
             .unwrap();
         assert!(json_text.contains("city"));
+    }
+
+    // --- transfer-to-agent recursion (rest of C0158, resolution via C0159) ---
+
+    /// Sets `EventActions.transfer_to_agent`, mirroring
+    /// `transfer_to_agent_tool.rs`'s real tool.
+    struct TransferTool {
+        target: &'static str,
+    }
+    impl adk_tools::base_tool::BaseTool for TransferTool {
+        fn name(&self) -> &str {
+            "transfer_to_agent"
+        }
+        fn description(&self) -> &str {
+            "transfers control to another agent"
+        }
+        fn run_async<'a>(
+            &'a self,
+            _args: &'a std::collections::BTreeMap<String, rusty_serde::value::Value>,
+            tool_context: &'a mut adk_tools::tool_context::ToolContext,
+        ) -> adk_tools::base_tool::BoxFuture<
+            'a,
+            Result<rusty_serde::value::Value, adk_tools::base_tool::ToolError>,
+        > {
+            let target = self.target;
+            Box::pin(async move {
+                tool_context.actions_mut().transfer_to_agent = Some(target.to_string());
+                Ok(rusty_serde::value::Value::Null)
+            })
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn run_one_step_recurses_into_the_transferred_agent() {
+        let target_response = LlmResponse {
+            content: Some(Content::new("model", vec![Part::text("handled by target")])),
+            finish_reason: Some(rusty_serde::value::Value::String("STOP".to_string())),
+            ..Default::default()
+        };
+        let target_flow = flow_with_response(target_response);
+        let target_agent = BaseAgent::new("target_agent", target_flow).unwrap();
+
+        let root_response = function_call_response("transfer_to_agent", "call-1", "sf");
+        let mut tools_dict: ToolsDict = std::collections::HashMap::new();
+        tools_dict.insert(
+            "transfer_to_agent".to_string(),
+            Arc::new(TransferTool {
+                target: "target_agent",
+            }),
+        );
+        let root_flow = flow_with_response(root_response).with_tools_dict(tools_dict);
+        let root_agent = BaseAgent::build(
+            "root_agent",
+            "",
+            vec![target_agent],
+            Vec::new(),
+            Vec::new(),
+            root_flow,
+        )
+        .unwrap();
+
+        let parent_ctx =
+            InvocationContextBuilder::new("inv-1", Session::new("app", "user", "s1")).build();
+        let events = root_agent.run_async(&parent_ctx).await.unwrap();
+
+        assert_eq!(events.len(), 3, "expected {events:?}");
+        assert!(!events[0].get_function_calls().is_empty());
+        assert!(!events[1].get_function_responses().is_empty());
+        assert_eq!(events[2].author, "target_agent");
+        assert_eq!(
+            events[2].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("handled by target")
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn run_one_step_errors_when_the_transfer_target_does_not_exist() {
+        let root_response = function_call_response("transfer_to_agent", "call-1", "sf");
+        let mut tools_dict: ToolsDict = std::collections::HashMap::new();
+        tools_dict.insert(
+            "transfer_to_agent".to_string(),
+            Arc::new(TransferTool {
+                target: "nonexistent_agent",
+            }),
+        );
+        let flow = flow_with_response(root_response).with_tools_dict(tools_dict);
+        let base_agent = BaseAgent::new("root_agent", flow).unwrap();
+        let parent_ctx =
+            InvocationContextBuilder::new("inv-1", Session::new("app", "user", "s1")).build();
+
+        let err = base_agent.run_async(&parent_ctx).await.unwrap_err();
+        assert!(err.to_string().contains("nonexistent_agent"));
     }
 }

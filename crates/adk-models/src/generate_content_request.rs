@@ -7,9 +7,13 @@
 //! opaque) request body covering exactly the `LlmRequest` fields this
 //! migration currently models (`contents`, `config.system_instruction`,
 //! `config.response_mime_type`, `config.response_schema`). `config.tools`
-//! isn't modeled yet (deferred with `append_tools`, C0116 — Phase 8's
-//! `BaseTool`), so no `tools` key is ever sent; a real request with tools
-//! configured is out of reach until that lands.
+//! isn't modeled here yet — not because `append_tools`/`BaseTool` (C0116)
+//! don't exist (they do, and `append_tools` already populates
+//! `LlmRequest.config.tools` as an opaque `Value`, see `llm_request.rs`'s
+//! own module doc) but because this REST-body builder has no typed
+//! `config.tools` field to read that placeholder back out of yet, so no
+//! `tools` key is ever sent; a real request with tools configured is out
+//! of reach until that field is added.
 
 use adk_genai::content::{Content, Part};
 use rusty_serde::value::Value;
