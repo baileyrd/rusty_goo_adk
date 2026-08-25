@@ -5,6 +5,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P11 `hallucinations_v1` eval metric (C0594, DONE): new
+  `crates/adk-eval/src/hallucinations_v1.rs` — the full two-stage
+  hallucination-detection pipeline (segmenter LLM call splits a
+  response into sentences, validator LLM call labels each
+  supported/unsupported/contradictory/disputed/not_applicable against
+  a constructed context), including intermediate-NL-response scoring
+  when `evaluate_intermediate_nl_responses` is set. Composes
+  `LlmAsJudgeConfig<HallucinationsCriterion>` for criterion/threshold/
+  judge-model setup instead of duplicating that logic a third time.
+  Corrected `metric_evaluator_registry.rs`'s own module doc, which had
+  misgrouped this metric as GCP-blocked — it isn't; it stays
+  unregistered for the same async/sync structural reason as every
+  other LLM-judge-backed evaluator in this crate. 8 new unit tests.
 - P11 eval/optimization batch (C0633, C0642, both DONE):
   - `crates/adk-eval/src/per_turn_user_simulator_quality_prompts.rs`
     (new): the per-turn user-simulator-quality evaluator's flat,

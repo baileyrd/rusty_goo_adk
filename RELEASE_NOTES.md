@@ -22,6 +22,50 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `eval/`: `hallucinations_v1` metric (C0594, DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-eval/src/hallucinations_v1.rs` — the full
+  two-stage `hallucinations_v1` pipeline:
+  - `create_context_for_step`: builds the per-step evaluation context
+    (developer instructions across every agent, user prompt, tool
+    definitions, and each prior step's tool_calls/tool_outputs/NL
+    response).
+  - `get_steps_to_evaluate`: always scores the final response, plus
+    every intermediate NL response when the criterion's
+    `evaluate_intermediate_nl_responses` is set.
+  - `evaluate_nl_response`: runs the segmenter (splits a response into
+    `<sentence>` tags) then the validator (labels each sentence
+    against the context) as two sequential judge-model calls.
+  - `parse_sentences`/`parse_validation_results`: the regex-based
+    response parsers for both stages.
+  - `aggregate_invocation_results`: mean accuracy score across steps
+    and invocations.
+- **Adaptation, disclosed:** composes
+  `crate::llm_as_judge::LlmAsJudgeConfig<HallucinationsCriterion>` for
+  criterion-parsing/threshold/judge-model setup rather than
+  duplicating that logic a third time (`RubricBasedEvaluator` already
+  reuses it too) — needed one small additive
+  `impl JudgeModelOptionsProvider for HallucinationsCriterion`.
+- **Adaptation, disclosed:** the source's trailing
+  `(?=\nsentence:|\Z)` lookahead in `_parse_validation_results` (Rust's
+  `regex` crate has no look-ahead) becomes a manual boundary-split on
+  each block's own leading `sentence:` marker — same class of
+  adaptation already made for lookbehind in `rubric_based_evaluator.rs`.
+- **Corrected:** `metric_evaluator_registry.rs`'s own module doc had
+  misgrouped `HallucinationsV1` with the genuinely GCP-blocked
+  remainder of unregistered evaluators — it isn't GCP-bound at all; it
+  stays unregistered for the same async/sync structural reason as the
+  four other LLM-judge-backed evaluators already built.
+- **Tests:** 8 new unit tests covering sentence/validation-result
+  parsing, context construction, step selection, and an end-to-end
+  `evaluate_invocations` run against a scripted fake `BaseLlm`.
+- Full local gate green: `cargo build --workspace`, `cargo test
+  --workspace`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo fmt --check`.
+
+---
+
 ## PR #TBD — `eval/`: P11 user-simulator prompt + GEPA helper batch (C0633/C0642, both DONE)
 **2026-08-25**
 
