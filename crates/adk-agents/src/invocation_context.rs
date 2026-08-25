@@ -393,6 +393,7 @@ impl SessionService for NoopSessionService {
                 user_id: user_id.to_string(),
                 state: state.unwrap_or_default(),
                 events: Vec::new(),
+                last_update_time: adk_platform::time::get_time(),
             })
         })
     }

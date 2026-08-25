@@ -11,6 +11,13 @@
 //! to be useful in tests. It will be replaced (not extended) by the real
 //! `adk-sessions` crate's `Session` when Phase 5 lands — every field here
 //! has a same-named counterpart in the source's real `Session` model.
+//!
+//! **`last_update_time` (C0204, partial)**: added once
+//! `InMemorySessionService::list_sessions` (C0208) needed it to sort by.
+//! Still not ported: camelCase field aliasing, `extra='forbid'`, and the
+//! private `_storage_update_marker` optimistic-concurrency field — those
+//! need the real Phase-5 schema work (`DatabaseSessionService`'s actual
+//! wire format), so C0204 stays `REQUIRED` overall.
 
 use adk_events::Event;
 use rusty_serde::value::Value;
@@ -23,6 +30,11 @@ pub struct Session {
     pub user_id: String,
     pub state: BTreeMap<String, Value>,
     pub events: Vec<Event>,
+    /// C0204: Unix timestamp (seconds) of the most recent write to this
+    /// session — set at creation and bumped on every `append_event`.
+    /// `InMemorySessionService::list_sessions` sorts on this field
+    /// (`ListSessionsResponse`, C0208).
+    pub last_update_time: f64,
 }
 
 impl Session {
@@ -37,6 +49,7 @@ impl Session {
             user_id: user_id.into(),
             state: BTreeMap::new(),
             events: Vec::new(),
+            last_update_time: adk_platform::time::get_time(),
         }
     }
 }
