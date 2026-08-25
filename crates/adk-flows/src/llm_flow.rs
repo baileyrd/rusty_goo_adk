@@ -1,4 +1,4 @@
-//! Capabilities C0144-C0157 (partial): the `BaseLlmFlow`/`SingleFlow`
+//! Capabilities C0144-C0159 (partial): the `BaseLlmFlow`/`SingleFlow`
 //! turn-orchestration engine, ported from `google.adk.flows.llm_flows`.
 //!
 //! [`LlmFlow`] is the first concrete [`AgentBehavior`] this port builds for
@@ -25,14 +25,30 @@
 //! `Vec<Event>` rather than yielding them cooperatively, so a later step
 //! seeing an earlier one's events needs an explicit append in between).
 //!
+//! **Auth/confirmation/`set_model_response` event synthesis, now wired
+//! (C0158)**: [`LlmFlow::run_one_step`] mirrors
+//! `_postprocess_handle_function_calls_async`'s exact yield order after a
+//! function call executes — auth-request event (via
+//! [`crate::functions_utils::generate_auth_event`], setting
+//! `ctx.end_invocation = true` when one is yielded), then
+//! tool-confirmation-request event (via
+//! [`crate::functions_utils::generate_request_confirmation_event`]), then
+//! the function-response event itself, then (conditionally) a synthesized
+//! final event when the response carries a validated `set_model_response`
+//! result (via [`crate::output_schema::create_final_model_response_event`]/
+//! [`crate::output_schema::get_structured_model_response`]). `run_one_step`
+//! also now short-circuits to an empty step once `ctx.end_invocation` is
+//! set — a function-response event isn't itself a final response (per
+//! [`Event::is_final_response`]), so without this [`LlmFlow::run_async`]'s
+//! outer loop would otherwise issue one more (invalid) model call after an
+//! auth request.
+//!
 //! **Scope, disclosed** — even with the loop wired, these remain narrowed:
-//!   - **Auth/tool-confirmation event synthesis, transfer-to-agent
-//!     recursion, and `set_model_response` structured-output final-event
-//!     synthesis** (part of C0149/C0158/C0159): `generate_auth_event`/
-//!     `generate_request_confirmation_event` (`functions_utils.rs`) exist
-//!     and are callable, but `run_one_step` doesn't call them yet; a
-//!     `transfer_to_agent` action from a tool response doesn't yet trigger
-//!     a recursive sub-agent run within the same loop.
+//!   - **Recursive re-run of a transferred sub-agent** (the rest of
+//!     C0158/C0159): a `transfer_to_agent` action from a tool response
+//!     doesn't yet trigger a recursive sub-agent run within the same loop
+//!     (`_get_agent_to_run` + a nested `agent_to_run.run_async` call in the
+//!     source) — genuine follow-up work, not silently dropped.
 //!   - **`_process_agent_tools`'s automatic `tools_dict` resolution from
 //!     `agent.tools`** is still blocked on C0092 (`LlmAgent.tools` has no
 //!     real `Arc<dyn BaseTool>` storage to resolve from) — see
@@ -94,10 +110,13 @@ use crate::compaction_request_processor::apply_compaction_processor;
 use crate::contents::{get_contents, get_current_turn_contents, ContentsError};
 use crate::context_cache::{apply_context_cache, ContextCacheError};
 use crate::functions::{execute_function_calls, FunctionExecutionError, ToolsDict};
+use crate::functions_utils::{generate_auth_event, generate_request_confirmation_event};
 use crate::identity::apply_identity;
 use crate::instructions::{build_instructions, InstructionsError};
 use crate::interactions::find_previous_interaction_state;
-use crate::output_schema::apply_output_schema_processor;
+use crate::output_schema::{
+    apply_output_schema_processor, create_final_model_response_event, get_structured_model_response,
+};
 use crate::processor::BoxFuture;
 use crate::{basic, basic::BasicRequestError};
 
@@ -493,27 +512,38 @@ impl LlmFlow {
     /// in order (0-2: a model-response event, optionally followed by a
     /// function-response event).
     ///
-    /// **Not ported this step, disclosed** (matching
-    /// `_postprocess_handle_function_calls_async`'s remaining pieces):
-    /// auth-request/tool-confirmation-request event synthesis
-    /// (`generate_auth_event`/`generate_request_confirmation_event`,
-    /// both already built in `functions_utils.rs` but not yet called
-    /// from here); the `set_model_response` structured-output final-event
-    /// synthesis; and recursive re-run of a transferred sub-agent
-    /// (`transfer_to_agent` action handling) — all genuine follow-up
-    /// work now that a real caller exists, not silently dropped.
+    /// **`end_invocation` short-circuit**: mirrors the source's own
+    /// early-return checks scattered through `run_async`/
+    /// `_run_one_step_async` — a step that requested auth sets
+    /// `ctx.end_invocation = true` (below), and the *next* call to this
+    /// method must not issue another model call once that's set (a
+    /// function-response event isn't itself a final response, per
+    /// [`Event::is_final_response`], so [`Self::run_async`]'s loop would
+    /// otherwise call this again).
+    ///
+    /// **Not ported this step, disclosed**: recursive re-run of a
+    /// transferred sub-agent (`transfer_to_agent` action handling,
+    /// `_get_agent_to_run` + a nested `agent_to_run.run_async` call in
+    /// the source) — genuine follow-up work now that a real caller
+    /// exists, not silently dropped. Auth/tool-confirmation-request
+    /// event synthesis and `set_model_response` final-event synthesis,
+    /// previously also disclosed here as unported, are now wired below.
     pub async fn run_one_step(
         &self,
         ctx: &mut InvocationContext,
     ) -> Result<Vec<Event>, LlmFlowError> {
+        if ctx.end_invocation {
+            return Ok(Vec::new());
+        }
+
         ctx.increment_llm_call_count()?;
         let request = self.preprocess(ctx).await?;
         let responses = self.call_model(&request).await?;
         let mut events = self.postprocess(ctx, responses);
 
-        if let Some(last_event) = events.last() {
-            if last_event.partial != Some(true) {
-                let function_calls: Vec<FunctionCall> = last_event
+        if let Some(function_call_event) = events.last().cloned() {
+            if function_call_event.partial != Some(true) {
+                let function_calls: Vec<FunctionCall> = function_call_event
                     .get_function_calls()
                     .into_iter()
                     .cloned()
@@ -534,7 +564,35 @@ impl LlmFlow {
                     )
                     .await?
                     {
-                        events.push(response_event);
+                        // Mirrors `_postprocess_handle_function_calls_async`'s
+                        // exact yield order: auth event, then confirmation
+                        // event, then the function-response event itself,
+                        // then (conditionally) a synthesized final event.
+                        if let Some(auth_event) = generate_auth_event(ctx, &response_event) {
+                            events.push(auth_event);
+                            ctx.end_invocation = true;
+                        }
+
+                        if let Some(confirmation_event) = generate_request_confirmation_event(
+                            ctx,
+                            &function_call_event,
+                            &response_event,
+                        ) {
+                            events.push(confirmation_event);
+                        }
+
+                        if let Some(json_response) = get_structured_model_response(&response_event)
+                        {
+                            events.push(response_event);
+                            events.push(create_final_model_response_event(
+                                ctx.invocation_id.clone(),
+                                agent_name,
+                                ctx.branch.as_deref(),
+                                json_response,
+                            ));
+                        } else {
+                            events.push(response_event);
+                        }
                     }
                 }
             }
@@ -1151,5 +1209,196 @@ mod tests {
             events[0].content.as_ref().unwrap().parts[0].text.as_deref(),
             Some("no tools needed")
         );
+    }
+
+    // --- auth/confirmation/set_model_response event synthesis (C0158) ---
+
+    /// Requests a credential for its own function call via
+    /// `Context::request_credential` — a non-OAuth2 (API key) scheme, so
+    /// `AuthHandler::generate_auth_request` succeeds trivially (no raw
+    /// credential required).
+    struct AuthRequestingTool;
+    impl adk_tools::base_tool::BaseTool for AuthRequestingTool {
+        fn name(&self) -> &str {
+            "needs_auth"
+        }
+        fn description(&self) -> &str {
+            "a tool that always requests a credential"
+        }
+        fn run_async<'a>(
+            &'a self,
+            _args: &'a std::collections::BTreeMap<String, rusty_serde::value::Value>,
+            tool_context: &'a mut adk_tools::tool_context::ToolContext,
+        ) -> adk_tools::base_tool::BoxFuture<
+            'a,
+            Result<rusty_serde::value::Value, adk_tools::base_tool::ToolError>,
+        > {
+            Box::pin(async move {
+                let auth_scheme = adk_agents::auth_schemes::AuthScheme::Security(Box::new(
+                    adk_agents::auth_schemes::SecurityScheme::ApiKey(
+                        adk_agents::auth_schemes::ApiKeyScheme {
+                            description: None,
+                            in_: adk_agents::auth_schemes::ApiKeyIn::Header,
+                            name: "X-Api-Key".to_string(),
+                        },
+                    ),
+                ));
+                let auth_config = adk_agents::auth_tool::AuthConfig::new(
+                    auth_scheme,
+                    None,
+                    None,
+                    Some("my_key".to_string()),
+                );
+                tool_context
+                    .request_credential(auth_config)
+                    .expect("function_call_id is set by create_tool_context");
+                Ok(rusty_serde::value::Value::Null)
+            })
+        }
+    }
+
+    /// Requests confirmation for its own function call via
+    /// `Context::request_confirmation`.
+    struct ConfirmationRequestingTool;
+    impl adk_tools::base_tool::BaseTool for ConfirmationRequestingTool {
+        fn name(&self) -> &str {
+            "needs_confirmation"
+        }
+        fn description(&self) -> &str {
+            "a tool that always requests confirmation"
+        }
+        fn run_async<'a>(
+            &'a self,
+            _args: &'a std::collections::BTreeMap<String, rusty_serde::value::Value>,
+            tool_context: &'a mut adk_tools::tool_context::ToolContext,
+        ) -> adk_tools::base_tool::BoxFuture<
+            'a,
+            Result<rusty_serde::value::Value, adk_tools::base_tool::ToolError>,
+        > {
+            Box::pin(async move {
+                tool_context
+                    .request_confirmation(Some("please confirm".to_string()), None)
+                    .expect("function_call_id is set by create_tool_context");
+                Ok(rusty_serde::value::Value::Null)
+            })
+        }
+    }
+
+    /// Mirrors `set_model_response_tool.rs`'s real tool: names itself
+    /// `set_model_response` (what [`get_structured_model_response`]
+    /// keys off) and stores its result on `EventActions.set_model_response`.
+    struct SetModelResponseStub;
+    impl adk_tools::base_tool::BaseTool for SetModelResponseStub {
+        fn name(&self) -> &str {
+            "set_model_response"
+        }
+        fn description(&self) -> &str {
+            "stub mirroring set_model_response_tool.rs for this test"
+        }
+        fn run_async<'a>(
+            &'a self,
+            args: &'a std::collections::BTreeMap<String, rusty_serde::value::Value>,
+            tool_context: &'a mut adk_tools::tool_context::ToolContext,
+        ) -> adk_tools::base_tool::BoxFuture<
+            'a,
+            Result<rusty_serde::value::Value, adk_tools::base_tool::ToolError>,
+        > {
+            let result = rusty_serde::value::Value::Map(args.clone().into_iter().collect());
+            Box::pin(async move {
+                tool_context.actions_mut().set_model_response = Some(result.clone());
+                Ok(result)
+            })
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn run_one_step_yields_an_auth_event_and_sets_end_invocation() {
+        let response = function_call_response("needs_auth", "call-1", "sf");
+        let flow = flow_with_response(response);
+        let mut tools_dict: ToolsDict = std::collections::HashMap::new();
+        tools_dict.insert("needs_auth".to_string(), Arc::new(AuthRequestingTool));
+        let flow = flow.with_tools_dict(tools_dict);
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_one_step(&mut ctx).await.unwrap();
+
+        assert_eq!(events.len(), 3, "expected {events:?}");
+        assert!(!events[0].get_function_calls().is_empty());
+        assert_eq!(
+            events[1]
+                .get_function_calls()
+                .first()
+                .and_then(|c| c.name.as_deref()),
+            Some("adk_request_credential"),
+            "expected an auth-request event, got {:?}",
+            events[1]
+        );
+        assert!(!events[2].get_function_responses().is_empty());
+        assert!(ctx.end_invocation);
+
+        // The next step must short-circuit rather than issuing another
+        // model call, per `run_one_step`'s own `end_invocation` doc.
+        let next_events = flow.run_one_step(&mut ctx).await.unwrap();
+        assert!(next_events.is_empty());
+    }
+
+    #[rusty_tokio::test]
+    async fn run_one_step_yields_a_confirmation_event_before_the_function_response() {
+        let response = function_call_response("needs_confirmation", "call-1", "sf");
+        let flow = flow_with_response(response);
+        let mut tools_dict: ToolsDict = std::collections::HashMap::new();
+        tools_dict.insert(
+            "needs_confirmation".to_string(),
+            Arc::new(ConfirmationRequestingTool),
+        );
+        let flow = flow.with_tools_dict(tools_dict);
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_one_step(&mut ctx).await.unwrap();
+
+        assert_eq!(events.len(), 3, "expected {events:?}");
+        assert!(!events[0].get_function_calls().is_empty());
+        assert_eq!(
+            events[1]
+                .get_function_calls()
+                .first()
+                .and_then(|c| c.name.as_deref()),
+            Some("adk_request_confirmation"),
+            "expected a confirmation-request event, got {:?}",
+            events[1]
+        );
+        assert!(!events[2].get_function_responses().is_empty());
+        assert!(!ctx.end_invocation);
+    }
+
+    #[rusty_tokio::test]
+    async fn run_one_step_synthesizes_a_final_event_for_set_model_response() {
+        let response = function_call_response("set_model_response", "call-1", "sf");
+        let flow = flow_with_response(response);
+        let mut tools_dict: ToolsDict = std::collections::HashMap::new();
+        tools_dict.insert(
+            "set_model_response".to_string(),
+            Arc::new(SetModelResponseStub),
+        );
+        let flow = flow.with_tools_dict(tools_dict);
+        let mut ctx = ctx_for("my_agent");
+
+        let events = flow.run_one_step(&mut ctx).await.unwrap();
+
+        assert_eq!(events.len(), 3, "expected {events:?}");
+        assert!(!events[0].get_function_calls().is_empty());
+        assert!(
+            !events[1].get_function_responses().is_empty(),
+            "expected the function-response event, got {:?}",
+            events[1]
+        );
+        let final_event = &events[2];
+        assert_eq!(final_event.invocation_id, "inv-1");
+        assert_eq!(final_event.author, "my_agent");
+        let json_text = final_event.content.as_ref().unwrap().parts[0]
+            .text
+            .as_deref()
+            .unwrap();
+        assert!(json_text.contains("city"));
     }
 }

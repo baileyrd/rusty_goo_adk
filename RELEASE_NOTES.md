@@ -22,6 +22,42 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/llm_flows/base_llm_flow.py`: auth/confirmation/`set_model_response` event synthesis in the turn loop (C0158), plus the `end_invocation` short-circuit (C0149)
+**2026-08-25**
+
+- **Added:** `LlmFlow::run_one_step` now mirrors
+  `_postprocess_handle_function_calls_async`'s exact yield order after a
+  function call executes — auth-request event (`generate_auth_event`,
+  already built as C0504), tool-confirmation-request event
+  (`generate_request_confirmation_event`), the function-response event
+  itself, then a synthesized final event when the response carries a
+  validated `set_model_response` result
+  (`create_final_model_response_event`/`get_structured_model_response`,
+  already built as C0178). Yielding an auth event sets
+  `ctx.end_invocation = true`, matching the source.
+- **Added:** `run_one_step` now short-circuits to an empty step once
+  `ctx.end_invocation` is set — required because a function-response event
+  isn't itself a final response, so `run_async`'s outer loop would
+  otherwise call `run_one_step` one more time (and issue an invalid model
+  call) after an auth request interrupts the invocation.
+- **Not ported, disclosed:** recursive re-run of a transferred sub-agent
+  (`transfer_to_agent` action handling) — `get_agent_to_run` (C0159,
+  already `DONE`) provides the resolution half; wiring it into the loop
+  is left as a distinct follow-up given the added complexity of
+  branching `ctx` for a recursive call.
+- **No new dependency, no breaking change**: every piece this batch wires
+  together already existed and was already tested; `LlmFlow`'s public
+  surface (`run_one_step`/`run_async` signatures) is unchanged.
+- **3 new tests** in `crates/adk-flows/src/llm_flow.rs`: an
+  auth-requesting tool producing `[model_event, auth_event,
+  function_response_event]` and confirming the following `run_one_step`
+  call short-circuits to no events; a confirmation-requesting tool
+  producing the confirmation event before the function-response event; a
+  `set_model_response`-carrying tool producing a trailing synthesized
+  final event with the expected JSON content.
+
+---
+
 ## PR #TBD — `flows/llm_flows/base_llm_flow.py`: the multi-step tool-calling turn loop (C0148/C0149/C0151/C0152), plus a stale-doc cluster fix
 **2026-08-25**
 
