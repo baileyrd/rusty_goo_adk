@@ -34,10 +34,12 @@ dependencies = [
  "adk-errors",
  "adk-events",
  "adk-genai",
+ "adk-models",
  "adk-platform",
  "regex",
  "rusty_err",
  "rusty_serde",
+ "rusty_tokio",
  "unicode-general-category",
 ]
 

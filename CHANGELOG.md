@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-eval/src/llm_backed_user_simulator.rs`:
+  `LlmBackedUserSimulatorConfig`/`LlmBackedUserSimulator` (C0628, DONE),
+  ported from `evaluation/simulation/llm_backed_user_simulator(_prompts).py`.
+  Generates the next user message via an LLM: first invocation returns
+  the scenario's static starting prompt, later ones prompt the model
+  with a summarized conversation history and classify the result
+  (success / stop-signal-detected / turn-limit-reached / a genuine
+  generation failure). `adk-eval` gains new `adk-models`/`rusty_tokio`
+  dependencies (verified no cycle). `UserSimulator::get_next_user_message`
+  widens from sync/infallible to `async`/`Result<NextUserMessage, String>`
+  in the same batch (zero external callers verified) — the source's own
+  documented `raise RuntimeError` failure path has no `Status` variant
+  to map onto. Narrowed, disclosed at length in the module doc: only
+  the flat, no-persona prompt template renders (the persona-decorated
+  template needs real Jinja2 loops/filters this port doesn't have);
+  `is_valid_user_simulator_template` narrows from Jinja AST inspection
+  to a regex placeholder-presence check; `add_default_retry_options_if_not_present`
+  isn't ported (the source flags it internal-only). Not auto-registered
+  under `"llm_backed"` — this port has no module-load-time registration
+  side effects. 19 new tests.
 - `crates/adk-flows/src/llm_flow.rs`: `LlmFlow`'s tool-declaration
   commit phase (C0151, partial), ported from `base_llm_flow.py`'s
   `_process_agent_tools`. `LlmFlow::preprocess` now calls each

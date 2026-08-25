@@ -39,6 +39,8 @@
 //! this port (`adk_genai::content::Content`), so no narrowing here.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Mutex, OnceLock};
 
 use adk_events::Event;
@@ -47,6 +49,11 @@ use rusty_serde::value::Value;
 use rusty_serde::{Deserialize, Serialize};
 
 use crate::evaluator::Evaluator;
+
+/// Same shape as `adk-tools::base_tool::BoxFuture` — this crate's own
+/// local alias, since `adk-eval` doesn't depend on `adk-tools` (the
+/// dependency runs the other way).
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// `user_simulator.BaseUserSimulatorConfig` — base class for
 /// user-simulator configuration. Concrete subclasses give `simulator_type`
@@ -104,15 +111,32 @@ pub trait UserSimulator {
     /// Returns the next user message to send to the agent, given the
     /// unaltered conversation history so far.
     ///
-    /// **Adaptation**: `&mut self`, not `&self` — the one implementor
-    /// this batch ports ([`crate::static_user_simulator::StaticUserSimulator`])
-    /// advances an internal cursor on every call, matching the source's
-    /// own `self.invocation_idx += 1` mutation. Sync, not `async` — no
-    /// implementor built so far needs to await anything; a future
-    /// LLM-backed implementor will need its own async story, not modeled
-    /// here yet (same disclosed adaptation already made for
-    /// `evaluator::Evaluator`).
-    fn get_next_user_message(&mut self, events: &[Event]) -> NextUserMessage;
+    /// **Adaptation**: `&mut self`, not `&self` — every implementor this
+    /// port builds ([`crate::static_user_simulator::StaticUserSimulator`],
+    /// [`crate::llm_backed_user_simulator::LlmBackedUserSimulator`])
+    /// advances an internal cursor/counter on every call, matching the
+    /// source's own `self.invocation_idx += 1`/`self._invocation_count += 1`
+    /// mutations. **`async`, widened for C0628**: originally sync (no
+    /// implementor needed to await anything); `LlmBackedUserSimulator`
+    /// needs to await `BaseLlm::generate_content_async`, so this widens
+    /// to the same `BoxFuture`-returning shape `adk-tools::base_tool::
+    /// BaseTool::run_async` already established. **`Result`-wrapped,
+    /// also widened for C0628**: the source's own docstring documents a
+    /// real `raise RuntimeError(...)` path (the LLM genuinely fails to
+    /// produce a usable message — distinct from any `Status` variant,
+    /// which all describe a *successful* outcome of one kind or
+    /// another), so a fallible `Result<NextUserMessage, String>` is the
+    /// faithful shape, the same `Result<_, String>` convention
+    /// `evaluator::Evaluator::evaluate_invocations` already uses for its
+    /// own fallible trait method. Both widenings land together since
+    /// zero external callers exist for either (verified at the time of
+    /// the change) — an internal signature change, not a break to
+    /// already-shipped public surface, same bar already used for
+    /// `apply_code_execution_response`/`process_auth_responses`.
+    fn get_next_user_message<'a>(
+        &'a mut self,
+        events: &'a [Event],
+    ) -> BoxFuture<'a, Result<NextUserMessage, String>>;
 
     /// Returns an evaluator that evaluates whether the user simulation
     /// was successful, if this simulator has one.
@@ -323,11 +347,16 @@ mod tests {
 
     struct NoOpSimulator;
     impl UserSimulator for NoOpSimulator {
-        fn get_next_user_message(&mut self, _events: &[Event]) -> NextUserMessage {
-            NextUserMessage {
-                status: Status::StopSignalDetected,
-                user_message: None,
-            }
+        fn get_next_user_message<'a>(
+            &'a mut self,
+            _events: &'a [Event],
+        ) -> BoxFuture<'a, Result<NextUserMessage, String>> {
+            Box::pin(async move {
+                Ok(NextUserMessage {
+                    status: Status::StopSignalDetected,
+                    user_message: None,
+                })
+            })
         }
         fn get_simulation_evaluator(&self) -> Option<Box<dyn Evaluator>> {
             None

@@ -5,7 +5,7 @@ use adk_events::Event;
 
 use crate::eval_case::StaticConversation;
 use crate::evaluator::Evaluator;
-use crate::user_simulator::{NextUserMessage, Status, UserSimulator};
+use crate::user_simulator::{BoxFuture, NextUserMessage, Status, UserSimulator};
 
 /// C0629: `static_user_simulator.StaticUserSimulator` — a `UserSimulator`
 /// that returns a static list of user messages.
@@ -26,19 +26,24 @@ impl StaticUserSimulator {
 impl UserSimulator for StaticUserSimulator {
     /// Returns the next message in the static list, or
     /// `Status::StopSignalDetected` once the list is exhausted.
-    fn get_next_user_message(&mut self, _events: &[Event]) -> NextUserMessage {
-        let Some(invocation) = self.static_conversation.get(self.invocation_idx) else {
-            return NextUserMessage {
-                status: Status::StopSignalDetected,
-                user_message: None,
+    fn get_next_user_message<'a>(
+        &'a mut self,
+        _events: &'a [Event],
+    ) -> BoxFuture<'a, Result<NextUserMessage, String>> {
+        Box::pin(async move {
+            let Some(invocation) = self.static_conversation.get(self.invocation_idx) else {
+                return Ok(NextUserMessage {
+                    status: Status::StopSignalDetected,
+                    user_message: None,
+                });
             };
-        };
-        let next_user_content = invocation.user_content.clone();
-        self.invocation_idx += 1;
-        NextUserMessage {
-            status: Status::Success,
-            user_message: Some(next_user_content),
-        }
+            let next_user_content = invocation.user_content.clone();
+            self.invocation_idx += 1;
+            Ok(NextUserMessage {
+                status: Status::Success,
+                user_message: Some(next_user_content),
+            })
+        })
     }
 
     /// The `StaticUserSimulator` does not require an evaluator.
@@ -65,37 +70,37 @@ mod tests {
         }
     }
 
-    #[test]
-    fn returns_each_invocation_in_order_then_stops() {
+    #[rusty_tokio::test]
+    async fn returns_each_invocation_in_order_then_stops() {
         let mut simulator =
             StaticUserSimulator::new(vec![invocation("first"), invocation("second")]);
 
-        let first = simulator.get_next_user_message(&[]);
+        let first = simulator.get_next_user_message(&[]).await.unwrap();
         assert_eq!(first.status, Status::Success);
         assert_eq!(first.user_message, Some(Content::user_text("first")));
 
-        let second = simulator.get_next_user_message(&[]);
+        let second = simulator.get_next_user_message(&[]).await.unwrap();
         assert_eq!(second.status, Status::Success);
         assert_eq!(second.user_message, Some(Content::user_text("second")));
 
-        let third = simulator.get_next_user_message(&[]);
+        let third = simulator.get_next_user_message(&[]).await.unwrap();
         assert_eq!(third.status, Status::StopSignalDetected);
         assert_eq!(third.user_message, None);
     }
 
-    #[test]
-    fn stays_stopped_after_exhausting_the_conversation() {
+    #[rusty_tokio::test]
+    async fn stays_stopped_after_exhausting_the_conversation() {
         let mut simulator = StaticUserSimulator::new(vec![invocation("only")]);
-        simulator.get_next_user_message(&[]);
-        let after_exhausted = simulator.get_next_user_message(&[]);
+        simulator.get_next_user_message(&[]).await.unwrap();
+        let after_exhausted = simulator.get_next_user_message(&[]).await.unwrap();
         assert_eq!(after_exhausted.status, Status::StopSignalDetected);
     }
 
-    #[test]
-    fn stops_immediately_for_an_empty_conversation() {
+    #[rusty_tokio::test]
+    async fn stops_immediately_for_an_empty_conversation() {
         let mut simulator = StaticUserSimulator::new(vec![]);
         assert_eq!(
-            simulator.get_next_user_message(&[]).status,
+            simulator.get_next_user_message(&[]).await.unwrap().status,
             Status::StopSignalDetected
         );
     }

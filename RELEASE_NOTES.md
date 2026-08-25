@@ -22,6 +22,25 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: LLM-backed user simulator (C0628, DONE)
+**2026-08-25**
+
+- **Added:** `LlmBackedUserSimulator` generates the next user message
+  in a simulated conversation via an LLM — the first turn returns the
+  scenario's static starting prompt, later turns prompt the model with
+  a summarized conversation history and classify the result (a normal
+  message, a detected stop signal, hitting the turn limit, or a genuine
+  generation failure). `UserSimulator::get_next_user_message` becomes
+  async and fallible to support this.
+- **Known limitation, disclosed:** the persona-decorated prompt
+  template needs real Jinja2 (loops/filters) this port doesn't have, so
+  only the flat, no-persona template renders; the simulator also isn't
+  auto-registered under `"llm_backed"` yet — this port has no
+  module-load-time registration side effects, so wiring it into the
+  evaluation pipeline is left to future composition code.
+
+---
+
 ## PR #TBD — `flows/`/`tools/`: tool-declaration commit phase + Google Search workaround agent (C0151 partial, C0429 DONE)
 **2026-08-25**
 
