@@ -4,6 +4,19 @@ All notable changes to this repo are documented here.
 Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
+### Fixed
+- `crates/adk-agents/src/context.rs`: `Context::request_credential` now
+  routes through `AuthHandler::generate_auth_request` instead of
+  serializing the caller's raw `AuthConfig` verbatim — for an
+  OAuth2/OIDC scheme this validates the raw credential and substitutes
+  a freshly generated `exchanged_auth_credential`, matching the
+  source's own `AuthHandler(auth_config).generate_auth_request()` call.
+  Also added the missing `Context::get_auth_response` (the source's
+  `AuthHandler(auth_config).get_auth_response(self.state())` two-line
+  wrapper, absent from this port entirely until now). C0062 was marked
+  `DONE` before `auth_handler.rs` (C0506-C0508) existed and never
+  revisited once it landed — corrected its evidence to cite the real
+  coverage. 4 new tests.
 ### Added
 - New `crates/adk-agents/src/auth_handler.rs`: `AuthHandler` (C0507 DONE,
   C0506/C0508 REQUIRED+Partial) — `get_auth_response`/
