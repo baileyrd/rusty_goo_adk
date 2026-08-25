@@ -22,6 +22,44 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `models/`: P10 Anthropic (Claude) backend, third slice (C0538, partial)
+**2026-08-25**
+
+- **Added:** `crates/adk-models/src/anthropic_conversion.rs` gains
+  `AnthropicThinkingParam`/`build_anthropic_thinking_param` (C0538,
+  `thinking_budget`-only subset): maps genai `ThinkingConfig` to
+  Anthropic's `thinking` request parameter. An absent/`None`
+  `thinkingBudget` key returns `Err` with the source's own guidance
+  message (Anthropic requires an explicit choice — no silent default);
+  `0` maps to `Disabled`; a negative budget (e.g. `-1` AUTOMATIC) maps
+  to `Adaptive` (model-chosen depth); a positive budget maps to
+  `Enabled { budget_tokens }` (legacy manual mode). Reads
+  `GenerateContentConfigStub::thinking_config`'s already-opaque `Value`
+  via the same `"thinkingBudget"` camelCase key convention already
+  established in `llm_backed_user_simulator.rs` — no widening of that
+  struct needed, correcting C0542's own evidence, which had flagged
+  this row as blocked on exactly such a widening (the same kind of
+  stale-evidence correction C0541's own batch made to C0542's
+  evidence).
+- **Not ported, disclosed:** `_build_effort_param`/
+  `AnthropicGenerateContentConfig.effort` (Anthropic's separate
+  `reasoning_effort` field, distinct from `thinking_budget`) and the
+  sampling-params-dropped-with-a-warning behavior that fires alongside
+  it — both need a genuinely new `AnthropicGenerateContentConfig` type
+  that only makes sense alongside the still-deferred real `AnthropicLlm`
+  `BaseLlm` backend (C0536/C0537/C0539), so they stay out of this pure-
+  logic slice.
+- **Tests:** 7 new unit tests in `anthropic_conversion.rs`
+  (`build_anthropic_thinking_param_*`) covering: no config, no
+  `thinking_config`, missing `thinkingBudget` key (exact error
+  message), zero/negative/positive budgets, and a `Value::UInt`-typed
+  budget.
+- Full local gate green: `cargo build --workspace`, `cargo test
+  --workspace`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo fmt --check`.
+
+---
+
 ## PR #TBD — `models/`: P10 Anthropic (Claude) backend, second slice (C0541, DONE)
 **2026-08-25**
 

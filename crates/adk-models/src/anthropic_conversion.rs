@@ -11,29 +11,40 @@
 //!
 //! **Scope of this batch, disclosed**: [`ToolUseIdSanitizer`] (C0540),
 //! the finish-reason mapping + token-usage extraction/reconciliation
-//! functions (C0542), and now [`update_type_string`]/
-//! [`function_declaration_to_tool_param`] (C0541) are ported here — all
-//! pure, self-contained, and testable without any wire-format type
-//! beyond the minimal [`AnthropicUsage`]/[`AnthropicToolParam`] structs
-//! declared alongside them (both ahead of their own real caller, same
-//! "widen/declare ahead of a consumer" precedent used throughout this
-//! port — their real consumer is the still-deferred `AnthropicLlm`
-//! backend). The rest of P10 (C0536-C0539, C0543, C0544 — the actual
-//! `AnthropicLlm` `BaseLlm` backend, credential resolution, extended-
-//! thinking mapping, the full content↔block conversion including
-//! media/tool-result handling, and SSE streaming) is real, substantial
-//! additional work deliberately left for a follow-up batch: each of
-//! those needs either a non-trivial new wire-shape enum
-//! (`_MessageBlockParam`'s 7 variants, with real image/PDF/tool-result
-//! branching this port has no way to verify without a live Anthropic
-//! endpoint to test against) or new fields on
+//! functions (C0542), [`update_type_string`]/
+//! [`function_declaration_to_tool_param`] (C0541), and now
+//! [`build_anthropic_thinking_param`] (C0538, `thinking_budget`-only
+//! subset) are ported here — all pure, self-contained, and testable
+//! without any wire-format type beyond the minimal
+//! [`AnthropicUsage`]/[`AnthropicToolParam`]/[`AnthropicThinkingParam`]
+//! structs declared alongside them (all ahead of their own real caller,
+//! same "widen/declare ahead of a consumer" precedent used throughout
+//! this port — their real consumer is the still-deferred `AnthropicLlm`
+//! backend). The rest of P10 (C0536, C0537, C0539, C0543, C0544 — the
+//! actual `AnthropicLlm` `BaseLlm` backend, credential resolution, the
+//! full content↔block conversion including media/tool-result handling,
+//! and SSE streaming) is real, substantial additional work deliberately
+//! left for a follow-up batch: each of those needs either a non-trivial
+//! new wire-shape enum (`_MessageBlockParam`'s 7 variants, with real
+//! image/PDF/tool-result branching this port has no way to verify
+//! without a live Anthropic endpoint to test against) or new fields on
 //! [`crate::llm_request::GenerateContentConfigStub`]
-//! (`temperature`/`top_p`/`top_k`/`stop_sequences`/`max_output_tokens`/a
-//! real `thinking_config`, none of which exist there yet) — real,
-//! separable units of work, not something to fold into this small
-//! slice. C0541 turned out **not** to need any of those — it only
-//! touches [`adk_genai::content::FunctionDeclaration`], which already
-//! has everything required.
+//! (`temperature`/`top_p`/`top_k`/`stop_sequences`/`max_output_tokens`,
+//! none of which exist there yet) — real, separable units of work, not
+//! something to fold into this small slice. C0541 and C0538 turned out
+//! **not** to need any of those — C0541 only touches
+//! [`adk_genai::content::FunctionDeclaration`], and C0538's
+//! `thinking_budget` mapping only reads
+//! [`crate::llm_request::GenerateContentConfigStub::thinking_config`],
+//! both of which already have everything required. **C0538's other
+//! half stays deferred**: `_build_effort_param`/
+//! `AnthropicGenerateContentConfig.effort` (Anthropic's separate
+//! `reasoning_effort` request field, distinct from `thinking_budget`)
+//! needs a genuinely new field on `AnthropicGenerateContentConfig` (a
+//! type that doesn't exist in this port yet, since the whole
+//! `AnthropicLlm`-specific config subclass is part of the deferred
+//! `AnthropicLlm` backend) — left for that follow-up batch rather than
+//! bolted on here.
 //!
 //! **`to_google_genai_finish_reason`, wire string not enum**: the source
 //! maps to a `types.FinishReason` enum member; this port's
@@ -302,6 +313,68 @@ pub fn function_declaration_to_tool_param(
         description: function_declaration.description.clone().unwrap_or_default(),
         input_schema,
     }
+}
+
+/// Wire-shape stand-in for Anthropic's `thinking` request param
+/// (`anthropic_types.ThinkingConfigEnabledParam`/`ThinkingConfigDisabledParam`/
+/// `ThinkingConfigAdaptiveParam`). Declared ahead of its real HTTP-
+/// transport caller, same precedent as [`AnthropicUsage`]/
+/// [`AnthropicToolParam`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnthropicThinkingParam {
+    Disabled,
+    Adaptive,
+    Enabled { budget_tokens: i64 },
+}
+
+/// `anthropic_llm._build_anthropic_thinking_param` — maps genai
+/// `ThinkingConfig` to Anthropic's `thinking` request parameter.
+///
+/// Per `google.genai.types.ThinkingConfig`, `thinking_budget` semantics
+/// are: `None` (no `thinking_config`, or a `thinking_config` present but
+/// with no `thinkingBudget` key) means Anthropic requires an explicit
+/// choice, surfaced as `Err` rather than silently picking a default
+/// (mirroring the Anthropic API); `0` disables thinking; negative
+/// (e.g. `-1` AUTOMATIC) maps to Anthropic's adaptive thinking (model
+/// picks the depth); a positive budget is legacy manual mode.
+///
+/// **`thinking_config`, already-opaque `Value`, no widening needed**:
+/// unlike the rest of P10's extended-thinking/reasoning-effort row
+/// (`AnthropicGenerateContentConfig.effort`, still `REQUIRED` — a
+/// genuinely new field, deferred), this only reads
+/// `GenerateContentConfigStub::thinking_config`'s already-opaque
+/// `Value`, which has existed since an early Phase 3 batch — no change
+/// to that struct is needed. `"thinkingBudget"` is the same camelCase
+/// key `llm_backed_user_simulator.rs`'s `default_model_configuration`
+/// already writes into this exact field.
+pub fn build_anthropic_thinking_param(
+    config: Option<&crate::llm_request::GenerateContentConfigStub>,
+) -> Result<Option<AnthropicThinkingParam>, String> {
+    let Some(thinking_config) = config.and_then(|c| c.thinking_config.as_ref()) else {
+        return Ok(None);
+    };
+
+    let Some(thinking_budget) = thinking_config
+        .get("thinkingBudget")
+        .and_then(Value::as_i64)
+    else {
+        return Err(
+            "thinking_budget must be set explicitly when ThinkingConfig is provided for \
+             Anthropic models. Use 0 to disable thinking, -1 for adaptive (model-chosen \
+             depth), or a positive integer (>= 1024) for manual budgeting."
+                .to_string(),
+        );
+    };
+
+    if thinking_budget == 0 {
+        return Ok(Some(AnthropicThinkingParam::Disabled));
+    }
+    if thinking_budget < 0 {
+        return Ok(Some(AnthropicThinkingParam::Adaptive));
+    }
+    Ok(Some(AnthropicThinkingParam::Enabled {
+        budget_tokens: thinking_budget,
+    }))
 }
 
 #[cfg(test)]
@@ -648,5 +721,92 @@ mod tests {
     fn function_declaration_to_tool_param_panics_without_a_name() {
         let decl = FunctionDeclaration::default();
         let _ = function_declaration_to_tool_param(&decl);
+    }
+
+    // --- build_anthropic_thinking_param ---
+
+    fn config_with_thinking_budget(budget: i64) -> crate::llm_request::GenerateContentConfigStub {
+        crate::llm_request::GenerateContentConfigStub {
+            thinking_config: Some(Value::Map(vec![(
+                "thinkingBudget".to_string(),
+                Value::Int(budget),
+            )])),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn build_anthropic_thinking_param_none_config_is_ok_none() {
+        assert_eq!(build_anthropic_thinking_param(None), Ok(None));
+    }
+
+    #[test]
+    fn build_anthropic_thinking_param_none_thinking_config_is_ok_none() {
+        let config = crate::llm_request::GenerateContentConfigStub::default();
+        assert_eq!(build_anthropic_thinking_param(Some(&config)), Ok(None));
+    }
+
+    #[test]
+    fn build_anthropic_thinking_param_missing_budget_key_is_err() {
+        let config = crate::llm_request::GenerateContentConfigStub {
+            thinking_config: Some(Value::Map(Vec::new())),
+            ..Default::default()
+        };
+        let result = build_anthropic_thinking_param(Some(&config));
+        assert_eq!(
+            result,
+            Err(
+                "thinking_budget must be set explicitly when ThinkingConfig is provided for \
+                 Anthropic models. Use 0 to disable thinking, -1 for adaptive (model-chosen \
+                 depth), or a positive integer (>= 1024) for manual budgeting."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn build_anthropic_thinking_param_zero_budget_is_disabled() {
+        let config = config_with_thinking_budget(0);
+        assert_eq!(
+            build_anthropic_thinking_param(Some(&config)),
+            Ok(Some(AnthropicThinkingParam::Disabled))
+        );
+    }
+
+    #[test]
+    fn build_anthropic_thinking_param_negative_budget_is_adaptive() {
+        let config = config_with_thinking_budget(-1);
+        assert_eq!(
+            build_anthropic_thinking_param(Some(&config)),
+            Ok(Some(AnthropicThinkingParam::Adaptive))
+        );
+    }
+
+    #[test]
+    fn build_anthropic_thinking_param_positive_budget_is_enabled() {
+        let config = config_with_thinking_budget(10240);
+        assert_eq!(
+            build_anthropic_thinking_param(Some(&config)),
+            Ok(Some(AnthropicThinkingParam::Enabled {
+                budget_tokens: 10240
+            }))
+        );
+    }
+
+    #[test]
+    fn build_anthropic_thinking_param_reads_uint_budget() {
+        let config = crate::llm_request::GenerateContentConfigStub {
+            thinking_config: Some(Value::Map(vec![(
+                "thinkingBudget".to_string(),
+                Value::UInt(10240),
+            )])),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_anthropic_thinking_param(Some(&config)),
+            Ok(Some(AnthropicThinkingParam::Enabled {
+                budget_tokens: 10240
+            }))
+        );
     }
 }
