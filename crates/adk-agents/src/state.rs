@@ -163,4 +163,65 @@ mod tests {
         assert_eq!(map.get("a"), Some(&Value::Int(1)));
         assert_eq!(map.get("b"), Some(&Value::Int(2)));
     }
+
+    /// C0242: a dict-valued delta replaces the stored value, it is not
+    /// deep-merged.
+    #[test]
+    fn update_dict_valued_delta_replaces_not_merges() {
+        let mut value = BTreeMap::new();
+        value.insert(
+            "profile".to_string(),
+            Value::Map(vec![
+                ("name".to_string(), Value::String("ada".to_string())),
+                ("role".to_string(), Value::String("admin".to_string())),
+            ]),
+        );
+        let mut state = State::new(value, BTreeMap::new());
+
+        let mut delta = BTreeMap::new();
+        delta.insert(
+            "profile".to_string(),
+            Value::Map(vec![("name".to_string(), Value::String("bob".to_string()))]),
+        );
+        state.update(delta);
+
+        assert_eq!(
+            state.get("profile"),
+            Some(&Value::Map(vec![(
+                "name".to_string(),
+                Value::String("bob".to_string())
+            )]))
+        );
+    }
+
+    /// C0242: a `None`/`Null`-valued delta stores `null`, it does not
+    /// delete the key.
+    #[test]
+    fn update_null_valued_delta_is_stored_not_dropped() {
+        let mut value = BTreeMap::new();
+        value.insert("flag".to_string(), Value::Bool(true));
+        let mut state = State::new(value, BTreeMap::new());
+
+        let mut delta = BTreeMap::new();
+        delta.insert("flag".to_string(), Value::Null);
+        state.update(delta);
+
+        assert_eq!(state.get("flag"), Some(&Value::Null));
+    }
+
+    /// C0242: an unrelated delta key must not corrupt a stored boolean's
+    /// value.
+    #[test]
+    fn update_boolean_state_survives_an_unrelated_delta() {
+        let mut value = BTreeMap::new();
+        value.insert("flag".to_string(), Value::Bool(false));
+        let mut state = State::new(value, BTreeMap::new());
+
+        let mut delta = BTreeMap::new();
+        delta.insert("new_flag".to_string(), Value::Bool(true));
+        state.update(delta);
+
+        assert_eq!(state.get("new_flag"), Some(&Value::Bool(true)));
+        assert_eq!(state.get("flag"), Some(&Value::Bool(false)));
+    }
 }

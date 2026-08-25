@@ -22,6 +22,44 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`: session-state conformance tests (C0242, DONE)
+**2026-08-25**
+
+- **Added:** 6 new unit tests, ported 1:1 from
+  `tests/unittests/sessions/test_session_service.py`:
+  - `crates/adk-agents/src/services.rs`:
+    `append_event_dict_valued_delta_replaces_not_merges`,
+    `append_event_null_valued_delta_is_stored_not_dropped`,
+    `append_event_boolean_state_survives_an_unrelated_delta`.
+  - `crates/adk-agents/src/state.rs`:
+    `update_dict_valued_delta_replaces_not_merges`,
+    `update_null_valued_delta_is_stored_not_dropped`,
+    `update_boolean_state_survives_an_unrelated_delta`.
+  All three behaviors (dict-valued delta replaces rather than
+  deep-merges; a `None`/`Null`-valued delta stores `null` rather than
+  deleting the key; an unrelated delta key doesn't corrupt a sibling
+  boolean value) were already correctly implemented — both
+  `apply_session_event` and `State::update` use plain
+  map-replace-and-never-filter-`Null` semantics — this closes the row
+  by adding the missing assertions, not new logic. `temp:` visibility
+  and idempotent `append_event` were already covered by pre-existing
+  tests.
+- **Corrected:** three more stale manifest evidence cells found while
+  scoping this batch — C0261 claimed `FileArtifactService` was still
+  unported (it's DONE, C0268-C0274); C0402/C0403 both still cited
+  `from_config` as blocked on "`ToolArgsConfig`, C0417, not built" even
+  though C0417's own evidence had already corrected this to a
+  disclosed-inapplicable Python-`importlib` gap; C0603 said the other
+  12 standard evaluators were GCP/`LlmAsJudge`-blocked when 5 of them
+  are actually built and DONE (unregistered for a structural sync/async
+  reason instead, per `metric_evaluator_registry.rs`'s own already-
+  corrected module doc).
+- Full local gate green: `cargo build --workspace`, `cargo test
+  --workspace`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo fmt --check`.
+
+---
+
 ## PR #TBD — `tools/`: Gemini Data Analytics stream parsing (part of C0489)
 **2026-08-25**
 

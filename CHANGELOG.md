@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P5 session-state conformance tests (C0242, DONE): 6 new unit tests in
+  `crates/adk-agents/src/services.rs`/`state.rs`, ported 1:1 from
+  `test_session_service.py`'s `test_dict_valued_state_delta_replaces_stored_value`/
+  `test_none_valued_state_delta_is_stored_not_dropped`/
+  `test_boolean_state_survives_unrelated_state_delta`. All three
+  behaviors were already correctly implemented
+  (`apply_session_event`/`State::update` both use plain
+  map-replace-and-never-filter-`Null` semantics) — this closes the row
+  by adding the missing assertions, not new logic.
+### Fixed
+- Corrected three more stale manifest evidence cells found while
+  scoping this batch: C0261 claimed `FileArtifactService` was still
+  unported (it's DONE, C0268-C0274); C0402/C0403 both still said
+  `from_config` was blocked on "`ToolArgsConfig`, C0417, not built"
+  even though C0417's own evidence had already corrected this to a
+  disclosed-inapplicable Python-`importlib` gap; C0603 said the other
+  12 standard evaluators were GCP/`LlmAsJudge`-blocked when 5 of them
+  are actually built and DONE (unregistered for a structural sync/async
+  reason instead).
 - `_gda_stream_util.py`'s pure logic, part of C0489 (P8): new
   `crates/adk-tools/src/gda_stream_util.rs` — the Gemini Data Analytics
   streaming-response accumulator/parser: `get_stream` (buffers lines
