@@ -22,6 +22,46 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `models/`: P10 Anthropic (Claude) backend, second slice (C0541, DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-models/src/anthropic_conversion.rs` gains
+  `update_type_string` (C0541 half 1): recursive JSON-Schema `"type"`-
+  string lowercasing, recursing into the exact same dict-valued
+  (`$defs`/`defs`/`dependentSchemas`/`patternProperties`/`properties`),
+  single dict-or-list-valued (`additionalProperties`/`contains`/`else`/
+  `if`/`items`/`not`/`propertyNames`/`then`/`unevaluatedProperties`),
+  and list-valued (`allOf`/`anyOf`/`oneOf`/`prefixItems`, plus their
+  snake_case aliases) keys the source does.
+- **Added:** `function_declaration_to_tool_param`/`AnthropicToolParam`
+  (C0541 half 2): ADK↔Anthropic tool-schema conversion. Prefers
+  `parameters_json_schema` when present; otherwise builds an object
+  schema from `parameters`. The fallback branch is simplified,
+  disclosed: the source reads a dict of typed `Schema` objects off
+  `parameters.properties` and calls `.model_dump(by_alias=True,
+  exclude_none=True)` on each to flatten it; this port's `parameters`
+  is already an opaque, already-flattened `Value` (no typed `Schema`
+  per property to begin with), so it reads `parameters`'s own
+  `"properties"`/`"required"` keys directly instead of rebuilding them
+  key-by-key. The source's bare `assert function_declaration.name` is
+  ported as a Rust panic — a caller invariant, not a user-reachable
+  error path, since this function has no real caller yet to receive a
+  `Result` through.
+- **Correction**: this slice turned out **not** to need the
+  `GenerateContentConfigStub` widening the first P10 slice's own
+  evidence flagged as a blocker for it — `function_declaration_to_tool_param`
+  only touches `adk_genai::content::FunctionDeclaration`, which already
+  has everything required. Both manifest rows (C0541, and C0542's own
+  "rest of P10" disclosure) are corrected accordingly.
+- **Tests:** `crates/adk-models/src/anthropic_conversion.rs::tests::{update_type_string_*, function_declaration_to_tool_param_*}`
+  (10 new tests: top-level and nested lowercasing across every key
+  category, the `parameters_json_schema`-preferred path, the
+  `parameters`-fallback path, omitting an empty `required` list,
+  defaulting a missing description to `""`, and panicking without a
+  name).
+
+---
+
 ## PR #TBD — `models/`: P10 Anthropic (Claude) backend, first slice (C0540/C0542, both DONE)
 **2026-08-25**
 

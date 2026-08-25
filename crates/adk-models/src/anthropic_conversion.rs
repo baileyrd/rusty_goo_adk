@@ -9,20 +9,21 @@
 //! `anthropic` SDK — there is no Rust equivalent of that SDK to add as a
 //! dependency, and none is needed for a plain HTTPS JSON API.
 //!
-//! **Scope of this batch, disclosed**: only [`ToolUseIdSanitizer`]
-//! (C0540) and the finish-reason mapping + token-usage extraction/
-//! reconciliation functions (C0542) are ported here — both pure,
-//! self-contained, and testable without any wire-format type beyond the
-//! minimal [`AnthropicUsage`] struct declared alongside them (itself
-//! ahead of its own real caller, same "widen/declare ahead of a
-//! consumer" precedent used throughout this port — its real consumer is
-//! the still-deferred `message_to_generate_content_response`). The rest
-//! of P10 (C0536-C0539, C0541, C0543, C0544 — the actual `AnthropicLlm`
-//! `BaseLlm` backend, credential resolution, extended-thinking mapping,
-//! the full content↔block conversion including media/tool-result
-//! handling, tool-schema conversion, and SSE streaming) is real,
-//! substantial additional work deliberately left for a follow-up batch:
-//! each of those needs either a non-trivial new wire-shape enum
+//! **Scope of this batch, disclosed**: [`ToolUseIdSanitizer`] (C0540),
+//! the finish-reason mapping + token-usage extraction/reconciliation
+//! functions (C0542), and now [`update_type_string`]/
+//! [`function_declaration_to_tool_param`] (C0541) are ported here — all
+//! pure, self-contained, and testable without any wire-format type
+//! beyond the minimal [`AnthropicUsage`]/[`AnthropicToolParam`] structs
+//! declared alongside them (both ahead of their own real caller, same
+//! "widen/declare ahead of a consumer" precedent used throughout this
+//! port — their real consumer is the still-deferred `AnthropicLlm`
+//! backend). The rest of P10 (C0536-C0539, C0543, C0544 — the actual
+//! `AnthropicLlm` `BaseLlm` backend, credential resolution, extended-
+//! thinking mapping, the full content↔block conversion including
+//! media/tool-result handling, and SSE streaming) is real, substantial
+//! additional work deliberately left for a follow-up batch: each of
+//! those needs either a non-trivial new wire-shape enum
 //! (`_MessageBlockParam`'s 7 variants, with real image/PDF/tool-result
 //! branching this port has no way to verify without a live Anthropic
 //! endpoint to test against) or new fields on
@@ -30,7 +31,9 @@
 //! (`temperature`/`top_p`/`top_k`/`stop_sequences`/`max_output_tokens`/a
 //! real `thinking_config`, none of which exist there yet) — real,
 //! separable units of work, not something to fold into this small
-//! slice.
+//! slice. C0541 turned out **not** to need any of those — it only
+//! touches [`adk_genai::content::FunctionDeclaration`], which already
+//! has everything required.
 //!
 //! **`to_google_genai_finish_reason`, wire string not enum**: the source
 //! maps to a `types.FinishReason` enum member; this port's
@@ -150,6 +153,154 @@ pub fn extract_thinking_token_count(usage: &AnthropicUsage) -> Option<i64> {
     match usage.output_tokens {
         Some(output_tokens) => Some(thinking.min(output_tokens)),
         None => Some(thinking),
+    }
+}
+
+const DICT_KEYS_TO_RECURSE: &[&str] = &[
+    "$defs",
+    "defs",
+    "dependentSchemas",
+    "patternProperties",
+    "properties",
+];
+
+const SINGLE_KEYS_TO_RECURSE: &[&str] = &[
+    "additionalProperties",
+    "additional_properties",
+    "contains",
+    "else",
+    "if",
+    "items",
+    "not",
+    "propertyNames",
+    "then",
+    "unevaluatedProperties",
+];
+
+const LIST_KEYS_TO_RECURSE: &[&str] = &[
+    "allOf",
+    "all_of",
+    "anyOf",
+    "any_of",
+    "oneOf",
+    "one_of",
+    "prefixItems",
+];
+
+/// `anthropic_llm._update_type_string` — lowercases nested JSON-Schema
+/// `"type"` strings for Anthropic compatibility, recursing into every
+/// key a JSON Schema commonly nests a sub-schema under.
+pub fn update_type_string(value: &mut Value) {
+    match value {
+        Value::Seq(items) => {
+            for item in items {
+                update_type_string(item);
+            }
+        }
+        Value::Map(entries) => {
+            if let Some((_, Value::String(type_name))) =
+                entries.iter_mut().find(|(k, _)| k == "type")
+            {
+                *type_name = type_name.to_lowercase();
+            }
+            for key in DICT_KEYS_TO_RECURSE {
+                if let Some((_, Value::Map(child_entries))) =
+                    entries.iter_mut().find(|(k, _)| k == key)
+                {
+                    for (_, child_value) in child_entries {
+                        update_type_string(child_value);
+                    }
+                }
+            }
+            for key in SINGLE_KEYS_TO_RECURSE {
+                if let Some((_, child)) = entries.iter_mut().find(|(k, _)| k == key) {
+                    if matches!(child, Value::Map(_) | Value::Seq(_)) {
+                        update_type_string(child);
+                    }
+                }
+            }
+            for key in LIST_KEYS_TO_RECURSE {
+                if let Some((_, child @ Value::Seq(_))) = entries.iter_mut().find(|(k, _)| k == key)
+                {
+                    update_type_string(child);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `anthropic_types.ToolParam` — only the three fields the source ever
+/// sets when constructing one (`anthropic_llm.py:801-805`). Declared
+/// ahead of its real HTTP-transport caller, same precedent as
+/// [`AnthropicUsage`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnthropicToolParam {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+/// `anthropic_llm.function_declaration_to_tool_param` — converts a
+/// function declaration to an Anthropic tool param.
+///
+/// **`parameters`-fallback, simplified — disclosed**: the source's
+/// `else` branch reads `function_declaration.parameters.properties`, a
+/// dict of typed `Schema` objects, and calls `.model_dump(by_alias=True,
+/// exclude_none=True)` on each one to flatten it to a plain dict.
+/// [`adk_genai::content::FunctionDeclaration::parameters`] is already an
+/// opaque, already-flattened [`Value`] in this port (no typed `Schema`
+/// object per property to begin with — same "already opaque, nothing
+/// left to strip" situation this module already discloses for
+/// `usage_metadata`/token extraction), so this reads `parameters`'s own
+/// `"properties"`/`"required"` keys directly instead of rebuilding them
+/// key-by-key.
+///
+/// Panics if `function_declaration.name` is `None` or empty, mirroring
+/// the source's own `assert function_declaration.name` — a caller
+/// invariant, not a user-reachable error path (this function has no
+/// real caller yet to receive a `Result` through — see the module doc).
+pub fn function_declaration_to_tool_param(
+    function_declaration: &adk_genai::content::FunctionDeclaration,
+) -> AnthropicToolParam {
+    let name = function_declaration
+        .name
+        .clone()
+        .filter(|n| !n.is_empty())
+        .expect("function_declaration.name is required");
+
+    let mut input_schema = if let Some(schema) = &function_declaration.parameters_json_schema {
+        schema.clone()
+    } else {
+        let properties = function_declaration
+            .parameters
+            .as_ref()
+            .and_then(|p| p.get("properties"))
+            .cloned()
+            .unwrap_or_else(|| Value::Map(Vec::new()));
+        let required = function_declaration
+            .parameters
+            .as_ref()
+            .and_then(|p| p.get("required"))
+            .cloned();
+
+        let mut schema = Value::Map(Vec::new());
+        schema.insert("type", Value::String("object".to_string()));
+        schema.insert("properties", properties);
+        if let Some(required) = required {
+            let is_empty = matches!(&required, Value::Seq(items) if items.is_empty());
+            if !is_empty {
+                schema.insert("required", required);
+            }
+        }
+        schema
+    };
+    update_type_string(&mut input_schema);
+
+    AnthropicToolParam {
+        name,
+        description: function_declaration.description.clone().unwrap_or_default(),
+        input_schema,
     }
 }
 
@@ -314,5 +465,188 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(extract_thinking_token_count(&usage), Some(20));
+    }
+
+    // --- update_type_string ---
+
+    fn object_map(entries: Vec<(&str, Value)>) -> Value {
+        Value::Map(
+            entries
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn update_type_string_lowercases_a_top_level_type() {
+        let mut schema = object_map(vec![("type", Value::String("OBJECT".to_string()))]);
+        update_type_string(&mut schema);
+        assert_eq!(
+            schema.get("type"),
+            Some(&Value::String("object".to_string()))
+        );
+    }
+
+    #[test]
+    fn update_type_string_recurses_into_properties() {
+        let mut schema = object_map(vec![(
+            "properties",
+            object_map(vec![(
+                "x",
+                object_map(vec![("type", Value::String("STRING".to_string()))]),
+            )]),
+        )]);
+        update_type_string(&mut schema);
+        let x_type = schema
+            .get("properties")
+            .and_then(|p| p.get("x"))
+            .and_then(|x| x.get("type"));
+        assert_eq!(x_type, Some(&Value::String("string".to_string())));
+    }
+
+    #[test]
+    fn update_type_string_recurses_into_items_and_array_type_lists() {
+        let mut schema = object_map(vec![
+            (
+                "items",
+                object_map(vec![("type", Value::String("NUMBER".to_string()))]),
+            ),
+            (
+                "anyOf",
+                Value::Seq(vec![object_map(vec![(
+                    "type",
+                    Value::String("INTEGER".to_string()),
+                )])]),
+            ),
+        ]);
+        update_type_string(&mut schema);
+        assert_eq!(
+            schema.get("items").and_then(|i| i.get("type")),
+            Some(&Value::String("number".to_string()))
+        );
+        let Some(Value::Seq(any_of)) = schema.get("anyOf") else {
+            panic!("expected anyOf to remain a Seq");
+        };
+        assert_eq!(
+            any_of[0].get("type"),
+            Some(&Value::String("integer".to_string()))
+        );
+    }
+
+    #[test]
+    fn update_type_string_recurses_into_defs_and_pattern_properties() {
+        let mut schema = object_map(vec![(
+            "$defs",
+            object_map(vec![(
+                "Foo",
+                object_map(vec![("type", Value::String("BOOLEAN".to_string()))]),
+            )]),
+        )]);
+        update_type_string(&mut schema);
+        let foo_type = schema
+            .get("$defs")
+            .and_then(|d| d.get("Foo"))
+            .and_then(|f| f.get("type"));
+        assert_eq!(foo_type, Some(&Value::String("boolean".to_string())));
+    }
+
+    #[test]
+    fn update_type_string_ignores_non_dict_non_list_values() {
+        let mut value = Value::String("OBJECT".to_string());
+        update_type_string(&mut value);
+        assert_eq!(value, Value::String("OBJECT".to_string()));
+    }
+
+    // --- function_declaration_to_tool_param ---
+
+    use adk_genai::content::FunctionDeclaration;
+
+    #[test]
+    fn function_declaration_to_tool_param_prefers_parameters_json_schema() {
+        let decl = FunctionDeclaration {
+            name: Some("get_weather".to_string()),
+            description: Some("Gets the weather".to_string()),
+            parameters_json_schema: Some(object_map(vec![(
+                "type",
+                Value::String("OBJECT".to_string()),
+            )])),
+            parameters: Some(object_map(vec![(
+                "type",
+                Value::String("ignored".to_string()),
+            )])),
+            ..Default::default()
+        };
+        let tool_param = function_declaration_to_tool_param(&decl);
+        assert_eq!(tool_param.name, "get_weather");
+        assert_eq!(tool_param.description, "Gets the weather");
+        assert_eq!(
+            tool_param.input_schema.get("type"),
+            Some(&Value::String("object".to_string()))
+        );
+    }
+
+    #[test]
+    fn function_declaration_to_tool_param_builds_object_schema_from_parameters_when_json_schema_absent(
+    ) {
+        let decl = FunctionDeclaration {
+            name: Some("get_weather".to_string()),
+            parameters: Some(object_map(vec![
+                (
+                    "properties",
+                    object_map(vec![(
+                        "city",
+                        object_map(vec![("type", Value::String("string".to_string()))]),
+                    )]),
+                ),
+                (
+                    "required",
+                    Value::Seq(vec![Value::String("city".to_string())]),
+                ),
+            ])),
+            ..Default::default()
+        };
+        let tool_param = function_declaration_to_tool_param(&decl);
+        assert_eq!(
+            tool_param.input_schema.get("type"),
+            Some(&Value::String("object".to_string()))
+        );
+        assert_eq!(
+            tool_param.input_schema.get("required"),
+            Some(&Value::Seq(vec![Value::String("city".to_string())]))
+        );
+        assert!(tool_param
+            .input_schema
+            .get("properties")
+            .and_then(|p| p.get("city"))
+            .is_some());
+    }
+
+    #[test]
+    fn function_declaration_to_tool_param_omits_required_when_empty() {
+        let decl = FunctionDeclaration {
+            name: Some("noop".to_string()),
+            parameters: Some(object_map(vec![("required", Value::Seq(Vec::new()))])),
+            ..Default::default()
+        };
+        let tool_param = function_declaration_to_tool_param(&decl);
+        assert_eq!(tool_param.input_schema.get("required"), None);
+    }
+
+    #[test]
+    fn function_declaration_to_tool_param_defaults_description_to_empty_string() {
+        let decl = FunctionDeclaration {
+            name: Some("noop".to_string()),
+            ..Default::default()
+        };
+        let tool_param = function_declaration_to_tool_param(&decl);
+        assert_eq!(tool_param.description, "");
+    }
+
+    #[test]
+    #[should_panic(expected = "function_declaration.name is required")]
+    fn function_declaration_to_tool_param_panics_without_a_name() {
+        let decl = FunctionDeclaration::default();
+        let _ = function_declaration_to_tool_param(&decl);
     }
 }

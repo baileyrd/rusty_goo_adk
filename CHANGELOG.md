@@ -5,6 +5,18 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P10 Anthropic (Claude) backend, second slice (C0541, DONE):
+  `crates/adk-models/src/anthropic_conversion.rs` gains `update_type_string`
+  (recursive JSON-Schema `"type"`-string lowercasing, over the exact
+  same dict/single/list key lists as the source) and
+  `function_declaration_to_tool_param`/`AnthropicToolParam`. Turned out
+  not to need the `GenerateContentConfigStub` widening the first slice's
+  own evidence flagged as a blocker for the rest of P10 — this only
+  touches `adk_genai::content::FunctionDeclaration`, which already has
+  everything required. The `parameters`-fallback branch is simplified,
+  disclosed: this port's `parameters` is already an opaque, already-
+  flattened `Value` (no typed `Schema` per property to model_dump), so
+  it reads `parameters`'s own `"properties"`/`"required"` keys directly.
 - P10 Anthropic (Claude) backend, first slice (C0540/C0542, both DONE):
   `crates/adk-models/src/anthropic_conversion.rs` — `ToolUseIdSanitizer`
   (C0540, deterministic `toolu_fallback_N` placeholders for invalid
@@ -17,11 +29,11 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   `gemini.rs` already established), not the Python source's `anthropic`
   SDK. Deliberately a small first slice of the 9-row P10 phase: the
   actual `AnthropicLlm` `BaseLlm` backend, extended-thinking mapping,
-  tool-schema conversion, the full content↔block conversion (image/PDF/
-  tool-result media handling), and SSE streaming (C0536/C0537/C0538/
-  C0539/C0541/C0543/C0544) are disclosed at length on C0542's own
-  manifest row as separable, larger units of future work — not blocked,
-  just genuinely bigger than this batch.
+  the full content↔block conversion (image/PDF/tool-result media
+  handling), and SSE streaming (C0536/C0537/C0538/C0539/C0543/C0544)
+  are disclosed at length on C0542's own manifest row as separable,
+  larger units of future work — not blocked, just genuinely bigger than
+  this batch.
 - P12 telemetry pure-logic batch (C0668/C0669/C0672/C0673, all DONE;
   C0661, partial): `crates/adk-models/src/token_usage.rs` (`TokenUsage`,
   C0668 — token-usage attribute names/aggregation, reading the same
