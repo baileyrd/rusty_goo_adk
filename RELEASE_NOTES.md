@@ -22,6 +22,54 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `models/`+`agents/`: P12 telemetry pure-logic batch (C0668/C0669/C0672/C0673, all DONE; C0661, partial)
+**2026-08-25**
+
+- **Added:** `crates/adk-models/src/token_usage.rs` — `TokenUsage`
+  (C0668): `input_token_count`/`output_token_count`/`to_attributes`,
+  reading the same opaque camelCase `usage_metadata: Value` keys
+  `adk-flows::cache_performance_analyzer` already reads directly, rather
+  than introducing a new typed model for a single consumer.
+- **Added:** `crates/adk-models/src/stable_semconv.rs` — `system_message_body`/
+  `user_message_body`/`choice_body` (C0661, partial): the three stable
+  OTel GenAI semconv log-body builders, pure functions with zero OTel
+  SDK dependency. Two of the source's dispatch branches are moot in this
+  port and simplified accordingly: `system_message_body`'s `serialize_content`
+  call has nothing left to dispatch on since `GenerateContentConfigStub::
+  system_instruction` is already a plain `Option<String>`, and `choice_body`'s
+  `finish_reason.value`/`str()` normalization is moot since `LlmResponse::
+  finish_reason` is already an opaque `Value` holding the raw wire
+  string. **Not ported, disclosed:** the experimental `gen_ai.client.inference.operation.details`
+  log event (`telemetry/_experimental_semconv.py`, ~700 lines of
+  duck-typed MCP/genai object conversion) — also free of any live OTel
+  `Span` dependency, so a legitimate future batch, just disproportionate
+  to fold into this one.
+- **Added:** `crates/adk-agents/src/adk_attributes.rs` — the 6
+  `adk.experimental.skill.*` ADK-owned attribute-name constants (C0669),
+  ported verbatim from a whole-file read confirming zero imports beyond
+  `__future__` in the source.
+- **Added:** `crates/adk-agents/src/schema_version.rs` gains the GCP
+  exporter env-var constants (`GOOGLE_API_USE_MTLS_ENDPOINT`/
+  `GOOGLE_API_USE_CLIENT_CERTIFICATE`/`GOOGLE_CLOUD_DEFAULT_LOG_NAME`/
+  `GCP_DEFAULT_LOG_NAME`, with their two distinct log-name defaults,
+  C0672) and the generic OTel exporter env-var constants
+  (`OTEL_EXPORTER_OTLP_ENDPOINT`+variants/`OTEL_METRIC_EXPORT_INTERVAL`/
+  `OTEL_METRIC_EXPORT_TIMEOUT`, C0673) — bundled alongside the
+  already-DONE C0671 in the same file, same "declare ahead of a blocked
+  consumer" precedent: none of these six rows' real span/metric-emission
+  machinery exists in this port yet, but the next batch that needs one
+  of these names doesn't have to rediscover the exact string.
+- None of the five rows in this batch needs a new dependency or touches
+  any already-shipped public surface — every function is a pure
+  data/string transform, and every constants-only row has no consumer
+  yet.
+- **Tests:** 13 new tests across `token_usage.rs`/`stable_semconv.rs`,
+  plus 1 in `adk_attributes.rs` and 1 in `schema_version.rs` (asserting
+  the two GCP log-name defaults are genuinely distinct, not accidentally
+  unified).
+
+---
+
 ## PR #TBD — `tools/`: NodeTool (C0490, DONE)
 **2026-08-25**
 

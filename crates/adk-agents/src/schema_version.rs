@@ -19,6 +19,17 @@
 //! *names* themselves, per its own manifest description). Declaring them
 //! now means the next batch that needs one doesn't have to rediscover
 //! the exact string.
+//!
+//! **C0672/C0673, bundled here for the same reason**: the GCP exporter's
+//! `GOOGLE_API_USE_MTLS_ENDPOINT`/`GOOGLE_API_USE_CLIENT_CERTIFICATE`/
+//! `GOOGLE_CLOUD_DEFAULT_LOG_NAME`(+ its `"adk-otel"` default)/
+//! `GCP_DEFAULT_LOG_NAME`(+ its distinct `"adk-on-agent-engine"`
+//! default) from `telemetry/google_cloud.py`, and the generic OTel
+//! exporter's `OTEL_EXPORTER_OTLP_ENDPOINT`(+`_TRACES`/`_METRICS`/
+//! `_LOGS_ENDPOINT` variants)/`OTEL_METRIC_EXPORT_INTERVAL`(+ its
+//! `60000` ms default)/`OTEL_METRIC_EXPORT_TIMEOUT`(+ its `30000` ms
+//! default) from `telemetry/setup.py`/`_agent_engine_metric_exporter.py`
+//! — again just names/defaults, no consumer yet, same as C0671.
 
 use std::env;
 
@@ -42,6 +53,32 @@ pub const GOOGLE_CLOUD_AGENT_ENGINE_METRICS_COLLECTION_INTERVAL_FLOOR_MS: &str =
 /// The default floor value (milliseconds) when that env var is unset —
 /// the source's `MIN_EXPORT_INTERVAL_MS`.
 pub const GOOGLE_CLOUD_AGENT_ENGINE_METRICS_COLLECTION_INTERVAL_FLOOR_MS_DEFAULT: f64 = 5000.0;
+
+/// C0672: GCP exporter env var name constants — no consumer in this
+/// port yet, see the module doc.
+pub const GOOGLE_API_USE_MTLS_ENDPOINT: &str = "GOOGLE_API_USE_MTLS_ENDPOINT";
+pub const GOOGLE_API_USE_CLIENT_CERTIFICATE: &str = "GOOGLE_API_USE_CLIENT_CERTIFICATE";
+pub const GOOGLE_CLOUD_DEFAULT_LOG_NAME: &str = "GOOGLE_CLOUD_DEFAULT_LOG_NAME";
+/// Default log name for the `GOOGLE_CLOUD_DEFAULT_LOG_NAME`-driven
+/// exporter path — the source's `_DEFAULT_LOG_NAME`.
+pub const GOOGLE_CLOUD_DEFAULT_LOG_NAME_DEFAULT: &str = "adk-otel";
+pub const GCP_DEFAULT_LOG_NAME: &str = "GCP_DEFAULT_LOG_NAME";
+/// Default log name for the Agent-Engine-specific exporter path — a
+/// deliberately different default than [`GOOGLE_CLOUD_DEFAULT_LOG_NAME_DEFAULT`].
+pub const GCP_DEFAULT_LOG_NAME_DEFAULT: &str = "adk-on-agent-engine";
+
+/// C0673: generic OTel exporter env var name constants — no consumer in
+/// this port yet, see the module doc.
+pub const OTEL_EXPORTER_OTLP_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
+pub const OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
+pub const OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
+pub const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
+pub const OTEL_METRIC_EXPORT_INTERVAL: &str = "OTEL_METRIC_EXPORT_INTERVAL";
+/// Default export interval (milliseconds) when that env var is unset.
+pub const OTEL_METRIC_EXPORT_INTERVAL_DEFAULT_MS: f64 = 60000.0;
+pub const OTEL_METRIC_EXPORT_TIMEOUT: &str = "OTEL_METRIC_EXPORT_TIMEOUT";
+/// Default export timeout (milliseconds) when that env var is unset.
+pub const OTEL_METRIC_EXPORT_TIMEOUT_DEFAULT_MS: f64 = 30000.0;
 
 /// Legacy telemetry format: top-level `invocation` span, no entrypoint
 /// `invoke_workflow` span/metric.
@@ -135,5 +172,15 @@ mod tests {
         }
         assert_eq!(resolve_schema_version(), SCHEMA_VERSION_LEGACY);
         clear_env();
+    }
+
+    #[test]
+    fn gcp_log_name_defaults_differ_by_exporter_path() {
+        assert_ne!(
+            GOOGLE_CLOUD_DEFAULT_LOG_NAME_DEFAULT,
+            GCP_DEFAULT_LOG_NAME_DEFAULT
+        );
+        assert_eq!(GOOGLE_CLOUD_DEFAULT_LOG_NAME_DEFAULT, "adk-otel");
+        assert_eq!(GCP_DEFAULT_LOG_NAME_DEFAULT, "adk-on-agent-engine");
     }
 }
