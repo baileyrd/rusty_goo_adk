@@ -207,3 +207,4 @@ pub mod workflow_retry_config;
 pub mod workflow_retry_utils;
 pub mod workflow_transfer_utils;
 pub mod workflow_trigger;
+pub mod workflow_workflow;

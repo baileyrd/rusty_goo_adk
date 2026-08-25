@@ -5,6 +5,38 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `Workflow` struct skeleton + SETUP phase (C0298/C0299/C0300, all DONE —
+  see below for narrowings): new `crates/adk-agents/src/
+  workflow_workflow.rs`. `Workflow::new` builds and validates a `Graph`
+  from `edges` (`rerun_on_resume` defaults `true`, unlike `BaseNode`'s
+  own `false`); `Workflow::validate_state_schema` (C0299) is a disclosed
+  no-op — needs `FunctionNode`'s wrapped-function signature
+  introspection, which this port doesn't have, over an already-opaque
+  `state_schema`. `WorkflowLoopState::setup` (C0300) ports the SETUP
+  phase: rehydrates recovered executions via a fresh `ReplayManager`,
+  warns (to stderr) when `resume_inputs` were given but nothing was
+  recovered, seeds triggers for `START`'s direct successors via the new
+  order-preserving `WorkflowLoopState::push_trigger` (a `Vec<(String,
+  Vec<Trigger>)>`, not a `HashMap`/`BTreeMap` — the source relies on
+  `dict` insertion order for deterministic scheduling), and installs a
+  freshly built `DynamicNodeScheduler` on `ctx` via the new
+  `Context::set_workflow_scheduler`. New `ReplayManager::
+  take_sequence_barrier` (additive — `ReplaySequenceBarrier` isn't
+  `Clone`, so moving it off the `ReplayManager` that built it needs an
+  explicit take rather than a borrow). **Not yet wired into a
+  `BaseNode`/`NodeBehavior`**: the LOOP phase (C0301-C0305:
+  `_run_loop`/`_schedule_ready_nodes`/`_handle_completion`/
+  `_buffer_downstream_triggers`) and FINALIZE (C0306) are a separate,
+  larger follow-up batch — `_run_impl`'s orchestration loop can't
+  meaningfully run without them, so `Workflow` stays a standalone,
+  directly-unit-tested struct for now (the same "build the layer, defer
+  the caller" shape already used for `NodeRunner`/`ReplayManager`/
+  `check_interception`). `DynamicNodeScheduler::new` always builds its
+  own fresh `ReplayManager` rather than sharing the Workflow's own (the
+  source's `_LoopState(DynamicNodeState)` inheritance shares one
+  instance) — disclosed as a narrowing, not a correctness gap (neither
+  scan mutates session state, so a second instance just redundantly
+  rebuilds the same index).
 - `DynamicNodeScheduler`/`ScheduleDynamicNode` (C0318, DONE — concurrent-
   task dedup disclosed as not ported) and its rehydration/execution/
   outcome-classification internals (C0319, DONE — cancellation clean-

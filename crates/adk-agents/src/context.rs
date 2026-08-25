@@ -355,6 +355,19 @@ impl Context {
         self.workflow_scheduler.clone()
     }
 
+    /// C0300: `ctx._workflow_scheduler = loop_state.schedule_dynamic_node`
+    /// — a `Workflow` node installs its own freshly built scheduler on
+    /// its own `ctx` at SETUP, unconditionally overwriting whatever it
+    /// may have inherited (matching the source's own field doc: "Set on
+    /// ctx at Workflow setup, propagated down to descendants via
+    /// NodeRunner until a nested orchestration node overrides it").
+    pub(crate) fn set_workflow_scheduler(
+        &mut self,
+        scheduler: Arc<rusty_tokio::sync::Mutex<DynamicNodeScheduler>>,
+    ) {
+        self.workflow_scheduler = Some(scheduler);
+    }
+
     pub(crate) fn output_emitted(&self) -> bool {
         self.output_emitted
     }
