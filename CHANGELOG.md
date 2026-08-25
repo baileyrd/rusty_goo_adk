@@ -16,6 +16,14 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   test `an_escalating_sibling_cancels_a_still_running_sibling` verifies
   real cancellation by wall-clock time, not just event absence.
 ### Added
+- P6 `memory` package export facade (C0246, DONE): new
+  `crates/adk-agents/src/memory.rs` — a plain `pub use` facade
+  re-exporting `BaseMemoryService` (aliased from
+  `crate::services::MemoryService`) and `InMemoryMemoryService`,
+  following the "eager vs. lazy has no Rust equivalent, drop it"
+  precedent from `agents.rs`/`plugins.rs`. `VertexAiMemoryBankService`/
+  `VertexAiRagMemoryService` disclosed as genuinely unbuilt
+  (GCP/Vertex-blocked). 2 new unit tests.
 - P11 `LlmAudioUserSimulator` (C0630, DONE): new
   `crates/adk-eval/src/llm_audio_user_simulator.rs` —
   `LlmAudioUserSimulatorConfig` (full 9-field data model) and
