@@ -22,6 +22,25 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/`: model callback dispatch (C0153/C0154/C0155, all DONE)
+**2026-08-25**
+
+- **Added:** `LlmFlow` now runs an agent's `before_model_callback`/
+  `after_model_callback`/`on_model_error_callback` chains around every
+  model call: a before-callback can short-circuit the call entirely, an
+  after-callback can replace the model's response, and an
+  on-error-callback can substitute a response instead of propagating a
+  failed model call. Mirrors the agent-level callback dispatch
+  `BaseAgent` already had.
+- **Known limitation, disclosed:** plugin-level model callbacks don't
+  run yet (blocked on a pre-existing crate-layering constraint); the
+  `google_search`-specific grounding-metadata workaround isn't ported
+  (needs infrastructure this port doesn't have yet); and a callback's
+  own state changes aren't persisted afterward — only its
+  response-replacement effect is.
+
+---
+
 ## PR #TBD — `auth/`: the auth request/response processor (C0511-C0515, all DONE)
 **2026-08-25**
 

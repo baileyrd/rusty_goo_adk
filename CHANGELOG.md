@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-flows/src/llm_flow.rs`: before/after/on-error model
+  callback dispatch (C0153/C0154/C0155, all `DONE`), ported from
+  `flows/llm_flows/base_llm_flow.py`'s `_handle_before_model_callback`/
+  `_handle_after_model_callback`/`_run_and_handle_error`.
+  `LlmFlow::handle_before_model_callback` can short-circuit a model call
+  entirely; `LlmFlow::handle_after_model_callback` can replace the
+  model's response; `LlmFlow::handle_on_model_error_callback` can
+  substitute a response instead of propagating a model-call error — all
+  three mirror `BaseAgent::handle_before_agent_callback`'s short-circuit
+  shape (C0038/C0045), wired around the existing `LlmFlow::call_model`
+  in `LlmFlow::run_one_step` without touching that already-shipped
+  method's own signature. Narrowed, disclosed at length in the module
+  doc: the plugin-manager half of dispatch doesn't run (a pre-existing
+  `adk-agents`↔`adk-models` crate-cycle block on `PluginManager`'s own
+  side); the `google_search_agent` grounding-metadata workaround isn't
+  ported (needs `agent.canonical_tools()`, blocked on C0092); and a
+  callback's state-delta mutations aren't threaded back onto the
+  resulting event, since each dispatch phase builds an independent,
+  discarded `Context` rather than sharing the source's single
+  `CallbackContext`. 8 new tests.
 - New `crates/adk-flows/src/auth_preprocessor.rs`: the auth
   request/response processor (C0511-C0515, all `DONE`), ported from
   `auth/auth_preprocessor.py`. Handles the round-trip for a tool that
