@@ -5,6 +5,30 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-eval/src/user_simulator.rs`: `UserSimulatorProvider`
+  (C0627, partial) — routes a per-`EvalCase` `UserSimulator`: a case
+  carrying a static `conversation` always gets a `StaticUserSimulator`
+  (config-agnostic); a case carrying a `conversation_scenario` dispatches
+  through `create_user_simulator` (C0626) keyed by the configured `type`
+  discriminator string, defaulting to `"llm_backed"` (matching the
+  source's `_LEGACY_DEFAULT_CONFIG_TYPE`) when no config is supplied.
+  Adaptation, disclosed: stores the config as an opaque `Value` and
+  reads its `"type"` field rather than a typed instance, matching
+  `create_user_simulator`'s own registry-by-discriminator-string shape.
+  Not ported, disclosed: the audio-decorator composition
+  (`_LlmAudioUserSimulator` wrapping) — neither `LlmBackedUserSimulator`
+  (C0628) nor `_LlmAudioUserSimulator`/`LlmAudioUserSimulatorConfig`
+  (C0630) exist in this port yet, so `create_user_simulator`'s existing
+  "no simulator registered" error is the correct behavior until those
+  land. 6 new tests.
+### Fixed
+- `capability-manifest.md`, C0200's Evidence column: corrected a
+  Status/Evidence mismatch (Status stayed `REQUIRED` but the Evidence
+  text started with a stale `"DONE:"` prefix instead of the `"Partial:"`
+  convention every sibling row uses for a row with real remaining scope
+  — `BasePlanner`'s hooks are ported, but wiring into `_nl_planning`
+  (C0176/C0179) is still open).
+### Added
 - New `crates/adk-flows/src/code_execution.rs`: the `_code_execution`
   request/response processors' `BuiltInCodeExecutor` branches
   (C0177/C0180, partial). `apply_code_execution_request` delegates to

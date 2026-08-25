@@ -142,10 +142,10 @@ fn registry() -> &'static Mutex<HashMap<String, SimulatorFactory>> {
 /// C0626: `user_simulator.register_user_simulator` — the extension point
 /// for new user-simulator types. A new simulator registers a constructor
 /// under its config's `type` discriminator string once (typically at
-/// startup); [`create_user_simulator`] (this port's stand-in for
-/// `UserSimulatorProvider`'s registry lookup, C0627, not built this
-/// batch) then dispatches to it whenever an `EvalConfig` carries a
-/// config of that type.
+/// startup); [`create_user_simulator`] (this port's stand-in for the
+/// scenario branch of `UserSimulatorProvider`'s registry lookup, C0627,
+/// now built — see [`UserSimulatorProvider`]) then dispatches to it
+/// whenever an `EvalConfig` carries a config of that type.
 pub fn register_user_simulator(config_type: impl Into<String>, factory: SimulatorFactory) {
     registry()
         .lock()
@@ -166,6 +166,96 @@ pub fn create_user_simulator(
         .get(config_type)
         .ok_or_else(|| format!("No user simulator registered for config type {config_type:?}."))?;
     factory(config)
+}
+
+/// C0627: `user_simulator_provider.UserSimulatorProvider` — provides a
+/// [`UserSimulator`] per [`crate::eval_case::EvalCase`], mixing
+/// `EvalConfig`-level simulator configuration with per-case conversation
+/// data. Dispatch: a case carrying a static `conversation` always gets a
+/// [`crate::static_user_simulator::StaticUserSimulator`] (config-agnostic);
+/// a case carrying a `conversation_scenario` gets whatever
+/// [`create_user_simulator`] resolves for the configured `type`
+/// discriminator.
+///
+/// **Adaptation, disclosed**: the source's constructor takes a whole
+/// `BaseUserSimulatorConfig` *instance* and later reads `type(config)` at
+/// dispatch time; this port stores the config as an opaque [`Value`] and
+/// reads its embedded `"type"` discriminator string instead — the same
+/// registry-by-discriminator-string shape [`create_user_simulator`]
+/// itself already established over the source's registry-by-class-object
+/// shape. `None` (no config supplied) is stored as a bare
+/// `{"type": "llm_backed"}` value, preserving the source's own
+/// `_LEGACY_DEFAULT_CONFIG_TYPE = LlmBackedUserSimulatorConfig` fallback
+/// (`"llm_backed"` is that config's own `type` discriminator literal).
+/// The source's `isinstance(user_simulator_config, BaseUserSimulatorConfig)`
+/// constructor-time check isn't ported: this port's config is already
+/// untyped `Value` until [`create_user_simulator`] resolves and parses
+/// it, so there's no stronger check to perform earlier — a malformed
+/// config surfaces as a dispatch/parse error at `provide()` time instead,
+/// not a construction-time one.
+///
+/// **Not ported, disclosed**: the audio-decorator composition (the
+/// source's `if simulator_cls is _LlmAudioUserSimulator: ...` branches in
+/// both the scenario and static paths, wrapping the resolved inner text
+/// simulator in `_LlmAudioUserSimulator`) — neither `LlmBackedUserSimulator`
+/// (C0628) nor `_LlmAudioUserSimulator`/`LlmAudioUserSimulatorConfig`
+/// (C0630) exist in this port yet, so no config type ever resolves to
+/// that decorator; [`create_user_simulator`]'s own "no simulator
+/// registered for this type" error is exactly the correct behavior for
+/// both the audio-config and non-audio-config cases until those two
+/// types land, the same disclosed narrowing [`create_user_simulator`]'s
+/// own doc already establishes for any unregistered type.
+pub struct UserSimulatorProvider {
+    config: Value,
+}
+
+impl UserSimulatorProvider {
+    /// The source's `_LEGACY_DEFAULT_CONFIG_TYPE = LlmBackedUserSimulatorConfig`,
+    /// named by that config's own `type` discriminator literal.
+    pub const LEGACY_DEFAULT_CONFIG_TYPE: &'static str = "llm_backed";
+
+    /// `UserSimulatorProvider.__init__`. `None` falls back to the legacy
+    /// default config type — see this struct's own doc.
+    pub fn new(user_simulator_config: Option<Value>) -> Self {
+        let config = user_simulator_config.unwrap_or_else(|| {
+            Value::Map(vec![(
+                "type".to_string(),
+                Value::String(Self::LEGACY_DEFAULT_CONFIG_TYPE.to_string()),
+            )])
+        });
+        Self { config }
+    }
+
+    /// `UserSimulatorProvider.provide` — see this struct's own doc for
+    /// the routing rules and the audio-decorator narrowing.
+    pub fn provide(
+        &self,
+        eval_case: &crate::eval_case::EvalCase,
+    ) -> Result<Box<dyn UserSimulator>, String> {
+        match (&eval_case.conversation, &eval_case.conversation_scenario) {
+            (None, None) => Err(
+                "Neither static invocations nor conversation scenario provided in EvalCase. \
+                 Provide exactly one."
+                    .to_string(),
+            ),
+            (Some(_), Some(_)) => Err(
+                "Both static invocations and conversation scenario provided in EvalCase. \
+                 Provide exactly one."
+                    .to_string(),
+            ),
+            (None, Some(_)) => {
+                let config_type = self
+                    .config
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or(Self::LEGACY_DEFAULT_CONFIG_TYPE);
+                create_user_simulator(config_type, &self.config)
+            }
+            (Some(conversation), None) => Ok(Box::new(
+                crate::static_user_simulator::StaticUserSimulator::new(conversation.clone()),
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -264,5 +354,91 @@ mod tests {
     fn create_user_simulator_errors_for_an_unregistered_type() {
         let result = create_user_simulator("no_such_type_registered", &Value::Null);
         assert!(result.is_err());
+    }
+
+    // --- UserSimulatorProvider (C0627) ---
+
+    use crate::conversation_scenarios::ConversationScenario;
+    use crate::eval_case::EvalCase;
+
+    fn eval_case_with_conversation() -> EvalCase {
+        EvalCase {
+            eval_id: "case-1".to_string(),
+            conversation: Some(Vec::new()),
+            ..Default::default()
+        }
+    }
+
+    fn eval_case_with_scenario() -> EvalCase {
+        EvalCase {
+            eval_id: "case-1".to_string(),
+            conversation_scenario: Some(ConversationScenario::new("hi", "plan")),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn provide_returns_a_static_simulator_for_a_conversation_case() {
+        let provider = UserSimulatorProvider::new(None);
+        let simulator = provider.provide(&eval_case_with_conversation()).unwrap();
+        // No simulator is registered for "llm_backed" in this port, so
+        // reaching a successful `Ok` at all here proves the static path
+        // never touched the registry.
+        drop(simulator);
+    }
+
+    #[test]
+    fn provide_errors_for_a_case_with_neither_conversation_nor_scenario() {
+        let provider = UserSimulatorProvider::new(None);
+        let eval_case = EvalCase {
+            eval_id: "case-1".to_string(),
+            ..Default::default()
+        };
+        let err = provider.provide(&eval_case).err().unwrap();
+        assert!(err.contains("Neither"));
+    }
+
+    #[test]
+    fn provide_errors_for_a_case_with_both_conversation_and_scenario() {
+        let provider = UserSimulatorProvider::new(None);
+        let mut eval_case = eval_case_with_conversation();
+        eval_case.conversation_scenario = Some(ConversationScenario::new("hi", "plan"));
+        let err = provider.provide(&eval_case).err().unwrap();
+        assert!(err.contains("Both"));
+    }
+
+    #[test]
+    fn provide_dispatches_a_scenario_case_through_the_registry() {
+        register_user_simulator(
+            "provider_test_simulator",
+            Box::new(|_config| Ok(Box::new(NoOpSimulator))),
+        );
+        let provider = UserSimulatorProvider::new(Some(Value::Map(vec![(
+            "type".to_string(),
+            Value::String("provider_test_simulator".to_string()),
+        )])));
+        let simulator = provider.provide(&eval_case_with_scenario());
+        assert!(simulator.is_ok());
+    }
+
+    #[test]
+    fn provide_defaults_to_the_legacy_config_type_when_none_is_given() {
+        let provider = UserSimulatorProvider::new(None);
+        let err = provider.provide(&eval_case_with_scenario()).err().unwrap();
+        // Nothing is registered for "llm_backed" in this port
+        // (LlmBackedUserSimulator, C0628, isn't built yet) — the lookup
+        // still correctly reaches the registry and fails there, not
+        // earlier.
+        assert!(err.contains(UserSimulatorProvider::LEGACY_DEFAULT_CONFIG_TYPE));
+    }
+
+    #[test]
+    fn provide_errors_for_a_scenario_case_with_an_unregistered_config_type() {
+        let provider = UserSimulatorProvider::new(Some(Value::Map(vec![(
+            "type".to_string(),
+            Value::String("no_such_type_registered_either".to_string()),
+        )])));
+        let err = provider.provide(&eval_case_with_scenario()).err().unwrap();
+        assert!(err.contains("no_such_type_registered_either"));
     }
 }
