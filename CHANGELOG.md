@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P2/P8 export-facade + MCP data-model batch (C0034, C0451, both DONE):
+  - `crates/adk-agents/src/agents.rs` (new): the `agents` package's
+    public export facade — `Agent`(alias for `LlmAgent`)/`BaseAgent`/
+    `Context`/`InvocationContext`/`LiveRequest`/`LiveRequestQueue`/
+    `LlmAgent`/`LoopAgent`/`ParallelAgent`/`RunConfig`/`SequentialAgent`,
+    same "lazy has no Rust equivalent, drop it" adaptation `plugins.rs`
+    already established. `ManagedAgent`/`McpInstructionProvider`/the 4
+    `*AgentConfig` classes stay unexported — none exist as Rust types
+    yet.
+  - `crates/adk-tools/src/mcp_connection_params.rs` (new):
+    `StdioConnectionParams`/`SseConnectionParams`/
+    `StreamableHttpConnectionParams` plus a minimal
+    `StdioServerParameters` (this port's own reimplementation of the
+    upstream `mcp` SDK's dataclass shape — no `mcp` crate dependency
+    added), each with the source's exact default timeouts.
+    `httpx_client_factory` isn't ported — no HTTP-client-factory
+    abstraction decided for MCP transports yet, same gap C0453 is
+    already blocked on.
+  - 6 new unit tests total.
 - P11 `hallucinations_v1` eval metric (C0594, DONE): new
   `crates/adk-eval/src/hallucinations_v1.rs` — the full two-stage
   hallucination-detection pipeline (segmenter LLM call splits a
