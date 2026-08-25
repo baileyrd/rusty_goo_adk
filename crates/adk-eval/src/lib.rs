@@ -204,6 +204,7 @@ pub mod hallucinations_v1;
 pub mod in_memory_eval_sets_manager;
 pub mod llm_as_judge;
 pub mod llm_as_judge_utils;
+pub mod llm_audio_user_simulator;
 pub mod llm_backed_user_simulator;
 pub mod local_eval_service;
 pub mod local_eval_set_results_manager;

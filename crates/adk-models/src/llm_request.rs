@@ -71,6 +71,15 @@ pub struct GenerateContentConfigStub {
     /// Opaque placeholder — see the module doc.
     #[rusty_serde(default)]
     pub safety_settings: Option<Value>,
+    /// Opaque placeholder for `types.SpeechConfig` — added for
+    /// `LlmAudioUserSimulatorConfig::audio_model_configuration` (C0630),
+    /// which needs somewhere to carry voice/language selection for a TTS
+    /// backend; nothing in this port reads inside it yet, only forwards
+    /// it, the same "opaque placeholder, forwarded not read" convention
+    /// this module doc already establishes for `tools`/`thinking_config`/
+    /// `safety_settings`.
+    #[rusty_serde(default)]
+    pub speech_config: Option<Value>,
     /// Opaque placeholder for `types.ToolConfig` — added in Phase 3 batch 7
     /// (`GeminiContextCacheManager`, C0141/C0143) since the fingerprint and
     /// `_apply_cache_to_request` both read/clear it, without needing its

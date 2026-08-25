@@ -5,6 +5,21 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P11 `LlmAudioUserSimulator` (C0630, DONE): new
+  `crates/adk-eval/src/llm_audio_user_simulator.rs` —
+  `LlmAudioUserSimulatorConfig` (full 9-field data model) and
+  `LlmAudioUserSimulator`, a decorator `UserSimulator` that delegates
+  text generation to a wrapped inner simulator, then feeds the result
+  through a second `BaseLlm` (resolved via `LlmRegistry`) to produce
+  audio bytes, converted to a live-input-ready `Content` via
+  `_audio_utils::to_live_input` (C0625). `GenerateContentConfigStub`
+  gained a `speech_config: Option<Value>` field (purely additive) for
+  this row's audio-config default. Not wired: the
+  `UserSimulatorProvider` composition (building the inner text
+  simulator from this config's own fields and registering the
+  `"llm_audio"` discriminator) — real, separable follow-up work;
+  `_CloudTTSLlm` (C0631, needs live GCP TTS) stays unregistered. 9 new
+  unit tests.
 - P5 session-state conformance tests (C0242, DONE): 6 new unit tests in
   `crates/adk-agents/src/services.rs`/`state.rs`, ported 1:1 from
   `test_session_service.py`'s `test_dict_valued_state_delta_replaces_stored_value`/
