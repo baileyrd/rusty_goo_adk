@@ -72,6 +72,7 @@ dependencies = [
  "adk-events",
  "adk-genai",
  "adk-models",
+ "adk-platform",
  "adk-runners",
  "adk-tools",
  "regex",

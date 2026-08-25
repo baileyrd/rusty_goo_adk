@@ -5,6 +5,31 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-flows/src/code_execution.rs`: the `_code_execution`
+  request/response processors' `BuiltInCodeExecutor` branches
+  (C0177/C0180, partial). `apply_code_execution_request` delegates to
+  `BuiltInCodeExecutor::process_llm_request` (Gemini tool marker or a
+  non-Gemini error) then always converts trailing executable-code/
+  execution-result parts to text using the executor's own delimiters,
+  regardless of executor kind — matching the source's unconditional pass.
+  `apply_code_execution_response` skips streaming partials, then for a
+  `BuiltInCodeExecutor` saves every generated image part to the artifact
+  service (`display_name`-or-UTC-timestamp filename fallback) and always
+  yields exactly one event carrying the resulting `artifact_delta`.
+  Adaptation, disclosed: both take `code_executor: &dyn BaseCodeExecutor`
+  as a caller-supplied parameter (same C0092 "caller supplies the
+  resolved bits" precedent as `agent_transfer.rs`/`request_confirmation.rs`
+  — `LlmAgent.code_executor` stays an opaque `Value`), and aren't wired
+  into `LlmFlow::preprocess`/`postprocess` yet — left ready for a future
+  C0092-unblocking batch. Adds `BaseCodeExecutor: AsAny` (blanket-
+  implemented, purely additive, same pattern as `adk-agents`/
+  `adk-models`'s own `AsAny`) so a resolved executor can be downcast onto
+  `BuiltInCodeExecutor`. Not ported this batch, disclosed: the general
+  (non-built-in) executor's `optimize_data_file` data-file extraction/
+  `explore_df`-injection request path, and its extract-execute-emit-
+  events response path with per-invocation error-retry tracking — real
+  additional surface area, not a blocker, left for a follow-up batch.
+  9 new tests.
 - `crates/adk-flows/src/llm_flow.rs`: wired transfer-to-agent recursion
   into `LlmFlow::run_one_step` (rest of C0158, now DONE) — when a
   function-response event's `transfer_to_agent` action is set, resolves

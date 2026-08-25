@@ -22,6 +22,66 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/llm_flows/_code_execution.py`: the `BuiltInCodeExecutor` request/response processor branches (C0177/C0180, partial)
+**2026-08-25**
+
+- **Added:** new `crates/adk-flows/src/code_execution.rs`.
+  `apply_code_execution_request` delegates to
+  `BuiltInCodeExecutor::process_llm_request` (appends the Gemini
+  code-execution tool marker, or errors for a non-Gemini model), then
+  always converts trailing executable-code/execution-result parts in
+  every request content to plain text using the executor's own
+  delimiters — matching the source's own unconditional pass, which runs
+  after the pre-processor regardless of which executor kind is
+  configured. `apply_code_execution_response` skips a streaming-partial
+  response, then for a `BuiltInCodeExecutor` walks the response content's
+  parts, saves every generated image to the artifact service
+  (`display_name`-or-UTC-timestamp filename fallback, matching the
+  source's own fallback shape), clears the saved part's `inline_data`,
+  and always yields exactly one event carrying the resulting
+  `artifact_delta` — even an empty one, matching the source's own
+  unconditional yield.
+- **Why this is unblocked**: every primitive both branches need —
+  `BaseCodeExecutor`, `BuiltInCodeExecutor`, `CodeExecutorContext`,
+  `CodeExecutionUtils`'s free functions — was already built (C0383/
+  C0384/C0390/C0391) in earlier batches; this is the first real caller
+  wiring them into the request/response processor shape.
+- **Adaptation, disclosed:** the source resolves `code_executor` off
+  `agent.code_executor` itself. This port's `LlmAgent.code_executor`
+  stays an opaque `Value` — the same C0092 tree-fusion gap every other
+  Phase 4 processor in this crate discloses — so both functions take
+  `code_executor: &dyn BaseCodeExecutor` as a caller-supplied parameter
+  instead, the same "caller supplies the resolved bits" precedent
+  `agent_transfer.rs`/`request_confirmation.rs` already established.
+  Neither is wired into `LlmFlow::preprocess`/`postprocess` yet — left
+  ready for a future C0092-unblocking batch.
+- **Added, purely additive:** `BaseCodeExecutor: AsAny` (blanket-
+  implemented for every `'static` type, so every existing implementor
+  needs no changes) — the same downcast mechanism
+  `adk-agents::base_agent::AsAny`/`adk-models::base_llm::AsAny` already
+  established, needed here so a resolved `&dyn BaseCodeExecutor` can be
+  checked against `BuiltInCodeExecutor`. `adk-flows` also gains a direct
+  `adk-platform` dependency (an existing in-workspace crate, already
+  depended on transitively) for `adk_platform::time::get_time()`'s
+  mockable clock, matching the timestamp-fallback filename convention.
+- **Not ported this batch, disclosed:** the general (non-built-in)
+  executor's `optimize_data_file`-enabled request path (inline-CSV
+  extraction, `explore_df` exploration-turn injection, the pandas-prelude
+  code template) and its extract-execute-emit-events response path with
+  per-invocation error-retry tracking — real additional surface area,
+  not a blocker, left for a follow-up batch.
+- **9 new tests** in `crates/adk-flows/src/code_execution.rs`: the
+  built-in tool-marker append and its non-Gemini error; the code-part
+  conversion pass running regardless of executor kind; a generated
+  image saved under its `display_name`; a generated image saved under a
+  generated timestamped name when no `display_name` is present; the
+  response event always being yielded even with no images; the
+  streaming-partial skip; the no-op behavior for a non-built-in
+  executor; and the compact timestamp formatter against a known
+  calendar date.
+
+---
+
 ## PR #TBD — `flows/llm_flows/base_llm_flow.py`: transfer-to-agent recursion in the turn loop (rest of C0158, now DONE), plus a stale-doc cluster fix
 **2026-08-25**
 
