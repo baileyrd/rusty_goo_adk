@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/llm_flows/_output_schema_processor.py`: finish the injection (C0178)
+**2026-08-25**
+
+- **Fixed:** `output_schema.rs::apply_output_schema_processor` now does
+  the actual work the module was named for: when an agent has both an
+  `output_schema` and `tools`, and the resolved model can't honor both
+  together, it injects a synthetic `set_model_response` tool
+  (`SetModelResponseTool`, C0437) plus the accompanying instruction into
+  the request. Wired directly into `LlmFlow::preprocess`, near the end
+  of the pipeline (after `contents`/`context_cache`), matching the
+  source's own `REQUEST_PROCESSORS` ordering.
+- **Why now:** this row's own module doc carried two stale blocker
+  claims. First, `LlmRequest::append_tools` — a *method* the source
+  puts directly on `LlmRequest` — genuinely can't exist in `adk-models`
+  without a crate cycle back to `adk-tools`'s `BaseTool`; but the
+  free-function equivalent (`append_tools`/`merge_declarations`, C0116)
+  already lives in `adk-tools`, and `adk-flows` already depends on that
+  crate, so it was callable from `output_schema.rs` all along. Second,
+  the claim that the wiring "needs `InvocationContext.agent` to resolve
+  a concrete `LlmAgent`" was simply never true — every sibling processor
+  in this crate (`basic::build_basic_request`, `identity::apply_identity`,
+  `instructions::build_instructions`) already solves this the same way:
+  a free function taking `&LlmAgent` directly as a parameter, not a
+  `BaseLlmRequestProcessor` trait object reading through
+  `InvocationContext`. `apply_output_schema_processor` follows the
+  identical shape.
+- **Testing:** 5 new tests (no-op without an `output_schema`, no-op
+  without `tools`, no-op in task mode, injects the tool + instruction
+  when gated true, errors when the model can't be resolved), plus the
+  existing `preprocess`/`run_one_step`/`run_async_impl` integration
+  tests (all 271 `adk-flows` tests) still passing unchanged, confirming
+  the new wiring didn't disturb anything already covered.
+
+---
+
 ## PR #TBD — `tests/unittests/artifacts/test_artifact_service.py`: cross-backend `ArtifactService` parity suite (C0278)
 **2026-08-25**
 

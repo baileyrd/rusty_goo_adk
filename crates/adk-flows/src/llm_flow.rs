@@ -7,7 +7,8 @@
 //! now drives a real (if narrowed) request → model call → response turn,
 //! using every processor this crate has built so far
 //! ([`crate::basic`], [`crate::identity`], [`crate::instructions`],
-//! [`crate::contents`], [`crate::context_cache`]).
+//! [`crate::contents`], [`crate::context_cache`],
+//! [`crate::output_schema`]).
 //!
 //! **Scope, disclosed** — this is the single non-live step
 //! (`_run_one_step_async`'s core, not the full engine):
@@ -73,6 +74,7 @@ use crate::context_cache::{apply_context_cache, ContextCacheError};
 use crate::identity::apply_identity;
 use crate::instructions::{build_instructions, InstructionsError};
 use crate::interactions::find_previous_interaction_state;
+use crate::output_schema::apply_output_schema_processor;
 use crate::processor::BoxFuture;
 use crate::{basic, basic::BasicRequestError};
 
@@ -360,6 +362,11 @@ impl LlmFlow {
             &agent_name,
             &ctx.invocation_id,
         )?;
+
+        // C0178: `_output_schema_processor` — the source runs this near
+        // the end of its `REQUEST_PROCESSORS` list (after `contents`/
+        // `context_cache_processor`), so it's placed here to match.
+        apply_output_schema_processor(&self.llm_agent, &mut request)?;
 
         Ok(request)
     }
