@@ -166,6 +166,7 @@ pub mod environment_toolset;
 pub mod example_tool;
 pub mod execute_tool;
 pub mod exit_loop_tool;
+pub mod finish_task_tool;
 pub mod forwarding_artifact_service;
 pub mod function_tool;
 pub mod gemini_schema_util;

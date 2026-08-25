@@ -16,9 +16,10 @@
 //! Rust equivalent — traits carry no data — so [`BaseEnvironment::is_initialized`]
 //! is a required method instead; a concrete implementor backs it with its
 //! own interior-mutable state (see `local_environment`'s `AtomicBool`).
-//! This property genuinely matters, not just documentation: `skill_toolset.py`
-//! (not built this batch) reads `self._env.is_initialized` before
-//! deciding whether to call `initialize()`, and the not-yet-built
+//! This property genuinely matters, not just documentation: `skill_toolset.rs`
+//! (C0408-C0411, shipped shortly after this file — see its own
+//! `is_initialized`/`initialize` call sites) reads `self._env.is_initialized`
+//! before deciding whether to call `initialize()`, and the not-yet-built
 //! Daytona/E2B environments (C0775/C0776) set it directly too.
 //!
 //! **Adaptation**: `initialize()`/`close()` return `BoxFuture<'_, ()>`/

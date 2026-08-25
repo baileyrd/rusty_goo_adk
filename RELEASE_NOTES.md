@@ -22,6 +22,50 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/llm/task/_finish_task_tool.py`: `FinishTaskTool` (C0099)
+**2026-08-25**
+
+- **Added:** `FinishTaskTool` — the tool a task-mode agent's model calls
+  to signal it has finished its delegated task, instead of returning
+  plain text. Wraps a non-object `output_schema` under a `result` key so
+  it can still be expressed as a `FunctionDeclaration`'s (always-object)
+  `parameters`, hoisting any `$defs` to the wrapped schema's root so
+  `$ref` pointers inside it stay valid. Plus its two pure helpers:
+  `get_output_wrapper_key` (the object-vs-non-object schema decision)
+  and `is_finish_task_terminal_fr` (recognizes a terminal `finish_task`
+  function response by its `result` field).
+- **Disclosed narrowings:** `FinishTaskTool::new` takes
+  `output_schema: Option<Value>` directly rather than the source's whole
+  `task_agent: LlmAgent` — the source's own `self._task_agent_name =
+  task_agent.name` is set in `__init__` but never read anywhere else in
+  the source tree, so nothing is lost dropping it. `run_async` never
+  validates `args` against the schema and always succeeds; this port has
+  no Pydantic-equivalent validator, the same limitation
+  `set_model_response_tool.rs` (C0437) already discloses for the
+  identical shape — the source's `{'error': '...validation errors...'}`
+  retry path is not ported. A caller relying on that retry loop won't
+  get it; a real, disclosed gap, not a silent one.
+- **Scope, disclosed:** this closes out the tool itself, not the
+  task-mode turn loop that would actually construct and wire it into a
+  running agent's tool list, or the caller that reads a `finish_task`
+  call's `output` argument directly (the source's own comment:
+  `run_async` deliberately never writes `actions.finish_task`). Both
+  need infrastructure (C0333/C0834/C0887, the multi-step tool-calling
+  loop) this port doesn't have yet — see `llm_flow.rs`'s own disclosed
+  "no turn loop / tool execution" scope.
+- **Bundled:** a small stale-doc fix in `base_environment.rs` — it cited
+  `skill_toolset.py` as "not built this batch" for a dependency that
+  shipped about 24 minutes later the same day; corrected to point at the
+  real (and correct) call sites in `skill_toolset.rs`.
+- **Testing:** 13 new tests covering the wrapper-key decision (object
+  schema, non-object schema, the default schema), declaration building
+  (unwrapped, wrapped, `$defs` hoisting), the description's conditional
+  suffix, `process_llm_request`'s instruction/declaration injection,
+  `run_async`'s always-succeeds behavior, and all four
+  `is_finish_task_terminal_fr` branches.
+
+---
+
 ## PR #TBD — `flows/llm_flows/compaction.py`: the `compaction` request processor (C0173), plus an `AgentTool` stale-doc fix
 **2026-08-25**
 
