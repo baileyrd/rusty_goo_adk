@@ -4,6 +4,17 @@ All notable changes to this repo are documented here.
 Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
+### Fixed
+- P7 `ParallelAgent` early cancellation (C0336, DONE): sub-agents now
+  spawn into a `rusty_tokio::task::JoinSet` instead of a plain
+  `Vec<JoinHandle<_>>`, drained via `join_next()` (completion order,
+  not spawn order). The instant a completed sub-agent's events include
+  one with `actions.escalate`, every sibling still in the set —
+  running or already finished but not yet drained — is aborted and its
+  events discarded, closing the "a sibling already in flight when one
+  escalates finishes normally" gap this row had been carrying. New
+  test `an_escalating_sibling_cancels_a_still_running_sibling` verifies
+  real cancellation by wall-clock time, not just event absence.
 ### Added
 - P11 `LlmAudioUserSimulator` (C0630, DONE): new
   `crates/adk-eval/src/llm_audio_user_simulator.rs` —
