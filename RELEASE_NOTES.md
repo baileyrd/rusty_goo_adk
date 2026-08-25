@@ -22,6 +22,33 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `runners/`: node-path resolution helpers (C0834/C0856/C0857/C0858, all DONE)
+**2026-08-25**
+
+- **Added:** `find_active_task_scope` (C0834) — a two-pass backward scan
+  over session events locating a still-open task-delegation's scope
+  (either function-call delegation or a workflow-node task-mode agent).
+  A scope closes only on a terminal `finish_task` function response; a
+  validation-error response leaves it open. The `finish_task` name/result
+  constants and per-event predicate are duplicated locally from
+  `adk-tools::finish_task_tool`, since `adk-tools` depends on
+  `adk-runners` and the reverse dependency would be a crate cycle.
+- **Added:** `extract_resume_inputs`/`validate_new_message`/
+  `resolve_invocation_id_from_fr` (C0856/C0857/C0858) — the resume-attempt
+  detection and invocation-id-resolution trio the node-path turn setup
+  needs. Ported exactly, including the source's truthy-id filtering,
+  the mixed-function-response-and-text rejection, and both of
+  `resolve_invocation_id_from_fr`'s error conditions.
+- **Known limitation, disclosed:** all four functions are built ahead of
+  their real caller (`_run_node_async`, the workflow/node/task-delegation
+  turn loop) — that engine still isn't wired into `Runner`, so nothing in
+  this port calls these yet. `resolve_invocation_id_from_fr`'s error
+  messages sort their offending ids for deterministic output, a cosmetic
+  divergence from the source's hash-order-dependent Python `set`
+  interpolation.
+
+---
+
 ## PR #TBD — `sessions/`: `InMemorySessionService` state-scoping (C0208/C0212/C0214, DONE — C0204 partial)
 **2026-08-25**
 
