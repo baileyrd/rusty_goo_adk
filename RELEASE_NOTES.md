@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/llm_flows/request_confirmation.py`: validation + re-execution (C0172)
+**2026-08-25**
+
+- **Fixed:** `request_confirmation.rs::resolve_confirmation_targets` now
+  ports the source's full validation chain for a confirmed tool call:
+  the original function call must be registered in session history,
+  authored by the current agent (a different agent's call is silently
+  skipped, not errored), point at a registered tool that either
+  statically requires confirmation or was dynamically requested earlier
+  in the session, and match its history entry's name and arguments
+  exactly. `request_confirmation.rs::process_request_confirmations`
+  ports the processor's own Steps 1-4: parse `adk_request_confirmation`
+  approvals from the last user-authored event, drop confirmations
+  already consumed by a prior LLM step, resolve targets, and re-execute
+  the confirmed tools via `functions::execute_function_calls` (the
+  already-built equivalent of the source's
+  `handle_function_call_list_async`).
+- **Why now:** this row's own module doc carried the same kind of
+  stale blocker claim C0178 turned out to have — it said
+  `BaseTool`/`ToolConfirmation`/`ToolContext` "don't exist in this port
+  yet," but all three now live in `adk-tools`, which `adk-flows`
+  already depends on. Both new functions take `tools_dict: &ToolsDict`
+  as a caller-supplied parameter, the same "caller supplies the
+  resolved bits" adaptation `agent_transfer.rs`'s
+  `get_transfer_targets`/`get_agent_to_run` already established.
+- **Known limitation:** still not wired into `LlmFlow::preprocess`.
+  The source auto-builds `tools_dict` from `LlmAgent.canonical_tools()`
+  plus a synthesized transfer tool — that needs the `BaseAgent`/
+  `LlmAgent` tree fusion (C0092), which is still genuinely blocked (the
+  same row `agent_transfer.rs` itself sits behind). Wiring this into
+  the real pipeline today would only ever see an empty `tools_dict`,
+  turning every confirmation attempt into a "tool is not registered"
+  error — left unwired and ready for a future C0092-unblocking batch to
+  call directly.
+- **Testing:** 16 new tests — 9 covering each `resolve_confirmation_targets`
+  validation branch (including the happy path and the different-agent
+  skip), 7 covering `process_request_confirmations`'s Steps 1-4
+  (including the full parse → dedup → resolve → re-execute happy
+  path and the already-consumed-confirmation drop).
+
+---
+
 ## PR #TBD — `flows/llm_flows/_output_schema_processor.py`: finish the injection (C0178)
 **2026-08-25**
 
