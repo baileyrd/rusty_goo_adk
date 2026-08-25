@@ -5,6 +5,31 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-flows/src/llm_flow.rs`: `LlmFlow`'s tool-declaration
+  commit phase (C0151, partial), ported from `base_llm_flow.py`'s
+  `_process_agent_tools`. `LlmFlow::preprocess` now calls each
+  caller-supplied tool's `process_llm_request` serially, in
+  `LlmFlow::tools`' list order, right after `output_schema` — matching
+  the source's own ordering guarantee that later tools can observe
+  earlier tools' mutations to the outgoing `LlmRequest` (e.g.
+  `GoogleSearchTool` writing `llm_request.model`). New `LlmFlow::tools`
+  field + `with_tools` builder, kept separate from the pre-existing
+  `tools_dict`/`with_tools_dict` since a `HashMap` has no ordering.
+  Still narrowed: automatic resolution from `agent.tools` stays blocked
+  on C0092. 2 new tests.
+- New `crates/adk-flows/src/google_search_agent_tool.rs`:
+  `create_google_search_agent`/`create_google_search_agent_tool`
+  (C0429, DONE), ported from `tools/google_search_agent_tool.py`. Builds
+  the dedicated single-tool sub-agent (`LlmAgent` + `LlmFlow` wired with
+  just `GoogleSearchTool`, via the C0151 batch above) that lets
+  `google_search` coexist with other tools on an agent — Gemini
+  restricts `google_search` to sole-tool use. Adaptation, disclosed:
+  `GoogleSearchAgentTool`'s source subclass adds nothing over a plain
+  `AgentTool` in this port, since its only added behavior
+  (`propagate_grounding_metadata`) has no consumer here yet (that
+  workaround is itself blocked on C0092) — so this batch exposes the
+  constructor functions directly rather than a no-op newtype. 2 new
+  tests.
 - New `crates/adk-tools/src/base_authenticated_tool.rs` and
   `crates/adk-tools/src/authenticated_function_tool.rs`: `BaseAuthenticatedTool`/
   `AuthenticatedFunctionTool` (C0412, DONE), ported from

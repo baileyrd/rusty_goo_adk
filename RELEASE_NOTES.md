@@ -22,6 +22,24 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/`/`tools/`: tool-declaration commit phase + Google Search workaround agent (C0151 partial, C0429 DONE)
+**2026-08-25**
+
+- **Added:** `LlmFlow::preprocess` now commits each caller-supplied
+  tool's declaration into the outgoing `LlmRequest` serially, in list
+  order, so later tools can observe earlier tools' mutations (e.g. a
+  search tool setting the request's model before another tool checks
+  it). Built on top of that: `create_google_search_agent_tool`, a
+  ready-to-use sub-agent tool that lets `google_search` coexist with
+  other tools on the same agent — a Gemini restriction the source works
+  around by delegating search to a dedicated one-tool sub-agent.
+- **Known limitation, disclosed:** automatic tool resolution from an
+  agent's own `tools` list still isn't wired (needs the still-open
+  `InvocationContext`→`LlmAgent` resolution gap, C0092) — both pieces
+  land ahead of that caller, ready for it once it lands.
+
+---
+
 ## PR #TBD — `tools/`: credential-gated tools (C0412, DONE)
 **2026-08-25**
 
