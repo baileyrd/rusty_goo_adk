@@ -22,6 +22,63 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `eval/`: P11 local LLM-judge metrics batch (C0592/C0593/C0595/C0598, all DONE)
+**2026-08-25**
+
+- **Added:** four new evaluators, all built on C0600's `LlmAsJudge` harness
+  (`evaluate_invocations_via_llm_judge`), which landed the day before this
+  batch and — per a scoping pass that re-verified the claim directly
+  against both the Rust and Python source — turned out to unblock these
+  four metrics immediately, none of them actually needing GCP the way
+  `metric_evaluator_registry.rs`'s own (now-corrected) module doc implied:
+  - `crates/adk-eval/src/final_response_match_v2.rs` —
+    `FinalResponseMatchV2Evaluator` (C0592): LLM-as-judge binary
+    valid/invalid scoring, majority-vote aggregation across samples, and
+    `_parse_critique`'s tolerant `is_the_agent_response_valid`/`..._invalid`
+    field-name fallback, ported verbatim (the `regex` crate's char classes
+    match Python's `re` here with no lookaround needed).
+  - `rubric_based_tool_use_quality_v1.rs` — `RubricBasedToolUseV1Evaluator`
+    (C0595): per-rubric yes/no judging over tool-call/response JSON.
+  - `rubric_based_final_response_quality_v1.rs` —
+    `RubricBasedFinalResponseQualityV1Evaluator` (C0593): per-rubric
+    yes/no judging against `FINAL_RESPONSE_QUALITY`-typed rubrics, with a
+    disclosed narrowing on the agent-name-resolution fallback (an
+    arbitrary, not deterministic-first, `HashMap` entry — see the file's
+    own doc).
+  - `rubric_based_multi_turn_trajectory_evaluator.rs` —
+    `RubricBasedMultiTurnTrajectoryEvaluator` (C0598): the only
+    locally-implemented multi-turn evaluator — assembles the full
+    dialogue history, marks every turn but the last `NotEvaluated`, and
+    runs a single judge call on the last turn with the accumulated
+    context. Its own `_assemble_dialogue_history` reads
+    `AgentDetails::tool_declarations`'s opaque `Value` entries
+    defensively, disclosed since nothing in this port populates that
+    field with real data yet either way.
+- **Widened** (backwards-compatibly): `RubricBasedEvaluator`'s
+  `create_effective_rubrics_list`/`get_effective_rubrics_list` move from
+  `&mut self`/`&self -> &[Rubric]` to `&self` (via an interior-mutable
+  `RefCell`) /`&self -> Vec<Rubric>` (owned) — three of the four new
+  evaluators pass `format_auto_rater_prompt` to the harness as a plain
+  `Fn` closure, which needs interior mutability to recompute the
+  effective-rubrics cache per invocation. Every existing call site
+  already bound its receiver `mut`, so nothing breaks; this batch is
+  `RubricBasedEvaluator`'s first real caller.
+- **Disclosed, structural (not GCP-related) blocker on all four:** none
+  can register into `MetricEvaluatorRegistry` — the harness is inherently
+  async (it awaits a judge-model call), while `Evaluator::evaluate_invocations`
+  and the registry's `EvaluatorFactory` are both deliberately sync, to
+  avoid breaking `TrajectoryEvaluator`/`RougeEvaluator`/`CustomMetricEvaluator`.
+  `MetricInfoProvider`s for all four already existed (C0604) and stay
+  unregistered for the same reason.
+- **Manifest housekeeping:** corrected `metric_evaluator_registry.rs`'s
+  module doc, which blamed all 12 not-yet-registered evaluators on "the
+  still-deferred `LlmAsJudge` harness" even after that harness shipped.
+- **Tests:** 24 new tests across the four new files (prompt formatting,
+  aggregation, the multi-turn NotEvaluated-padding behavior, and one
+  end-to-end pass per evaluator against a queue-backed fake judge model).
+
+---
+
 ## PR #TBD — `agents/`: P5 Session/State closure batch (C0204 DONE; C0206/C0209/C0211 manifest corrections)
 **2026-08-25**
 
