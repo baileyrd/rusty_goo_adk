@@ -394,6 +394,7 @@ impl SessionService for NoopSessionService {
                 state: state.unwrap_or_default(),
                 events: Vec::new(),
                 last_update_time: adk_platform::time::get_time(),
+                storage_update_marker: None,
             })
         })
     }

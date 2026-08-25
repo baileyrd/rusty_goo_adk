@@ -512,6 +512,7 @@ impl SessionService for InMemorySessionService {
                 state: session_state,
                 events: Vec::new(),
                 last_update_time: adk_platform::time::get_time(),
+                storage_update_marker: None,
             };
             sessions
                 .entry(app_name.to_string())

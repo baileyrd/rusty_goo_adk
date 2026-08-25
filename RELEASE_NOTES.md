@@ -22,6 +22,43 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`: P5 Session/State closure batch (C0204 DONE; C0206/C0209/C0211 manifest corrections)
+**2026-08-25**
+
+- **Added:** `crates/adk-agents/src/session.rs`'s `Session` (C0204) now
+  derives `Serialize`/`Deserialize` with `#[rusty_serde(rename_all =
+  "camelCase", deny_unknown_fields)]`, matching the source's
+  `alias_generator=to_camel` + `extra='forbid'` — the same pattern
+  `TaskRequest`/`ArtifactVersion`/`GetSessionConfig` already use. Also
+  adds a private, `#[rusty_serde(skip)]`-annotated
+  `storage_update_marker: Option<String>` field matching the source's
+  `_storage_update_marker` `PrivateAttr`. Purely additive: a grep
+  confirmed nothing in the crate serialized/deserialized `Session`
+  before this change, so the only other edits needed were the two
+  in-crate struct-literal constructors (`invocation_context.rs`,
+  `services.rs`) picking up the new field.
+- **Manifest housekeeping:** C0209 (`_session_util` state-scoping
+  helpers) and C0211 (`InMemorySessionService`'s storage shape, with the
+  deprecated `*_sync` mirror methods correctly disclosed as N/A — this
+  port has no legacy sync API to mirror in the first place) were both
+  already fully implemented and tested but left at `REQUIRED` —
+  corrected to `DONE`. C0206's evidence wrongly stated `get_user_state`
+  wasn't ported; it was, as part of an earlier C0214 batch — corrected
+  in place, `StateSchemaError` remains disclosed as blocked.
+- **Investigated, confirmed correctly blocked (no code changed):**
+  C0205/C0206's `StateSchemaError` (needs Pydantic-style per-key schema
+  reflection against an arbitrary user-defined type — no Rust
+  equivalent without a new dependency or a from-scratch
+  schema-descriptor design) and C0210 (package export surface — three
+  of the four session backends this row names, plus the whole
+  `adk-sessions` crate, don't exist in this port yet). Both stay
+  `REQUIRED` with an expanded disclosure rather than a shallow stub.
+- **Tests:** `crates/adk-agents/src/session.rs::tests::
+  {round_trips_through_json_with_camel_case, rejects_an_unknown_field,
+  storage_update_marker_is_never_serialized}` (3 new tests).
+
+---
+
 ## PR #TBD — `agents/`+`runners/`: plugin close timeout + export surface (C0352/C0361, both DONE)
 **2026-08-25**
 

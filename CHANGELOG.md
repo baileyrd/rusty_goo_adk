@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P5 Session/State closure batch (C0204 DONE; C0206/C0209/C0211 manifest
+  corrections): `crates/adk-agents/src/session.rs`'s `Session` now derives
+  `Serialize`/`Deserialize` with `#[rusty_serde(rename_all = "camelCase",
+  deny_unknown_fields)]` (matching the source's `alias_generator=to_camel`
+  + `extra='forbid'`) and gains a private, never-serialized
+  `storage_update_marker: Option<String>` field (matching the source's
+  `_storage_update_marker` `PrivateAttr`) — unread by anything in this
+  crate today, its real caller being a future `DatabaseSessionService`
+  (C0221). Purely additive: nothing in the crate serialized/deserialized
+  `Session` before this change.
+- **Manifest housekeeping:** C0209 (`_session_util` state-scoping helpers)
+  and C0211 (`InMemorySessionService`'s storage shape + disclosed-N/A
+  `*_sync` mirrors) were both already fully implemented and tested, but
+  left at `REQUIRED` — corrected to `DONE`. C0206's evidence wrongly
+  claimed `get_user_state` wasn't ported; it was (as part of the earlier
+  C0214 batch) — corrected in place. C0210 (package export surface) and
+  C0205/C0206's `StateSchemaError` piece were re-verified directly against
+  the Python source and confirmed genuinely blocked (three of four
+  session backends, and the whole `adk-sessions` crate, don't exist yet;
+  schema-reflection has no Rust equivalent without a new dependency) —
+  left `REQUIRED` with an expanded disclosure rather than stubbed.
 - Plugin package close/export closure (C0352/C0361, both DONE — plus
   C0360's stale manifest status corrected): new `crates/adk-agents/src/
   plugins.rs` re-exports `BasePlugin`/`PluginManager`/`LoggingPlugin`
