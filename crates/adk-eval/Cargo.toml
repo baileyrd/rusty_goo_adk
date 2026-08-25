@@ -17,8 +17,22 @@ adk-errors = { path = "../adk-errors" }
 adk-events = { path = "../adk-events" }
 adk-genai = { path = "../adk-genai" }
 adk-platform = { path = "../adk-platform" }
+# `LlmBackedUserSimulator` (C0628) needs the real `BaseLlm`/`LlmRegistry`
+# to resolve and call a model -- verified no cycle: nothing in
+# `adk-models`'s own dependency chain (`adk-agents`/`adk-genai`/
+# `adk-platform`/`adk-features`/`adk-events`) depends back on `adk-eval`,
+# same "plain new leaf edge" bar as this crate's existing `adk-agents`
+# adoption (C0624).
+adk-models = { path = "../adk-models" }
 rusty_serde = { workspace = true }
 rusty_err = { workspace = true }
+# `LlmBackedUserSimulator::get_next_user_message` (C0628) is this
+# crate's first genuinely async trait method -- it awaits
+# `BaseLlm::generate_content_async`, so `UserSimulator` widens to async
+# too (zero external callers verified, same "internal signature change,
+# not a breaking one" bar already used for `apply_code_execution_response`/
+# `process_auth_responses`).
+rusty_tokio = { workspace = true }
 unicode-general-category = "1.1.0"
 # `rubric_based_evaluator` (C0601, partial) needs real regex matching for
 # `DefaultAutoRaterResponseParser`'s 4 line-anchored patterns -- already a
