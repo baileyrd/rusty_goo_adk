@@ -48,6 +48,7 @@ use adk_genai::content::Content;
 use rusty_serde::value::Value;
 use rusty_serde::{Deserialize, Serialize};
 
+use crate::conversation_scenarios::ConversationScenario;
 use crate::evaluator::Evaluator;
 
 /// Same shape as `adk-tools::base_tool::BoxFuture` — this crate's own
@@ -155,12 +156,47 @@ where
 
 /// A registered [`UserSimulator`] constructor. See this module's doc for
 /// why this replaces the source's config-*class*-keyed registry.
-pub type SimulatorFactory =
-    Box<dyn Fn(&Value) -> Result<Box<dyn UserSimulator>, String> + Send + Sync>;
+///
+/// **Widened for C0627**: originally `Fn(&Value) -> ...`; a
+/// scenario-driven simulator (e.g. [`crate::llm_backed_user_simulator::LlmBackedUserSimulator`])
+/// needs the [`crate::conversation_scenarios::ConversationScenario`] too
+/// — the source's own `_ScenarioUserSimulatorFactory` Protocol takes both
+/// `config` and `conversation_scenario`. Zero external callers verified
+/// at the time of the change (same bar already used for
+/// `UserSimulator::get_next_user_message`'s own C0628 widening).
+pub type SimulatorFactory = Box<
+    dyn Fn(&Value, &ConversationScenario) -> Result<Box<dyn UserSimulator>, String> + Send + Sync,
+>;
 
 fn registry() -> &'static Mutex<HashMap<String, SimulatorFactory>> {
     static REGISTRY: OnceLock<Mutex<HashMap<String, SimulatorFactory>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+    REGISTRY.get_or_init(|| {
+        let mut map: HashMap<String, SimulatorFactory> = HashMap::new();
+        // `user_simulator_provider.py`'s own module-level
+        // `register_user_simulator(LlmBackedUserSimulatorConfig,
+        // LlmBackedUserSimulator)` — Rust has no module-import-time side
+        // effects, so this port seeds the one built-in registration this
+        // batch can support (C0628, DONE) here instead, in the registry's
+        // own lazy init, the same "auto-register built-ins in the lazy
+        // static" shape `metric_evaluator_registry::default_registry`
+        // already established. `_LlmAudioUserSimulator`/
+        // `LlmAudioUserSimulatorConfig` (C0630) still don't exist in this
+        // port, so that second source registration line stays unported.
+        map.insert(
+            UserSimulatorProvider::LEGACY_DEFAULT_CONFIG_TYPE.to_string(),
+            Box::new(
+                |config: &Value, conversation_scenario: &ConversationScenario| {
+                    crate::llm_backed_user_simulator::LlmBackedUserSimulator::new(
+                        config,
+                        conversation_scenario.clone(),
+                    )
+                    .map(|simulator| Box::new(simulator) as Box<dyn UserSimulator>)
+                    .map_err(|error| error.to_string())
+                },
+            ) as SimulatorFactory,
+        );
+        Mutex::new(map)
+    })
 }
 
 /// C0626: `user_simulator.register_user_simulator` — the extension point
@@ -169,7 +205,11 @@ fn registry() -> &'static Mutex<HashMap<String, SimulatorFactory>> {
 /// startup); [`create_user_simulator`] (this port's stand-in for the
 /// scenario branch of `UserSimulatorProvider`'s registry lookup, C0627,
 /// now built — see [`UserSimulatorProvider`]) then dispatches to it
-/// whenever an `EvalConfig` carries a config of that type.
+/// whenever an `EvalConfig` carries a config of that type. Overwrites any
+/// existing registration for the same `config_type`, including the
+/// built-in `"llm_backed"` one this module's own [`registry`] seeds — the
+/// same override-friendly behavior the source's plain-dict registration
+/// already has.
 pub fn register_user_simulator(config_type: impl Into<String>, factory: SimulatorFactory) {
     registry()
         .lock()
@@ -178,10 +218,12 @@ pub fn register_user_simulator(config_type: impl Into<String>, factory: Simulato
 }
 
 /// Looks up and invokes the constructor registered under `config_type`
-/// via [`register_user_simulator`].
+/// via [`register_user_simulator`] (or the built-in `"llm_backed"`
+/// registration [`registry`] seeds).
 pub fn create_user_simulator(
     config_type: &str,
     config: &Value,
+    conversation_scenario: &ConversationScenario,
 ) -> Result<Box<dyn UserSimulator>, String> {
     let registry = registry()
         .lock()
@@ -189,7 +231,7 @@ pub fn create_user_simulator(
     let factory = registry
         .get(config_type)
         .ok_or_else(|| format!("No user simulator registered for config type {config_type:?}."))?;
-    factory(config)
+    factory(config, conversation_scenario)
 }
 
 /// C0627: `user_simulator_provider.UserSimulatorProvider` — provides a
@@ -218,17 +260,23 @@ pub fn create_user_simulator(
 /// config surfaces as a dispatch/parse error at `provide()` time instead,
 /// not a construction-time one.
 ///
+/// **`"llm_backed"` now wired, C0627**: [`registry`] seeds a built-in
+/// `"llm_backed"` registration resolving to
+/// [`crate::llm_backed_user_simulator::LlmBackedUserSimulator`] (C0628) —
+/// a scenario case with no config, or an explicit `"llm_backed"` config,
+/// now successfully dispatches through [`create_user_simulator`] instead
+/// of hitting its "no simulator registered" error.
+///
 /// **Not ported, disclosed**: the audio-decorator composition (the
 /// source's `if simulator_cls is _LlmAudioUserSimulator: ...` branches in
 /// both the scenario and static paths, wrapping the resolved inner text
-/// simulator in `_LlmAudioUserSimulator`) — neither `LlmBackedUserSimulator`
-/// (C0628) nor `_LlmAudioUserSimulator`/`LlmAudioUserSimulatorConfig`
-/// (C0630) exist in this port yet, so no config type ever resolves to
-/// that decorator; [`create_user_simulator`]'s own "no simulator
-/// registered for this type" error is exactly the correct behavior for
-/// both the audio-config and non-audio-config cases until those two
-/// types land, the same disclosed narrowing [`create_user_simulator`]'s
-/// own doc already establishes for any unregistered type.
+/// simulator in `_LlmAudioUserSimulator`) — `_LlmAudioUserSimulator`/
+/// `LlmAudioUserSimulatorConfig` (C0630) still don't exist in this port,
+/// so no config type resolves to that decorator; [`create_user_simulator`]'s
+/// own "no simulator registered for this type" error remains the correct
+/// behavior for an audio-config case until C0630 lands and registers it,
+/// the same disclosed narrowing [`create_user_simulator`]'s own doc
+/// already establishes for any unregistered type.
 pub struct UserSimulatorProvider {
     config: Value,
 }
@@ -267,13 +315,13 @@ impl UserSimulatorProvider {
                  Provide exactly one."
                     .to_string(),
             ),
-            (None, Some(_)) => {
+            (None, Some(conversation_scenario)) => {
                 let config_type = self
                     .config
                     .get("type")
                     .and_then(Value::as_str)
                     .unwrap_or(Self::LEGACY_DEFAULT_CONFIG_TYPE);
-                create_user_simulator(config_type, &self.config)
+                create_user_simulator(config_type, &self.config, conversation_scenario)
             }
             (Some(conversation), None) => Ok(Box::new(
                 crate::static_user_simulator::StaticUserSimulator::new(conversation.clone()),
@@ -367,7 +415,7 @@ mod tests {
     fn register_and_create_dispatches_by_the_type_discriminator() {
         register_user_simulator(
             "no_op_test_simulator",
-            Box::new(|_config| Ok(Box::new(NoOpSimulator))),
+            Box::new(|_config, _conversation_scenario| Ok(Box::new(NoOpSimulator))),
         );
         let simulator = create_user_simulator(
             "no_op_test_simulator",
@@ -375,19 +423,23 @@ mod tests {
                 "type".to_string(),
                 Value::String("no_op_test_simulator".to_string()),
             )]),
+            &crate::conversation_scenarios::ConversationScenario::new("hi", "plan"),
         );
         assert!(simulator.is_ok());
     }
 
     #[test]
     fn create_user_simulator_errors_for_an_unregistered_type() {
-        let result = create_user_simulator("no_such_type_registered", &Value::Null);
+        let result = create_user_simulator(
+            "no_such_type_registered",
+            &Value::Null,
+            &crate::conversation_scenarios::ConversationScenario::new("hi", "plan"),
+        );
         assert!(result.is_err());
     }
 
     // --- UserSimulatorProvider (C0627) ---
 
-    use crate::conversation_scenarios::ConversationScenario;
     use crate::eval_case::EvalCase;
 
     fn eval_case_with_conversation() -> EvalCase {
@@ -410,10 +462,17 @@ mod tests {
     fn provide_returns_a_static_simulator_for_a_conversation_case() {
         let provider = UserSimulatorProvider::new(None);
         let simulator = provider.provide(&eval_case_with_conversation()).unwrap();
-        // No simulator is registered for "llm_backed" in this port, so
-        // reaching a successful `Ok` at all here proves the static path
-        // never touched the registry.
         drop(simulator);
+    }
+
+    #[test]
+    fn provide_dispatches_an_explicit_llm_backed_config_to_the_built_in_registration() {
+        let provider = UserSimulatorProvider::new(Some(Value::Map(vec![(
+            "type".to_string(),
+            Value::String(UserSimulatorProvider::LEGACY_DEFAULT_CONFIG_TYPE.to_string()),
+        )])));
+        let simulator = provider.provide(&eval_case_with_scenario());
+        assert!(simulator.is_ok());
     }
 
     #[test]
@@ -440,7 +499,7 @@ mod tests {
     fn provide_dispatches_a_scenario_case_through_the_registry() {
         register_user_simulator(
             "provider_test_simulator",
-            Box::new(|_config| Ok(Box::new(NoOpSimulator))),
+            Box::new(|_config, _conversation_scenario| Ok(Box::new(NoOpSimulator))),
         );
         let provider = UserSimulatorProvider::new(Some(Value::Map(vec![(
             "type".to_string(),
@@ -452,13 +511,15 @@ mod tests {
 
     #[test]
     fn provide_defaults_to_the_legacy_config_type_when_none_is_given() {
+        // `registry()` now seeds a built-in `"llm_backed"` registration
+        // (C0627, this batch) resolving to a real `LlmBackedUserSimulator`
+        // — the legacy default dispatches successfully instead of hitting
+        // "no simulator registered", matching the source's own
+        // "preserves the pre-discriminator behavior of always
+        // instantiating LlmBackedUserSimulator" intent.
         let provider = UserSimulatorProvider::new(None);
-        let err = provider.provide(&eval_case_with_scenario()).err().unwrap();
-        // Nothing is registered for "llm_backed" in this port
-        // (LlmBackedUserSimulator, C0628, isn't built yet) — the lookup
-        // still correctly reaches the registry and fails there, not
-        // earlier.
-        assert!(err.contains(UserSimulatorProvider::LEGACY_DEFAULT_CONFIG_TYPE));
+        let simulator = provider.provide(&eval_case_with_scenario());
+        assert!(simulator.is_ok());
     }
 
     #[test]

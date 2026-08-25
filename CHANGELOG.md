@@ -5,6 +5,24 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-eval/src/user_simulator.rs`: `UserSimulatorProvider` now
+  genuinely dispatches `"llm_backed"` scenario cases (C0627, partial →
+  closes its own disclosed gap), ported from
+  `user_simulator_provider.py`'s module-level
+  `register_user_simulator(LlmBackedUserSimulatorConfig,
+  LlmBackedUserSimulator)`. Since Rust has no module-import-time side
+  effects, this port instead seeds the built-in registration in
+  `registry()`'s own lazy static — the same shape
+  `metric_evaluator_registry::default_registry` already established for
+  its own built-in evaluators. `SimulatorFactory`/`register_user_simulator`/
+  `create_user_simulator` widen to also take the `ConversationScenario`
+  a scenario-driven simulator's constructor needs (zero external
+  callers verified). The `None`-config legacy-default path and an
+  explicit `"llm_backed"` config both now resolve to a real
+  `LlmBackedUserSimulator` instead of erroring. The audio-decorator
+  composition (`_LlmAudioUserSimulator`, C0630) stays out of scope —
+  that type still doesn't exist in this port. 1 new test, 2 existing
+  tests updated to reflect the now-successful dispatch.
 - New `crates/adk-eval/src/llm_backed_user_simulator.rs`:
   `LlmBackedUserSimulatorConfig`/`LlmBackedUserSimulator` (C0628, DONE),
   ported from `evaluation/simulation/llm_backed_user_simulator(_prompts).py`.
