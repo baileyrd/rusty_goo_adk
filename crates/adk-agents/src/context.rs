@@ -4,16 +4,40 @@
 //! **Deferred** (need `workflow::BaseNode`/the graph engine, Phase 7):
 //! `Context.run_node`/`_run_node_internal`/`_run_node_standalone` (C0059,
 //! C0060) — dynamic node execution is inseparable from the workflow
-//! scheduler that doesn't exist yet. `node`/`parent_ctx`/`node_path`/`run_id`
-//! (workflow-specific fields) are likewise omitted; `Context` here covers
-//! only the agent-callback/tool-context surface this batch actually
-//! exercises and tests.
+//! scheduler that doesn't exist yet.
 //!
 //! **Adaptation**: `telemetry_context` (Phase 12) is omitted — nothing in
 //! this batch reads it.
+//!
+//! **C0310-C0312 (`NodeRunner`) additions**: `node_path`/`run_id`/
+//! `attempt_count`/`resume_inputs`/`output_for_ancestors`/
+//! `output_delegated`/the `_output_emitted`/`_route_emitted` flags/
+//! `error`/`error_node_path` are additive fields (via the new
+//! [`Context::for_node`] constructor, used only by
+//! `workflow_node_runner::NodeRunner`) mirroring the source's own
+//! `Context.__init__`'s workflow-execution parameters. `Context::new`
+//! (every existing call site) is untouched — these fields default to
+//! their root-context values (empty path, run_id `"1"`, attempt 1,
+//! nothing delegated/emitted) exactly as the source's own
+//! `_derive_node_path` falls back to for a node-less context.
+//! `state_schema` inheritance (`node.state_schema` or
+//! `parent_ctx.state._schema`) is not ported — `state.rs`'s own module
+//! doc already discloses this port has no per-key state schema
+//! mechanism at all, so there's nothing to inherit. `_workflow_scheduler`/
+//! `_child_run_counters`/`_node_rerun_on_resume` back `Context.run_node`
+//! (C0059/C0060, still deferred, see above) and are omitted along with
+//! it — they have no reader yet in this port.
+//!
+//! **`output_delegated`, disclosed**: always `false` here — its only
+//! setter in the source is `Context.run_node` itself (deferred). Kept as
+//! a real field (not hardcoded into the one place that reads it) so
+//! `NodeRunner`'s flush logic ports the source's exact condition rather
+//! than a narrowed one, and so the field is already in place once
+//! dynamic dispatch lands.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
+use adk_events::node_path_builder::NodePathBuilder;
 use adk_events::ui_widget::UiWidget;
 use adk_events::EventActions;
 use rusty_serde::value::Value;
@@ -65,6 +89,16 @@ pub struct Context {
     interrupt_ids: HashSet<String>,
     event_author: String,
     tool_confirmation: Option<Value>,
+    node_path: String,
+    run_id: String,
+    attempt_count: u32,
+    resume_inputs: BTreeMap<String, Value>,
+    output_for_ancestors: Vec<String>,
+    output_delegated: bool,
+    output_emitted: bool,
+    route_emitted: bool,
+    error_message: Option<String>,
+    error_node_path: String,
 }
 
 impl Context {
@@ -82,11 +116,135 @@ impl Context {
             event_actions: EventActions::default(),
             invocation_context,
             tool_confirmation: None,
+            node_path: String::new(),
+            run_id: "1".to_string(),
+            attempt_count: 1,
+            resume_inputs: BTreeMap::new(),
+            output_for_ancestors: Vec::new(),
+            output_delegated: false,
+            output_emitted: false,
+            route_emitted: false,
+            error_message: None,
+            error_node_path: String::new(),
         }
+    }
+
+    /// C0310-C0312: builds a child `Context` for running one workflow
+    /// node under `workflow_node_runner::NodeRunner` — mirrors the
+    /// source's `Context(invocation_context, parent_ctx=.., node=..,
+    /// run_id=.., resume_inputs=.., attempt_count=.., use_as_output=..)`
+    /// path (see this module's own doc for what's omitted and why).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_node(
+        invocation_context: InvocationContext,
+        parent_node_path: &str,
+        parent_output_for_ancestors: &[String],
+        parent_isolation_scope: Option<String>,
+        node_name: &str,
+        run_id: impl Into<String>,
+        resume_inputs: BTreeMap<String, Value>,
+        attempt_count: u32,
+        use_as_output: bool,
+    ) -> Self {
+        let run_id = run_id.into();
+        let node_path = NodePathBuilder::from_string(parent_node_path)
+            .append(node_name, Some(run_id.clone()))
+            .to_slash_string();
+        let output_for_ancestors = if use_as_output {
+            let mut ancestors = vec![parent_node_path.to_string()];
+            ancestors.extend(parent_output_for_ancestors.iter().cloned());
+            ancestors
+        } else {
+            Vec::new()
+        };
+
+        let mut ctx = Self::new(invocation_context);
+        ctx.isolation_scope = parent_isolation_scope;
+        ctx.node_path = node_path;
+        ctx.run_id = run_id;
+        ctx.resume_inputs = resume_inputs;
+        ctx.attempt_count = attempt_count;
+        ctx.output_for_ancestors = output_for_ancestors;
+        ctx
     }
 
     pub fn invocation_context(&self) -> &InvocationContext {
         &self.invocation_context
+    }
+
+    pub(crate) fn invocation_context_mut(&mut self) -> &mut InvocationContext {
+        &mut self.invocation_context
+    }
+
+    /// C0310-C0312: this node's path in the workflow graph (empty for a
+    /// root, non-node context).
+    pub fn node_path(&self) -> &str {
+        &self.node_path
+    }
+
+    /// C0310-C0312: the execution id assigned to this node run.
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    /// C0310-C0312: how many times this node has been attempted so far
+    /// (1-based).
+    pub fn attempt_count(&self) -> u32 {
+        self.attempt_count
+    }
+
+    /// C0310-C0312: inputs for resuming an interrupted node, keyed by
+    /// interrupt id.
+    pub fn resume_inputs(&self) -> &BTreeMap<String, Value> {
+        &self.resume_inputs
+    }
+
+    /// C0310-C0312: ancestor node paths this node's output also counts
+    /// as the output of, when `use_as_output` was set.
+    pub fn output_for_ancestors(&self) -> &[String] {
+        &self.output_for_ancestors
+    }
+
+    pub(crate) fn output_delegated(&self) -> bool {
+        self.output_delegated
+    }
+
+    pub(crate) fn output_emitted(&self) -> bool {
+        self.output_emitted
+    }
+
+    pub(crate) fn mark_output_emitted(&mut self) {
+        self.output_emitted = true;
+    }
+
+    pub(crate) fn route_emitted(&self) -> bool {
+        self.route_emitted
+    }
+
+    pub(crate) fn mark_route_emitted(&mut self) {
+        self.route_emitted = true;
+    }
+
+    pub(crate) fn add_interrupt_ids(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.interrupt_ids.extend(ids);
+    }
+
+    /// C0310-C0312: the error (if any) this node's last run failed with,
+    /// and the path of the node that actually raised it (may differ from
+    /// [`Self::node_path`] once dynamic node dispatch propagates a
+    /// failure up from a descendant — not yet reachable in this port,
+    /// see `workflow_node_runner`'s own module doc).
+    pub fn error_message(&self) -> Option<&str> {
+        self.error_message.as_deref()
+    }
+
+    pub fn error_node_path(&self) -> &str {
+        &self.error_node_path
+    }
+
+    pub(crate) fn set_error(&mut self, message: String, node_path: String) {
+        self.error_message = Some(message);
+        self.error_node_path = node_path;
     }
 
     pub fn branch(&self) -> Option<&str> {
