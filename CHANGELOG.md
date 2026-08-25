@@ -5,6 +5,29 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `Gemini::connect_live` (C0131, DONE) opens a real Live API WebSocket
+  connection, sends the `BidiGenerateContentSetup` envelope, and returns
+  a ready `GeminiLlmConnection` — the handshake half `Gemini::connect()`
+  was waiting on since an earlier batch shipped only its config-prep
+  half (`prepare_live_connect_config`/`live_api_version`). New
+  `crates/adk-models/src/live_setup_request.rs`: the setup-envelope wire
+  shape, read directly out of the installed `google-genai` package's
+  `_live_converters.py`. `LiveWsConnection::connect_with_headers` (new,
+  additive) attaches `x-goog-api-key` to the WebSocket handshake, the
+  same way the REST transport attaches auth. Wired as `Gemini`'s first
+  real `BaseLlm::connect` override; Gemini-API-key backend only, mirroring
+  `generate_content`'s already-disclosed Vertex AI narrowing. Also
+  `Gemini::preprocess_request` (C0132, partial): strips unsupported
+  `labels`/inline `display_name` on the Gemini API backend and sanitizes
+  every content part's `inline_data` via `as_safe_part_for_llm` — the
+  computer-use `wait`-function adaptation stays out of scope, blocked on
+  `ComputerUseToolset` (C0446), same disclosed gap C0195 already names.
+  `as_safe_part_for_llm` relocates from `adk-tools::load_artifacts_tool`
+  to new `crates/adk-genai/src/safe_part.rs` (re-exported from its old
+  path, no caller-visible change) — a crate-graph-direction fix: the
+  source has `models` import from `tools`, but this workspace's crate
+  graph runs the other way, so the function moves to the common ancestor
+  both crates already depend on.
 - New `crates/adk-eval/src/llm_as_judge.rs` (C0600, DONE) and
   `RubricBasedEvaluator` in `crates/adk-eval/src/rubric_based_evaluator.rs`
   (C0601, DONE), ported from `evaluation/llm_as_judge.py` and

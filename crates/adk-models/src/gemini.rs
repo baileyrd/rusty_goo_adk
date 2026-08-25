@@ -1,5 +1,5 @@
-//! Capabilities C0123-C0127, C0129-C0131 (C0131 partial), C0133, C0134:
-//! `Gemini`, ported from `google.adk.models.google_llm`.
+//! Capabilities C0123-C0127, C0129-C0134: `Gemini`, ported from
+//! `google.adk.models.google_llm`.
 //!
 //! **Scope of batch 2 (config layer)**: the config shape, `supported_models()`,
 //! base-URL/API-version resolution, and API-client construction — pure
@@ -56,27 +56,21 @@
 //! `BaseLlm::generate_content_async`'s `stream: true` branch, which
 //! previously always errored.
 //!
+//! **Scope of the C0131/C0132 batch**: [`Gemini::connect_live`] — the
+//! actual Live WebSocket handshake (opening the connection, sending the
+//! `BidiGenerateContentSetup` message, draining the ack) that
+//! [`Gemini::prepare_live_connect_config`] (the config-prep half, batch
+//! 4) was waiting on — see `live_setup_request.rs`'s module doc for the
+//! setup-envelope wire shape and [`websocket_base_url`] for the
+//! `wss`-scheme-forcing helper. Wired as `Gemini`'s first real
+//! `BaseLlm::connect` override. Also [`Gemini::preprocess_request`]
+//! (C0132, partial — see that method's own doc for the still-blocked
+//! computer-use branch).
+//!
 //! Still deferred to later batches, each needing its own foundational
 //! decision or capability this batch doesn't have yet:
 //!   - C0128 (interactions-API delegation) — needs capabilities from a
 //!     later batch.
-//!   - The actual Live WebSocket handshake (the rest of C0131 —
-//!     `_live_api_client`, opening the connection) and all of
-//!     `GeminiLlmConnection` (C0132, C0135-C0139) — `receive()` alone is a
-//!     ~370-line stateful message-translation engine (grounding-metadata
-//!     accumulation with index-offset merging, streamed text/thought
-//!     aggregation tracked by part identity, transcription streaming,
-//!     Gemini-3.x-variant-dependent tool-call buffering, session-
-//!     resumption/voice-activity/GoAway passthrough) that deserves its own
-//!     dedicated batch rather than being hand-waved alongside config-prep,
-//!     the same way `GeminiContextCacheManager` got its own batch instead
-//!     of being squeezed into this one. The WebSocket transport itself is
-//!     also still undecided — `tungstenite` (the synchronous core
-//!     `tokio-tungstenite` wraps) is the leading candidate, since it has
-//!     the same runtime-agnostic property that made `reqwest::blocking`
-//!     the right fit for the REST transport (see the load-bearing
-//!     adaptation note below) — but that decision is made when the
-//!     connection itself is built, not before.
 //!   - `config.tools`/`FunctionDeclaration` in the request body — not
 //!     modeled yet; `append_tools`/`BaseTool` (C0116) are already built
 //!     and populate `LlmRequest.config.tools` as an opaque `Value`,
@@ -121,7 +115,8 @@
 
 use std::sync::{Arc, OnceLock};
 
-use adk_genai::content::{Content, Part};
+use adk_genai::content::{Content, MediaBlobStub, Part};
+use adk_genai::safe_part::as_safe_part_for_llm;
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rusty_serde::value::Value;
@@ -208,6 +203,13 @@ pub enum GeminiCallError {
     /// call gets.
     #[error("context caching failed: {0}")]
     ContextCache(String),
+    /// C0131: `explicit_vad_signal` — see `live_setup_request.rs`'s
+    /// module doc.
+    #[error(
+        "explicit_vad_signal parameter is only supported in Gemini Enterprise Agent Platform \
+         mode, not in Gemini Developer API mode."
+    )]
+    ExplicitVadSignalNotSupported,
 }
 
 /// C0127: maps a non-2xx HTTP response into a [`GeminiCallError`],
@@ -217,6 +219,14 @@ fn map_http_error(status: u16, body: String) -> GeminiCallError {
         GeminiCallError::ResourceExhausted { body }
     } else {
         GeminiCallError::Http { status, body }
+    }
+}
+
+/// C0132: `_remove_display_name_if_present` — pops `displayName` out of
+/// a [`MediaBlobStub`]'s flattened `rest` map, if present.
+fn remove_display_name(blob: &mut MediaBlobStub) {
+    if let Some(Value::Map(entries)) = &mut blob.rest {
+        entries.retain(|(key, _)| key != "displayName");
     }
 }
 
@@ -555,13 +565,53 @@ impl Gemini {
         format!("{base_url}/{api_version}/models/{model}:generateContent")
     }
 
+    /// C0132 (partial — see the module doc): `_preprocess_request`.
+    /// Strips unsupported `labels`/inline `display_name` fields on the
+    /// Gemini Developer API backend (Vertex AI keeps both), and
+    /// sanitizes every content part's `inline_data` via
+    /// `as_safe_part_for_llm` regardless of backend, matching the
+    /// source's own unconditional final pass. Mutates `llm_request` in
+    /// place, matching the source.
+    ///
+    /// **Not ported**: the computer-use `wait`-function adaptation
+    /// (`_adapt_computer_use_tool`, gated on a `types.Tool` with
+    /// `.computer_use` set) — needs `ComputerUseToolset` (C0446, still
+    /// `REQUIRED`), not built anywhere in this port yet. Same disclosed
+    /// blocker C0195's own evidence already names for the identical
+    /// dependency (`_try_decode_computer_use_image`).
+    fn preprocess_request(&self, llm_request: &mut LlmRequest) {
+        if self.api_backend() == GoogleLlmVariant::GeminiApi {
+            llm_request.config.labels = None;
+            for content in &mut llm_request.contents {
+                for part in &mut content.parts {
+                    if let Some(inline_data) = &mut part.inline_data {
+                        remove_display_name(inline_data);
+                    }
+                    if let Some(file_data) = &mut part.file_data {
+                        remove_display_name(file_data);
+                    }
+                }
+            }
+        }
+
+        for content in &mut llm_request.contents {
+            for part in &mut content.parts {
+                if part.inline_data.is_some() {
+                    let safe_part = as_safe_part_for_llm(part, "inline-file");
+                    *part = safe_part;
+                }
+            }
+        }
+    }
+
     /// Shared setup for both the non-streaming and streaming real calls:
-    /// `maybe_append_user_content`, the model-name check, auth resolution,
-    /// C0126's context-cache invocation (gated exactly like the source),
-    /// and `apply_tracking_headers` — everything that happens to
-    /// `llm_request` before either call builds its own URL/body. Mutates
-    /// `llm_request` in place, matching the source (which mutates the same
-    /// request object throughout `generate_content_async`).
+    /// `preprocess_request`, `maybe_append_user_content`, the model-name
+    /// check, auth resolution, C0126's context-cache invocation (gated
+    /// exactly like the source), and `apply_tracking_headers` —
+    /// everything that happens to `llm_request` before either call
+    /// builds its own URL/body. Mutates `llm_request` in place, matching
+    /// the source (which mutates the same request object throughout
+    /// `generate_content_async`).
     async fn prepare_call(
         &self,
         llm_request: &mut LlmRequest,
@@ -576,6 +626,10 @@ impl Gemini {
         ),
         GeminiCallError,
     > {
+        // C0132: called first, matching the source's own call order —
+        // before `_maybe_append_user_content` at the top of
+        // `generate_content_async`.
+        self.preprocess_request(llm_request);
         crate::base_llm::maybe_append_user_content(llm_request);
         let model = llm_request
             .model
@@ -793,6 +847,98 @@ impl Gemini {
 
         Ok(responses)
     }
+
+    /// C0131 (the handshake half — see the module doc; the config-prep
+    /// half is [`Gemini::prepare_live_connect_config`], already built):
+    /// opens the actual Live WebSocket connection, sends the setup
+    /// envelope (`live_setup_request.rs`), and drains the setup-complete
+    /// ack frame (its content is never read, matching the source, which
+    /// hands the raw session straight to `GeminiLlmConnection` without
+    /// inspecting the ack — see `gemini_llm_connection.rs`'s module
+    /// doc). Genuinely blocking (opens a real socket and performs a
+    /// handshake) — callers on a `rusty_tokio` async worker should offload
+    /// via `rusty_tokio::spawn_blocking`, the same discipline
+    /// [`Gemini::generate_content`] already follows for the REST
+    /// transport.
+    ///
+    /// See the module doc's disclosed adaptation for
+    /// [`Gemini::generate_content`]: only the Gemini Developer API
+    /// (API-key) backend can build its own auth today, so this is
+    /// Gemini-API-only too — `resolve_auth_header` already returns
+    /// [`GeminiCallError::VertexAiAuthNotSupported`] for Vertex AI.
+    pub fn connect_live(
+        &self,
+        llm_request: &LlmRequest,
+    ) -> Result<crate::gemini_llm_connection::GeminiLlmConnection, GeminiCallError> {
+        let mut llm_request = llm_request.clone();
+        self.prepare_live_connect_config(&mut llm_request)?;
+        let model = llm_request
+            .model
+            .clone()
+            .ok_or(GeminiCallError::MissingModel)?;
+
+        if let Some(config) = &llm_request.live_connect_config {
+            if crate::live_setup_request::explicit_vad_signal_requested(config) {
+                return Err(GeminiCallError::ExplicitVadSignalNotSupported);
+            }
+        }
+
+        let auth_header = self.resolve_auth_header()?;
+        let client = self.api_client();
+        let base_url = client
+            .base_url
+            .clone()
+            .unwrap_or_else(|| DEFAULT_GEMINI_API_BASE_URL.to_string());
+        let ws_base = websocket_base_url(&base_url);
+        let live_api_version = self.live_api_version();
+        let url = format!(
+            "{ws_base}/ws/google.ai.generativelanguage.{live_api_version}.GenerativeService.BidiGenerateContent"
+        );
+
+        let mut headers = Vec::new();
+        if let Some((name, value)) = &auth_header {
+            headers.push((name.to_string(), value.clone()));
+        }
+
+        let setup_message = crate::live_setup_request::build_live_setup_message(
+            &model,
+            llm_request.live_connect_config.as_ref(),
+        );
+        let setup_json = rusty_serde::json::to_string(&setup_message)
+            .map_err(|e| GeminiCallError::Parse(e.to_string()))?;
+
+        let connection =
+            crate::live_connection::LiveWsConnection::connect_with_headers(&url, &headers)
+                .map_err(|e| GeminiCallError::Transport(e.to_string()))?;
+        connection
+            .send_text(setup_json)
+            .map_err(|e| GeminiCallError::Transport(e.to_string()))?;
+        connection
+            .receive_text()
+            .map_err(|e| GeminiCallError::Transport(e.to_string()))?;
+
+        Ok(crate::gemini_llm_connection::GeminiLlmConnection::new(
+            connection,
+            Some(&model),
+        ))
+    }
+}
+
+/// C0131: the Live API's WebSocket base URL — the source's
+/// `_websocket_base_url` unconditionally forces the scheme to `wss`
+/// regardless of the REST base URL's original scheme (`https` in every
+/// real case, but this matches the source exactly rather than assuming).
+/// Falls back to the input unchanged if it doesn't parse as a URL at
+/// all (mirrors [`normalize_base_url_and_api_version`]'s own
+/// best-effort fallback).
+fn websocket_base_url(base_url: &str) -> String {
+    match reqwest::Url::parse(base_url) {
+        Ok(mut url) => {
+            let _ = url.set_scheme("wss");
+            url.as_str().trim_end_matches('/').to_string()
+        }
+        Err(_) => base_url.trim_end_matches('/').to_string(),
+    }
 }
 
 /// Parses a Server-Sent-Events response body into each event's `data:`
@@ -871,6 +1017,22 @@ impl BaseLlm for Gemini {
             r"projects\/.+\/locations\/.+\/endpoints\/.+",
             r"projects\/.+\/locations\/.+\/publishers\/google\/models\/gemini.+",
         ]
+    }
+
+    /// C0131: delegates to [`Gemini::connect_live`], flattening its
+    /// structured [`GeminiCallError`] into `BaseLlmError::CallFailed` for
+    /// the trait-object-friendly contract — the same treatment
+    /// `generate_content_async` already gives [`GeminiCallError`].
+    fn connect(
+        &self,
+        llm_request: &LlmRequest,
+    ) -> Result<Box<dyn crate::base_llm_connection::BaseLlmConnection>, crate::base_llm::BaseLlmError>
+    {
+        self.connect_live(llm_request)
+            .map(|connection| {
+                Box::new(connection) as Box<dyn crate::base_llm_connection::BaseLlmConnection>
+            })
+            .map_err(|e| crate::base_llm::BaseLlmError::CallFailed(e.to_string()))
     }
 }
 
@@ -1347,6 +1509,123 @@ mod tests {
             .resolve_auth_header();
         clear_auth_env_vars();
         assert_eq!(result.unwrap(), None);
+    }
+
+    fn media_blob_with_display_name(mime_type: &str) -> MediaBlobStub {
+        MediaBlobStub {
+            mime_type: Some(mime_type.to_string()),
+            rest: Some(Value::Map(vec![
+                ("data".to_string(), Value::String("YWJj".to_string())),
+                (
+                    "displayName".to_string(),
+                    Value::String("a.png".to_string()),
+                ),
+            ])),
+        }
+    }
+
+    #[test]
+    fn preprocess_request_strips_labels_and_display_name_on_the_gemini_api_backend() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.config.labels = Some(std::collections::BTreeMap::from([(
+            "env".to_string(),
+            "prod".to_string(),
+        )]));
+        request.contents = vec![Content {
+            role: Some("user".to_string()),
+            parts: vec![Part {
+                inline_data: Some(media_blob_with_display_name("image/png")),
+                file_data: Some(media_blob_with_display_name("image/png")),
+                ..Default::default()
+            }],
+        }];
+        gemini.preprocess_request(&mut request);
+        clear_auth_env_vars();
+
+        assert_eq!(request.config.labels, None);
+        let part = &request.contents[0].parts[0];
+        let inline_rest = part.inline_data.as_ref().unwrap().rest.clone().unwrap();
+        assert_eq!(inline_rest.get("displayName"), None);
+        let file_rest = part.file_data.as_ref().unwrap().rest.clone().unwrap();
+        assert_eq!(file_rest.get("displayName"), None);
+    }
+
+    #[test]
+    fn preprocess_request_leaves_labels_and_display_name_untouched_on_vertex_ai() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "true");
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.config.labels = Some(std::collections::BTreeMap::from([(
+            "env".to_string(),
+            "prod".to_string(),
+        )]));
+        request.contents = vec![Content {
+            role: Some("user".to_string()),
+            parts: vec![Part {
+                inline_data: Some(media_blob_with_display_name("image/png")),
+                ..Default::default()
+            }],
+        }];
+        gemini.preprocess_request(&mut request);
+        clear_auth_env_vars();
+
+        assert!(request.config.labels.is_some());
+        let part = &request.contents[0].parts[0];
+        let inline_rest = part.inline_data.as_ref().unwrap().rest.clone().unwrap();
+        assert!(inline_rest.get("displayName").is_some());
+    }
+
+    #[test]
+    fn preprocess_request_sanitizes_inline_data_via_as_safe_part_for_llm_on_both_backends() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "true");
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.contents = vec![Content {
+            role: Some("user".to_string()),
+            parts: vec![Part {
+                inline_data: Some(MediaBlobStub {
+                    mime_type: Some("application/octet-stream".to_string()),
+                    rest: Some(Value::Map(vec![(
+                        "data".to_string(),
+                        Value::String("YWJj".to_string()),
+                    )])),
+                }),
+                ..Default::default()
+            }],
+        }];
+        gemini.preprocess_request(&mut request);
+        clear_auth_env_vars();
+
+        let part = &request.contents[0].parts[0];
+        assert!(part.inline_data.is_none());
+        assert!(part
+            .text
+            .as_deref()
+            .unwrap()
+            .contains("Binary artifact: inline-file"));
+    }
+
+    #[test]
+    fn preprocess_request_leaves_non_inline_parts_untouched() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.contents = vec![Content {
+            role: Some("user".to_string()),
+            parts: vec![Part::text("hello")],
+        }];
+        gemini.preprocess_request(&mut request);
+        clear_auth_env_vars();
+
+        assert_eq!(request.contents[0].parts[0].text.as_deref(), Some("hello"));
     }
 
     #[test]
@@ -1897,5 +2176,91 @@ mod tests {
                 .as_deref(),
             Some("hi")
         );
+    }
+
+    // --- connect_live / websocket_base_url ---
+
+    #[test]
+    fn websocket_base_url_forces_the_scheme_to_wss() {
+        assert_eq!(
+            websocket_base_url("https://generativelanguage.googleapis.com"),
+            "wss://generativelanguage.googleapis.com"
+        );
+        // The source forces `wss` unconditionally, regardless of the
+        // original scheme — see the function's own doc comment.
+        assert_eq!(
+            websocket_base_url("http://127.0.0.1:9000"),
+            "wss://127.0.0.1:9000"
+        );
+    }
+
+    #[test]
+    fn websocket_base_url_falls_back_to_the_input_when_unparseable() {
+        assert_eq!(websocket_base_url("not a url"), "not a url");
+    }
+
+    #[test]
+    fn connect_live_errors_without_any_api_key() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let request = LlmRequest::new("gemini-2.5-flash");
+        let result = gemini.connect_live(&request);
+        clear_auth_env_vars();
+        assert!(matches!(result, Err(GeminiCallError::MissingApiKey)));
+    }
+
+    #[test]
+    fn connect_live_errors_for_vertex_ai_without_an_injected_client() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_GENAI_USE_ENTERPRISE", "true");
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let request = LlmRequest::new("gemini-2.5-flash");
+        let result = gemini.connect_live(&request);
+        clear_auth_env_vars();
+        assert!(matches!(
+            result,
+            Err(GeminiCallError::VertexAiAuthNotSupported)
+        ));
+    }
+
+    #[test]
+    fn connect_live_errors_when_explicit_vad_signal_is_requested() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+        let gemini = Gemini::new("gemini-2.5-flash");
+        let mut request = LlmRequest::new("gemini-2.5-flash");
+        request.live_connect_config = Some(crate::llm_request::LiveConnectConfigStub {
+            explicit_vad_signal: Some(true),
+            ..Default::default()
+        });
+        let result = gemini.connect_live(&request);
+        clear_auth_env_vars();
+        assert!(matches!(
+            result,
+            Err(GeminiCallError::ExplicitVadSignalNotSupported)
+        ));
+    }
+
+    #[test]
+    fn connect_live_surfaces_a_transport_error_when_nothing_is_listening() {
+        let _guard = ENV_VAR_GUARD.lock().unwrap();
+        clear_auth_env_vars();
+        std::env::set_var("GOOGLE_API_KEY", "test-key");
+        // Port 1 requires privileges no test process has, so nothing is
+        // ever listening there — same technique `live_connection.rs`'s
+        // own tests use. This exercises the full `connect_live` plumbing
+        // (auth resolution, URL building, setup-message construction)
+        // up to the point of actually opening the socket, without
+        // needing a live TLS endpoint — see the module doc's disclosed
+        // confidence caveat for why a genuine successful end-to-end
+        // handshake isn't tested here.
+        let gemini = Gemini::new("gemini-2.5-flash").with_base_url("https://127.0.0.1:1");
+        let request = LlmRequest::new("gemini-2.5-flash");
+        let result = gemini.connect_live(&request);
+        clear_auth_env_vars();
+        assert!(matches!(result, Err(GeminiCallError::Transport(_))));
     }
 }

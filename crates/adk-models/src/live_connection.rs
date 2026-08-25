@@ -55,8 +55,25 @@ impl LiveWsConnection {
     /// Genuinely blocks the calling thread — callers on a `rusty_tokio`
     /// async worker must run this via `rusty_tokio::spawn_blocking`.
     pub fn connect(url: &str) -> Result<Self, LiveWsError> {
+        Self::connect_with_headers(url, &[])
+    }
+
+    /// Like [`LiveWsConnection::connect`], but attaches `headers` to the
+    /// WebSocket handshake request (e.g. `x-goog-api-key`, matching how
+    /// the REST transport attaches auth — see `gemini.rs::Gemini::connect`).
+    pub fn connect_with_headers(
+        url: &str,
+        headers: &[(String, String)],
+    ) -> Result<Self, LiveWsError> {
+        let uri: tungstenite::http::Uri = url
+            .parse()
+            .map_err(|e: tungstenite::http::uri::InvalidUri| LiveWsError::Connect(e.to_string()))?;
+        let mut builder = tungstenite::ClientRequestBuilder::new(uri);
+        for (key, value) in headers {
+            builder = builder.with_header(key.clone(), value.clone());
+        }
         let (socket, _response) =
-            tungstenite::connect(url).map_err(|e| LiveWsError::Connect(e.to_string()))?;
+            tungstenite::connect(builder).map_err(|e| LiveWsError::Connect(e.to_string()))?;
         Ok(Self {
             socket: Mutex::new(socket),
         })
@@ -161,5 +178,37 @@ mod tests {
         // ever listening there.
         let result = LiveWsConnection::connect("ws://127.0.0.1:1");
         assert!(result.is_err());
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn connect_with_headers_attaches_custom_headers_to_the_handshake() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut seen_header = None;
+            let callback =
+                |request: &tungstenite::handshake::server::Request,
+                 response: tungstenite::handshake::server::Response| {
+                    seen_header = request
+                        .headers()
+                        .get("x-goog-api-key")
+                        .map(|v| v.to_str().unwrap().to_string());
+                    Ok(response)
+                };
+            let mut socket = tungstenite::accept_hdr(stream, callback).unwrap();
+            let _ = socket.close(None);
+            seen_header
+        });
+
+        let connection = LiveWsConnection::connect_with_headers(
+            &format!("ws://{addr}"),
+            &[("x-goog-api-key".to_string(), "test-key".to_string())],
+        )
+        .unwrap();
+        connection.close().ok();
+        let seen_header = server.join().unwrap();
+        assert_eq!(seen_header.as_deref(), Some("test-key"));
     }
 }
