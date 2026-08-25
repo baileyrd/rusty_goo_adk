@@ -16,6 +16,19 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   test `an_escalating_sibling_cancels_a_still_running_sibling` verifies
   real cancellation by wall-clock time, not just event absence.
 ### Added
+- P11 `UserSimulatorProvider` audio-decorator composition (C0627, DONE):
+  `crates/adk-eval/src/user_simulator.rs`'s `registry()` now seeds a
+  built-in `"llm_audio"` registration alongside `"llm_backed"`, building
+  an inner `LlmBackedUserSimulator` from `LlmAudioUserSimulatorConfig`'s
+  own text-generation fields and wrapping it via
+  `LlmAudioUserSimulator::new` (C0630) — mirroring the source's
+  `simulator_cls is _LlmAudioUserSimulator` scenario-branch special
+  case. `UserSimulatorProvider::provide()`'s static-conversation branch
+  performs the same check directly, wrapping `StaticUserSimulator` the
+  same way. 3 new tests. `LlmAudioUserSimulatorConfig`'s default
+  `audio_model` (`"cloud_tts"`, C0631) stays unregistered, a disclosed
+  gap this row's own tests demonstrate by supplying a registered model
+  instead.
 - P6 `memory` package export facade (C0246, DONE): new
   `crates/adk-agents/src/memory.rs` — a plain `pub use` facade
   re-exporting `BaseMemoryService` (aliased from

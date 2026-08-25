@@ -22,6 +22,37 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `eval/`: `UserSimulatorProvider` audio-decorator composition (C0627, DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-eval/src/user_simulator.rs`'s `registry()` now
+  seeds a built-in `"llm_audio"` registration alongside `"llm_backed"`.
+  It parses the resolved config as `LlmAudioUserSimulatorConfig`, builds
+  an inner `LlmBackedUserSimulatorConfig` from that config's own
+  text-generation fields (`model`/`model_configuration`/
+  `max_allowed_invocations`/`custom_instructions`/`include_function_calls`),
+  constructs the inner `LlmBackedUserSimulator`, and wraps it via
+  `LlmAudioUserSimulator::new` — matching the source's
+  `if simulator_cls is _LlmAudioUserSimulator: ...` scenario-branch
+  special case in `user_simulator_provider.py`.
+- **Added:** `UserSimulatorProvider::provide()`'s static-conversation
+  branch now checks the same `"type"` discriminator directly and wraps
+  `StaticUserSimulator` in the audio decorator the same way, matching
+  the source's separate static-path special case.
+- **Disclosed:** `LlmAudioUserSimulatorConfig`'s default `audio_model`
+  (`"cloud_tts"`, a live Google Cloud TTS backend, C0631) stays
+  unregistered in `LlmRegistry` — dispatch to `"llm_audio"` succeeds,
+  but constructing the decorator with the default config still fails
+  resolving that model. This row's own new tests exercise the full
+  composition by supplying an already-registered `audio_model`
+  (`"gemini-2.5-flash"`) instead.
+- 3 new tests:
+  `provide_dispatches_an_llm_audio_config_to_the_audio_decorator_for_a_scenario_case`,
+  `provide_wraps_the_static_simulator_in_the_audio_decorator_for_an_llm_audio_config`,
+  `provide_surfaces_the_unregistered_default_audio_model_as_a_dispatch_error`.
+
+---
+
 ## PR #TBD — `agents/`: `memory` package export facade (C0246, DONE)
 **2026-08-25**
 

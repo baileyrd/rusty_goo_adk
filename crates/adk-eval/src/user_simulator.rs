@@ -175,13 +175,11 @@ fn registry() -> &'static Mutex<HashMap<String, SimulatorFactory>> {
         // `user_simulator_provider.py`'s own module-level
         // `register_user_simulator(LlmBackedUserSimulatorConfig,
         // LlmBackedUserSimulator)` — Rust has no module-import-time side
-        // effects, so this port seeds the one built-in registration this
-        // batch can support (C0628, DONE) here instead, in the registry's
-        // own lazy init, the same "auto-register built-ins in the lazy
-        // static" shape `metric_evaluator_registry::default_registry`
-        // already established. `_LlmAudioUserSimulator`/
-        // `LlmAudioUserSimulatorConfig` (C0630) still don't exist in this
-        // port, so that second source registration line stays unported.
+        // effects, so this port seeds both of the source's built-in
+        // registrations here instead, in the registry's own lazy init,
+        // the same "auto-register built-ins in the lazy static" shape
+        // `metric_evaluator_registry::default_registry` already
+        // established.
         map.insert(
             UserSimulatorProvider::LEGACY_DEFAULT_CONFIG_TYPE.to_string(),
             Box::new(
@@ -189,6 +187,46 @@ fn registry() -> &'static Mutex<HashMap<String, SimulatorFactory>> {
                     crate::llm_backed_user_simulator::LlmBackedUserSimulator::new(
                         config,
                         conversation_scenario.clone(),
+                    )
+                    .map(|simulator| Box::new(simulator) as Box<dyn UserSimulator>)
+                    .map_err(|error| error.to_string())
+                },
+            ) as SimulatorFactory,
+        );
+        // `user_simulator_provider.py`'s second module-level
+        // `register_user_simulator(LlmAudioUserSimulatorConfig,
+        // _LlmAudioUserSimulator)` (C0627, this batch). Builds the inner
+        // `LlmBackedUserSimulator` from the audio config's own
+        // text-generation fields, exactly matching the source's
+        // `simulator_cls is _LlmAudioUserSimulator` scenario-branch special
+        // case.
+        map.insert(
+            "llm_audio".to_string(),
+            Box::new(
+                |config: &Value, conversation_scenario: &ConversationScenario| {
+                    let audio_config: crate::llm_audio_user_simulator::LlmAudioUserSimulatorConfig =
+                        parse_simulator_config(config)?;
+                    let text_config =
+                        crate::llm_backed_user_simulator::LlmBackedUserSimulatorConfig {
+                            simulator_type: UserSimulatorProvider::LEGACY_DEFAULT_CONFIG_TYPE
+                                .to_string(),
+                            model: audio_config.model.clone(),
+                            model_configuration: audio_config.model_configuration.clone(),
+                            max_allowed_invocations: audio_config.max_allowed_invocations,
+                            custom_instructions: audio_config.custom_instructions.clone(),
+                            include_function_calls: audio_config.include_function_calls,
+                        };
+                    let text_config_value = rusty_serde::json::to_value(&text_config)
+                        .map_err(|error| error.to_string())?;
+                    let text_simulator =
+                        crate::llm_backed_user_simulator::LlmBackedUserSimulator::new(
+                            &text_config_value,
+                            conversation_scenario.clone(),
+                        )
+                        .map_err(|error| error.to_string())?;
+                    crate::llm_audio_user_simulator::LlmAudioUserSimulator::new(
+                        config,
+                        Box::new(text_simulator) as Box<dyn UserSimulator + Send + Sync>,
                     )
                     .map(|simulator| Box::new(simulator) as Box<dyn UserSimulator>)
                     .map_err(|error| error.to_string())
@@ -237,9 +275,11 @@ pub fn create_user_simulator(
 /// C0627: `user_simulator_provider.UserSimulatorProvider` — provides a
 /// [`UserSimulator`] per [`crate::eval_case::EvalCase`], mixing
 /// `EvalConfig`-level simulator configuration with per-case conversation
-/// data. Dispatch: a case carrying a static `conversation` always gets a
-/// [`crate::static_user_simulator::StaticUserSimulator`] (config-agnostic);
-/// a case carrying a `conversation_scenario` gets whatever
+/// data. Dispatch: a case carrying a static `conversation` gets a
+/// [`crate::static_user_simulator::StaticUserSimulator`] (or, when the
+/// configured type is `"llm_audio"`, that static simulator wrapped in
+/// [`crate::llm_audio_user_simulator::LlmAudioUserSimulator`]); a case
+/// carrying a `conversation_scenario` gets whatever
 /// [`create_user_simulator`] resolves for the configured `type`
 /// discriminator.
 ///
@@ -267,16 +307,20 @@ pub fn create_user_simulator(
 /// now successfully dispatches through [`create_user_simulator`] instead
 /// of hitting its "no simulator registered" error.
 ///
-/// **Not ported, disclosed**: the audio-decorator composition (the
+/// **`"llm_audio"` decorator composition now wired, C0627**: mirrors the
 /// source's `if simulator_cls is _LlmAudioUserSimulator: ...` branches in
-/// both the scenario and static paths, wrapping the resolved inner text
-/// simulator in `_LlmAudioUserSimulator`) — `_LlmAudioUserSimulator`/
-/// `LlmAudioUserSimulatorConfig` (C0630) still don't exist in this port,
-/// so no config type resolves to that decorator; [`create_user_simulator`]'s
-/// own "no simulator registered for this type" error remains the correct
-/// behavior for an audio-config case until C0630 lands and registers it,
-/// the same disclosed narrowing [`create_user_simulator`]'s own doc
-/// already establishes for any unregistered type.
+/// both the scenario and static paths. [`registry`] seeds a built-in
+/// `"llm_audio"` registration that parses the resolved config as
+/// [`crate::llm_audio_user_simulator::LlmAudioUserSimulatorConfig`],
+/// builds an inner `LlmBackedUserSimulatorConfig` from that config's own
+/// text-generation fields (`model`/`model_configuration`/
+/// `max_allowed_invocations`/`custom_instructions`/`include_function_calls`),
+/// constructs the inner `LlmBackedUserSimulator`, and wraps it via
+/// `LlmAudioUserSimulator::new`. The static-conversation branch (below,
+/// in [`Self::provide`]) checks the same `"type"` discriminator directly
+/// and wraps `StaticUserSimulator` the same way when it reads
+/// `"llm_audio"` — the source's own static-path special case, since that
+/// path never goes through [`create_user_simulator`]'s registry lookup.
 pub struct UserSimulatorProvider {
     config: Value,
 }
@@ -323,9 +367,25 @@ impl UserSimulatorProvider {
                     .unwrap_or(Self::LEGACY_DEFAULT_CONFIG_TYPE);
                 create_user_simulator(config_type, &self.config, conversation_scenario)
             }
-            (Some(conversation), None) => Ok(Box::new(
-                crate::static_user_simulator::StaticUserSimulator::new(conversation.clone()),
-            )),
+            (Some(conversation), None) => {
+                let static_simulator =
+                    crate::static_user_simulator::StaticUserSimulator::new(conversation.clone());
+                let config_type = self
+                    .config
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or(Self::LEGACY_DEFAULT_CONFIG_TYPE);
+                if config_type == "llm_audio" {
+                    crate::llm_audio_user_simulator::LlmAudioUserSimulator::new(
+                        &self.config,
+                        Box::new(static_simulator) as Box<dyn UserSimulator + Send + Sync>,
+                    )
+                    .map(|simulator| Box::new(simulator) as Box<dyn UserSimulator>)
+                    .map_err(|error| error.to_string())
+                } else {
+                    Ok(Box::new(static_simulator))
+                }
+            }
         }
     }
 }
@@ -520,6 +580,51 @@ mod tests {
         let provider = UserSimulatorProvider::new(None);
         let simulator = provider.provide(&eval_case_with_scenario());
         assert!(simulator.is_ok());
+    }
+
+    // --- "llm_audio" decorator composition (C0627) ---
+
+    #[test]
+    fn provide_dispatches_an_llm_audio_config_to_the_audio_decorator_for_a_scenario_case() {
+        let provider = UserSimulatorProvider::new(Some(Value::Map(vec![
+            ("type".to_string(), Value::String("llm_audio".to_string())),
+            (
+                "audioModel".to_string(),
+                Value::String("gemini-2.5-flash".to_string()),
+            ),
+        ])));
+        let simulator = provider.provide(&eval_case_with_scenario());
+        assert!(simulator.is_ok());
+    }
+
+    #[test]
+    fn provide_wraps_the_static_simulator_in_the_audio_decorator_for_an_llm_audio_config() {
+        let provider = UserSimulatorProvider::new(Some(Value::Map(vec![
+            ("type".to_string(), Value::String("llm_audio".to_string())),
+            (
+                "audioModel".to_string(),
+                Value::String("gemini-2.5-flash".to_string()),
+            ),
+        ])));
+        let simulator = provider.provide(&eval_case_with_conversation());
+        assert!(simulator.is_ok());
+    }
+
+    #[test]
+    fn provide_surfaces_the_unregistered_default_audio_model_as_a_dispatch_error() {
+        // The source's default `audio_model` is `"cloud_tts"`, a live
+        // Google Cloud TTS backend this port doesn't register (C0631,
+        // disclosed). Dispatch itself succeeds (the "llm_audio" type
+        // resolves correctly); construction then fails resolving that
+        // unregistered model — not "no simulator registered for this
+        // type", the same disclosed gap `llm_audio_user_simulator.rs`'s
+        // own module doc already establishes.
+        let provider = UserSimulatorProvider::new(Some(Value::Map(vec![(
+            "type".to_string(),
+            Value::String("llm_audio".to_string()),
+        )])));
+        let err = provider.provide(&eval_case_with_scenario()).err().unwrap();
+        assert!(!err.contains("No user simulator registered"));
     }
 
     #[test]

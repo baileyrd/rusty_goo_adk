@@ -9,21 +9,17 @@
 //! `LlmRegistry`) to produce audio bytes, and wraps the result into a
 //! live-input-ready `Content`.
 //!
-//! **Scope of this batch, disclosed**: only [`LlmAudioUserSimulatorConfig`]/
-//! [`LlmAudioUserSimulator`] themselves are ported here — the
-//! `UserSimulatorProvider` composition wiring (building an inner
-//! `LlmBackedUserSimulator`/`StaticUserSimulator` from this config's own
-//! text-generation fields and injecting it as `text_simulator`, then
-//! registering the `"llm_audio"` discriminator) is real, separable work
-//! `user_simulator.rs`'s own module doc already flags as "not ported...
-//! until C0630 lands and registers it" — that composition special-cases
-//! dispatch beyond the registry's uniform `SimulatorFactory` shape (it
-//! needs to construct a *second* simulator first and inject it, not
-//! just call a single constructor), so it's left for a focused follow-up
-//! rather than folded into this slice. [`LlmAudioUserSimulator::new`]
-//! already takes an already-built `Box<dyn UserSimulator>` directly,
-//! matching the source's own constructor shape exactly — a caller with
-//! both pieces in hand can already compose this decorator today.
+//! **`UserSimulatorProvider` composition, now wired (C0627)**: this
+//! decorator's own `new()` takes an already-built
+//! `Box<dyn UserSimulator + Send + Sync>` directly, matching the
+//! source's own constructor shape exactly. The composition that builds
+//! that inner simulator from this config's own text-generation fields —
+//! and registers the `"llm_audio"` discriminator — lives in
+//! `user_simulator.rs`'s `registry()` and
+//! `UserSimulatorProvider::provide()` (see those for the scenario- and
+//! static-path wiring); this module only provides the pieces
+//! (`LlmAudioUserSimulatorConfig`/`LlmAudioUserSimulator`) that
+//! composition assembles.
 //!
 //! **`GenerateContentConfigStub::speech_config`, newly added**: this
 //! config's `audio_model_configuration` default needs a `speech_config`
