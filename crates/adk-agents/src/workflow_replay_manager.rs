@@ -62,6 +62,17 @@ impl ReplayManager {
         self.sequence_barrier.as_ref()
     }
 
+    /// C0300: takes ownership of the sequence barrier built by
+    /// [`Self::scan_workflow_events`] — `ReplaySequenceBarrier` isn't
+    /// `Clone` (it owns `rusty_tokio::sync::Notify` values), so a caller
+    /// that wants to move it onto its own state (e.g. `Workflow`'s
+    /// `_LoopState`, the source's `loop_state.sequence_barrier =
+    /// replay_mgr.sequence_barrier` reference-alias) takes it out rather
+    /// than borrowing it.
+    pub fn take_sequence_barrier(&mut self) -> Option<ReplaySequenceBarrier> {
+        self.sequence_barrier.take()
+    }
+
     /// `ReplayManager._ensure_index`: ensures event indexes are
     /// initialized and up-to-date with the current session. In
     /// multi-turn sessions new events accrue on each turn, so the index

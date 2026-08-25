@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`: `Workflow` struct skeleton + SETUP phase (C0298/C0299/C0300, all DONE)
+**2026-08-25**
+
+- **Added:** `Workflow::new` — builds and validates a `Graph` from a
+  list of edges (`rerun_on_resume` defaults `true`, the opposite of
+  `BaseNode`'s own default, since a workflow node must be able to wake
+  up and resume its own run loop after an interrupt).
+- **Added:** `WorkflowLoopState::setup` — the SETUP phase: rehydrates
+  recovered node executions from session events, warns when
+  `resume_inputs` were supplied but nothing was recovered, seeds
+  triggers for `START`'s direct successors, and installs a freshly
+  built `DynamicNodeScheduler` on the workflow's own context so any
+  node under it that calls `ctx.run_node()` dispatches through it.
+- **Known limitation:** not yet runnable as an actual graph node —
+  `Workflow` isn't wired into a `BaseNode`/`NodeBehavior` yet. The LOOP
+  phase (scheduling ready nodes, handling completions, buffering
+  downstream triggers) and FINALIZE (collecting terminal output) are a
+  separate, larger follow-up; `_run_impl`'s orchestration loop can't
+  meaningfully run without them. `Workflow` ships today as a
+  standalone, directly-unit-tested struct, the same shape `NodeRunner`/
+  `ReplayManager`/`check_interception` each shipped in before anything
+  called them.
+- **Known limitation:** `Workflow._validate_state_schema` is a
+  disclosed no-op — it needs reflective signature introspection over a
+  `FunctionNode`'s wrapped function, which this port doesn't have (the
+  same gap already disclosed for `FunctionNode` itself), over an
+  already-opaque `state_schema`.
+
+---
+
 ## PR #TBD — `agents/`: dynamic workflow-node dispatch — `Context::run_node` + agent transfer (C0043/C0059/C0060/C0325, all DONE)
 **2026-08-25**
 
