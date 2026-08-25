@@ -31,6 +31,7 @@ pub mod fencing;
 pub mod functions;
 pub mod functions_media;
 pub mod functions_utils;
+pub mod google_search_agent_tool;
 pub mod identity;
 pub mod instructions;
 pub mod instructions_utils;

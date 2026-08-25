@@ -142,6 +142,8 @@ use adk_genai::content::FunctionCall;
 use adk_models::base_llm::{BaseLlm, BaseLlmError};
 use adk_models::llm_request::LlmRequest;
 use adk_models::llm_response::LlmResponse;
+use adk_tools::base_tool::BaseTool;
+use adk_tools::tool_context::ToolContext;
 
 use crate::agent_transfer::{self, GetAgentToRunError};
 use crate::apps_compaction::CompactionTriggerError;
@@ -365,6 +367,12 @@ pub struct LlmFlow {
     /// gap (`LlmAgent.tools` has no real `Arc<dyn BaseTool>` storage to
     /// resolve *from*). Empty by default — see [`Self::with_tools_dict`].
     pub tools_dict: ToolsDict,
+    /// C0151 (narrowed): the already-resolved tools whose
+    /// `process_llm_request` gets committed into the outgoing
+    /// `LlmRequest`, serially, in this list's order — see
+    /// [`Self::with_tools`]'s own doc for why order matters and why
+    /// this is a separate field from [`Self::tools_dict`].
+    pub tools: Vec<Arc<dyn BaseTool>>,
 }
 
 impl LlmFlow {
@@ -376,6 +384,7 @@ impl LlmFlow {
             llm_agent,
             model,
             tools_dict: ToolsDict::new(),
+            tools: Vec::new(),
         })
     }
 
@@ -387,6 +396,7 @@ impl LlmFlow {
             llm_agent,
             model,
             tools_dict: ToolsDict::new(),
+            tools: Vec::new(),
         }
     }
 
@@ -394,6 +404,20 @@ impl LlmFlow {
     /// calls against — see [`Self::tools_dict`]'s own doc.
     pub fn with_tools_dict(mut self, tools_dict: ToolsDict) -> Self {
         self.tools_dict = tools_dict;
+        self
+    }
+
+    /// Attaches the ordered tool list [`Self::preprocess`] commits into
+    /// the outgoing `LlmRequest` via each tool's `process_llm_request` —
+    /// see [`Self::tools`]'s own doc. A separate field from
+    /// [`Self::tools_dict`] (a `HashMap`, no ordering) because the
+    /// source's own `_process_agent_tools` keeps this commit phase
+    /// strictly serial in `agent.tools` order: some tools read or write
+    /// `LlmRequest` state a later tool in the list depends on (its own
+    /// docstring's example: `GoogleSearchTool` writes `llm_request.model`
+    /// before a later tool might read it).
+    pub fn with_tools(mut self, tools: Vec<Arc<dyn BaseTool>>) -> Self {
+        self.tools = tools;
         self
     }
 
@@ -500,6 +524,23 @@ impl LlmFlow {
         // the end of its `REQUEST_PROCESSORS` list (after `contents`/
         // `context_cache_processor`), so it's placed here to match.
         apply_output_schema_processor(&self.llm_agent, &mut request)?;
+
+        // C0151 (narrowed): `_process_agent_tools`'s commit phase — see
+        // `Self::tools`'s own doc for why this stays serial and in
+        // caller-supplied order. The source runs this after every
+        // `REQUEST_PROCESSORS` entry and after toolset-auth resolution
+        // (this port's auth_preprocessor.rs isn't wired into this flow
+        // yet, C0092), so it's placed last here too. A single shared
+        // `ToolContext` (rather than one per tool, as the source
+        // constructs per tool_union) is equivalent here: no built-in
+        // tool's `process_llm_request` mutates state through the
+        // context — only through `&mut request` directly, which every
+        // call already shares.
+        let mut tool_context = ToolContext::new(ctx.clone());
+        for tool in &self.tools {
+            tool.process_llm_request(&mut tool_context, &mut request)
+                .await;
+        }
 
         Ok(request)
     }
@@ -980,6 +1021,75 @@ mod tests {
 
         let request = flow.preprocess(&mut ctx).await.unwrap();
         assert_eq!(request.previous_interaction_id, None);
+    }
+
+    // --- tools commit phase (C0151) ---
+
+    struct SetModelTool;
+    impl adk_tools::base_tool::BaseTool for SetModelTool {
+        fn name(&self) -> &str {
+            "set_model"
+        }
+        fn description(&self) -> &str {
+            "sets llm_request.model, for later tools to observe"
+        }
+        fn process_llm_request<'a>(
+            &'a self,
+            _tool_context: &'a mut adk_tools::tool_context::ToolContext,
+            llm_request: &'a mut LlmRequest,
+        ) -> adk_tools::base_tool::BoxFuture<'a, ()> {
+            Box::pin(async move {
+                llm_request.model = Some("routed-model".to_string());
+            })
+        }
+    }
+
+    struct RecordModelTool(Arc<std::sync::Mutex<Option<String>>>);
+    impl adk_tools::base_tool::BaseTool for RecordModelTool {
+        fn name(&self) -> &str {
+            "record_model"
+        }
+        fn description(&self) -> &str {
+            "records whatever llm_request.model is when it runs"
+        }
+        fn process_llm_request<'a>(
+            &'a self,
+            _tool_context: &'a mut adk_tools::tool_context::ToolContext,
+            llm_request: &'a mut LlmRequest,
+        ) -> adk_tools::base_tool::BoxFuture<'a, ()> {
+            let observed = self.0.clone();
+            let seen = llm_request.model.clone();
+            Box::pin(async move {
+                *observed.lock().unwrap() = seen;
+            })
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn preprocess_commits_tools_serially_in_caller_supplied_order() {
+        let observed = Arc::new(std::sync::Mutex::new(None));
+        let flow = flow_with_response(LlmResponse::default()).with_tools(vec![
+            Arc::new(SetModelTool),
+            Arc::new(RecordModelTool(observed.clone())),
+        ]);
+        let mut ctx = ctx_for("my_agent");
+
+        flow.preprocess(&mut ctx).await.unwrap();
+
+        assert_eq!(
+            observed.lock().unwrap().as_deref(),
+            Some("routed-model"),
+            "the second tool should observe the first tool's mutation to llm_request.model"
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn preprocess_is_unaffected_by_an_empty_tools_list() {
+        let flow = flow_with_response(LlmResponse::default());
+        let mut ctx = ctx_for("my_agent");
+
+        let request = flow.preprocess(&mut ctx).await.unwrap();
+        assert_eq!(request.model.as_deref(), Some("gemini-2.0-flash"));
     }
 
     // --- postprocess: MODEL_RETURNED_NO_CONTENT + empty-event skip (C0156) ---
