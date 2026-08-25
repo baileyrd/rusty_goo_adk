@@ -1681,6 +1681,89 @@ mod tests {
         );
     }
 
+    /// C0242: a dict-valued state_delta replaces the stored value; it is
+    /// not deep-merged.
+    #[rusty_tokio::test]
+    async fn append_event_dict_valued_delta_replaces_not_merges() {
+        let service = InMemorySessionService::new();
+        let mut initial_state = BTreeMap::new();
+        initial_state.insert(
+            "profile".to_string(),
+            Value::Map(vec![
+                ("name".to_string(), Value::String("ada".to_string())),
+                ("role".to_string(), Value::String("admin".to_string())),
+            ]),
+        );
+        let mut session = service
+            .create_session("app", "user", Some(initial_state), Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        let mut event = Event::new("inv-1", "user", NodeInfo::new("root"));
+        event.actions.state_delta.insert(
+            "profile".to_string(),
+            Value::Map(vec![("name".to_string(), Value::String("bob".to_string()))]),
+        );
+
+        service.append_event(&mut session, event).await;
+
+        assert_eq!(
+            session.state.get("profile"),
+            Some(&Value::Map(vec![(
+                "name".to_string(),
+                Value::String("bob".to_string())
+            )]))
+        );
+    }
+
+    /// C0242: a `None`/`Null`-valued state_delta stores `null`, it does
+    /// not delete the key.
+    #[rusty_tokio::test]
+    async fn append_event_null_valued_delta_is_stored_not_dropped() {
+        let service = InMemorySessionService::new();
+        let mut initial_state = BTreeMap::new();
+        initial_state.insert("flag".to_string(), Value::Bool(true));
+        let mut session = service
+            .create_session("app", "user", Some(initial_state), Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        let mut event = Event::new("inv-1", "user", NodeInfo::new("root"));
+        event
+            .actions
+            .state_delta
+            .insert("flag".to_string(), Value::Null);
+
+        service.append_event(&mut session, event).await;
+
+        assert!(session.state.contains_key("flag"));
+        assert_eq!(session.state.get("flag"), Some(&Value::Null));
+    }
+
+    /// C0242: an unrelated state_delta key must not corrupt a stored
+    /// boolean's value.
+    #[rusty_tokio::test]
+    async fn append_event_boolean_state_survives_an_unrelated_delta() {
+        let service = InMemorySessionService::new();
+        let mut initial_state = BTreeMap::new();
+        initial_state.insert("flag".to_string(), Value::Bool(false));
+        let mut session = service
+            .create_session("app", "user", Some(initial_state), Some("s1".to_string()))
+            .await
+            .unwrap();
+
+        let mut event = Event::new("inv-1", "user", NodeInfo::new("root"));
+        event
+            .actions
+            .state_delta
+            .insert("new_flag".to_string(), Value::Bool(true));
+
+        service.append_event(&mut session, event).await;
+
+        assert_eq!(session.state.get("new_flag"), Some(&Value::Bool(true)));
+        assert_eq!(session.state.get("flag"), Some(&Value::Bool(false)));
+    }
+
     #[rusty_tokio::test]
     async fn append_event_skips_persistence_for_a_partial_event() {
         let service = InMemorySessionService::new();
