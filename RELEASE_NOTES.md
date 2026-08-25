@@ -22,6 +22,34 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `evaluation/`: LLM-as-judge harness + RubricBasedEvaluator (C0600/C0601, both DONE)
+**2026-08-25**
+
+- **Added:** `evaluate_invocations_via_llm_judge` — the shared
+  `LlmAsJudge[CriterionT]` scoring harness: samples a judge model
+  `num_samples` times per invocation and, matching the source exactly,
+  marks the *whole* invocation `NOT_EVALUATED` if even one sample fails
+  (not just the failed sample). Ported as a free async function taking
+  the source's four abstract hooks as closures — no concrete per-metric
+  evaluator exists yet to supply a real `format_auto_rater_prompt`
+  (every one is GCP-blocked), and giving the harness itself the
+  `Evaluator` trait would require a breaking async-widening of that
+  trait's already-shipped sync signature.
+- **Added:** `RubricBasedEvaluator` — rubric-set merging across
+  criterion and invocation scope with duplicate-`rubric_id` rejection,
+  ID-then-normalized-text rubric-response matching, and delegating
+  aggregation hooks, composing the new harness rather than extending it
+  as a trait.
+- **Known limitation, disclosed:** sampling runs sequentially rather
+  than under the source's semaphore-bounded concurrent fan-out — the
+  *results* are identical either way (grouping and aggregation don't
+  depend on execution order), only wall-clock parallelism narrows.
+  `judge_model_config` merge and retry-option defaulting also aren't
+  applied yet, matching existing disclosed gaps elsewhere in this
+  crate.
+
+---
+
 ## PR #TBD — `models/`: Gemma 3 model backend (C0113/C0545/C0546/C0548, all DONE)
 **2026-08-25**
 

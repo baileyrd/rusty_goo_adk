@@ -1,19 +1,29 @@
-//! C0601 (partial): `evaluation.rubric_based_evaluator`, ported from
+//! C0601: `evaluation.rubric_based_evaluator`, ported from
 //! `google.adk.evaluation.rubric_based_evaluator`.
 //!
-//! **Partial**: only the harness-independent pieces are ported —
-//! [`RubricResponse`], [`AutoRaterResponseParser`]/
-//! [`DefaultAutoRaterResponseParser`],
-//! [`PerInvocationResultsAggregator`]/
-//! [`MajorityVotePerInvocationResultsAggregator`],
-//! [`InvocationResultsSummarizer`]/[`MeanInvocationResultsSummarizer`],
-//! and [`normalize_text`]. The source's `RubricBasedEvaluator` itself
-//! extends `LlmAsJudge[RubricsBasedCriterion]` (C0600's still-deferred
-//! harness) and returns `AutoRaterScore` (from `llm_as_judge.py`, also
-//! unbuilt) — neither is ported this batch. Every function/type here has
-//! zero dependency on that harness, the same reasoning already
-//! established for the C0612 criterion types and the C0632 persona
-//! system.
+//! [`RubricBasedEvaluator`] composes a [`crate::llm_as_judge::LlmAsJudgeConfig`]
+//! (C0600's harness) rather than inheriting `LlmAsJudge[RubricsBasedCriterion]`
+//! the way the source does — see `llm_as_judge.rs`'s module doc for why that
+//! harness is a free function instead of a trait: `format_auto_rater_prompt`
+//! has no real implementation anywhere in this port (every concrete
+//! per-metric evaluator that would supply one is GCP-blocked), so
+//! `RubricBasedEvaluator` provides only the three hooks the source itself
+//! actually implements — [`RubricBasedEvaluator::convert_auto_rater_response_to_score`],
+//! [`RubricBasedEvaluator::aggregate_per_invocation_samples`],
+//! [`RubricBasedEvaluator::aggregate_invocation_results`] — for a caller to
+//! pass into [`crate::llm_as_judge::evaluate_invocations_via_llm_judge`]
+//! alongside its own prompt-formatting closure.
+//!
+//! **`_normalized_rubric_to_id_map`, ported but unread, disclosed**: the
+//! source builds `self._normalized_rubric_to_id_map` in `__init__` and
+//! never reads it anywhere else in the file (verified by grepping the
+//! source for the attribute) — `convert_auto_rater_response_to_score`
+//! builds its own fresh normalized-text map locally instead. This looks
+//! like vestigial state from an earlier version, but per this migration's
+//! boundary contract "looks unused" is not license to drop it: it's
+//! ported faithfully as [`RubricBasedEvaluator::normalized_rubric_to_id_map`],
+//! a field a caller can still read even though this port's own code never
+//! consults it either, matching the source exactly.
 //!
 //! **Lookbehind → capture group, adaptation disclosed**: the source's
 //! `_RATIONALE_PATTERN`/`_VERDICT_PATTERN` use zero-width lookbehind
@@ -45,12 +55,15 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use adk_models::llm_response::LlmResponse;
 use regex::Regex;
 use rusty_serde::{Deserialize, Serialize};
 
-use crate::eval_rubrics::RubricScore;
+use crate::eval_metrics::{EvalMetric, RubricsBasedCriterion};
+use crate::eval_rubrics::{Rubric, RubricScore};
 use crate::evaluator::{EvaluationResult, PerInvocationResult};
-use crate::llm_as_judge_utils::{get_average_rubric_score, get_eval_status};
+use crate::llm_as_judge::{AutoRaterScore, LlmAsJudgeConfig, LlmAsJudgeError};
+use crate::llm_as_judge_utils::{get_average_rubric_score, get_eval_status, get_text_from_content};
 
 /// `rubric_based_evaluator.RubricResponse` — internal data model to
 /// represent a rubric's response from the auto-rater.
@@ -353,12 +366,242 @@ pub fn normalize_text(text: Option<&str>) -> String {
         .to_lowercase()
 }
 
+/// `rubric_based_evaluator.RubricBasedEvaluator` — a base for rubric-based
+/// evaluators. See this module's doc for why this composes
+/// [`LlmAsJudgeConfig`] rather than extending a trait the way the source
+/// extends `LlmAsJudge[RubricsBasedCriterion]`.
+pub struct RubricBasedEvaluator {
+    pub config: LlmAsJudgeConfig<RubricsBasedCriterion>,
+    rubric_type: Option<String>,
+    auto_rater_response_parser: Box<dyn AutoRaterResponseParser>,
+    per_invocation_results_aggregator: Box<dyn PerInvocationResultsAggregator>,
+    invocation_results_summarizer: Box<dyn InvocationResultsSummarizer>,
+    rubrics: Vec<Rubric>,
+    /// Ported but never read by this port's own code either — see this
+    /// module's doc.
+    normalized_rubric_to_id_map: HashMap<String, String>,
+    effective_rubrics_list: Option<Vec<Rubric>>,
+}
+
+impl RubricBasedEvaluator {
+    /// `RubricBasedEvaluator.__init__`, using the source's own default
+    /// values for `auto_rater_response_parser`,
+    /// `per_invocation_results_aggregator`, and
+    /// `invocation_results_summarizer` — override with
+    /// [`RubricBasedEvaluator::with_auto_rater_response_parser`],
+    /// [`RubricBasedEvaluator::with_per_invocation_results_aggregator`], or
+    /// [`RubricBasedEvaluator::with_invocation_results_summarizer`].
+    pub fn new(
+        eval_metric: &EvalMetric,
+        rubric_type: Option<String>,
+    ) -> Result<Self, LlmAsJudgeError> {
+        let config = LlmAsJudgeConfig::<RubricsBasedCriterion>::new(eval_metric)?;
+        let rubrics = config.criterion.rubrics.clone();
+        let normalized_rubric_to_id_map = rubrics
+            .iter()
+            .map(|r| {
+                (
+                    normalize_text(r.rubric_content.text_property.as_deref()),
+                    r.rubric_id.clone(),
+                )
+            })
+            .collect();
+        Ok(Self {
+            config,
+            rubric_type,
+            auto_rater_response_parser: Box::new(DefaultAutoRaterResponseParser),
+            per_invocation_results_aggregator: Box::new(MajorityVotePerInvocationResultsAggregator),
+            invocation_results_summarizer: Box::new(MeanInvocationResultsSummarizer),
+            rubrics,
+            normalized_rubric_to_id_map,
+            effective_rubrics_list: None,
+        })
+    }
+
+    pub fn with_auto_rater_response_parser(
+        mut self,
+        parser: Box<dyn AutoRaterResponseParser>,
+    ) -> Self {
+        self.auto_rater_response_parser = parser;
+        self
+    }
+
+    pub fn with_per_invocation_results_aggregator(
+        mut self,
+        aggregator: Box<dyn PerInvocationResultsAggregator>,
+    ) -> Self {
+        self.per_invocation_results_aggregator = aggregator;
+        self
+    }
+
+    pub fn with_invocation_results_summarizer(
+        mut self,
+        summarizer: Box<dyn InvocationResultsSummarizer>,
+    ) -> Self {
+        self.invocation_results_summarizer = summarizer;
+        self
+    }
+
+    /// Exposes the field the source never reads either — see this
+    /// module's doc.
+    pub fn normalized_rubric_to_id_map(&self) -> &HashMap<String, String> {
+        &self.normalized_rubric_to_id_map
+    }
+
+    /// `RubricBasedEvaluator.create_effective_rubrics_list`.
+    pub fn create_effective_rubrics_list(
+        &mut self,
+        invocation_rubrics: Option<&[Rubric]>,
+    ) -> Result<(), String> {
+        let mut rubrics_by_id: Vec<(String, Rubric)> = Vec::new();
+        let mut add_rubrics = |rubrics_to_add: &[Rubric], scope_name: &str| -> Result<(), String> {
+            for r in rubrics_to_add {
+                if rubrics_by_id.iter().any(|(id, _)| id == &r.rubric_id) {
+                    return Err(format!(
+                        "Rubric with rubric_id '{}' already exists. Rubric defined in {} \
+                         conflicts with an existing rubric.",
+                        r.rubric_id, scope_name
+                    ));
+                }
+                rubrics_by_id.push((r.rubric_id.clone(), r.clone()));
+            }
+            Ok(())
+        };
+
+        add_rubrics(&self.rubrics, "criterion")?;
+
+        if let Some(invocation_rubrics) = invocation_rubrics {
+            if !invocation_rubrics.is_empty() {
+                let filtered: Vec<Rubric> = match &self.rubric_type {
+                    Some(rubric_type) => invocation_rubrics
+                        .iter()
+                        .filter(|r| r.rubric_type.as_deref() == Some(rubric_type.as_str()))
+                        .cloned()
+                        .collect(),
+                    None => invocation_rubrics.to_vec(),
+                };
+                add_rubrics(&filtered, "invocation")?;
+            }
+        }
+
+        let effective: Vec<Rubric> = rubrics_by_id.into_iter().map(|(_, r)| r).collect();
+        if effective.is_empty() {
+            return Err("Rubrics are required.".to_string());
+        }
+        self.effective_rubrics_list = Some(effective);
+        Ok(())
+    }
+
+    /// `RubricBasedEvaluator.get_effective_rubrics_list`.
+    pub fn get_effective_rubrics_list(&self) -> Result<&[Rubric], String> {
+        self.effective_rubrics_list.as_deref().ok_or_else(|| {
+            "Effective rubrics list not initialized. Call create_effective_rubrics_list() first."
+                .to_string()
+        })
+    }
+
+    /// `RubricBasedEvaluator.convert_auto_rater_response_to_score`.
+    pub fn convert_auto_rater_response_to_score(
+        &self,
+        auto_rater_response: &LlmResponse,
+    ) -> AutoRaterScore {
+        let response_text = get_text_from_content(auto_rater_response.content.as_ref())
+            .filter(|text| !text.is_empty());
+        let rubric_responses = match response_text {
+            None => {
+                eprintln!(
+                    "Auto-rater returned an empty response; no rubric verdicts could be \
+                     parsed and this sample will not be scored."
+                );
+                Vec::new()
+            }
+            Some(text) => {
+                let parsed = self.auto_rater_response_parser.parse(&text);
+                if parsed.is_empty() {
+                    eprintln!(
+                        "Auto-rater response did not match the expected \
+                         Property/Rationale/Verdict format; no rubric verdicts were \
+                         parsed. Raw auto-rater response: {text}"
+                    );
+                }
+                parsed
+            }
+        };
+
+        // The source's `self.get_effective_rubrics_list()` call here
+        // raises an uncaught `ValueError` if `create_effective_rubrics_list`
+        // was never called; this closure-typed hook can't return `Result`
+        // (see this module's doc), so the equivalent is a panic rather
+        // than silently scoring against no rubrics.
+        let effective_rubrics = self
+            .get_effective_rubrics_list()
+            .expect("create_effective_rubrics_list() must be called before scoring");
+        let mut normalized_rubric_to_rubric_map: HashMap<String, &Rubric> = HashMap::new();
+        let mut rubric_by_id: HashMap<&str, &Rubric> = HashMap::new();
+        for r in effective_rubrics {
+            normalized_rubric_to_rubric_map
+                .insert(normalize_text(r.rubric_content.text_property.as_deref()), r);
+            rubric_by_id.insert(r.rubric_id.as_str(), r);
+        }
+
+        let mut rubric_scores = Vec::new();
+        for rubric_response in &rubric_responses {
+            let mut rubric = rubric_response
+                .rubric_id
+                .as_deref()
+                .and_then(|id| rubric_by_id.get(id).copied());
+            if rubric.is_none() {
+                rubric = normalized_rubric_to_rubric_map
+                    .get(&normalize_text(rubric_response.property_text.as_deref()))
+                    .copied();
+            }
+            if let Some(rubric) = rubric {
+                rubric_scores.push(RubricScore {
+                    rubric_id: rubric.rubric_id.clone(),
+                    rationale: rubric_response.rationale.clone(),
+                    score: rubric_response.score,
+                });
+            } else {
+                eprintln!(
+                    "Rubric {:?} not found in the rubrics provided to the metric.",
+                    rubric_response.property_text
+                );
+            }
+        }
+
+        let aggregated_score = get_average_rubric_score(&rubric_scores);
+        AutoRaterScore {
+            score: aggregated_score,
+            rubric_scores: Some(rubric_scores),
+        }
+    }
+
+    /// `RubricBasedEvaluator.aggregate_per_invocation_samples`.
+    pub fn aggregate_per_invocation_samples(
+        &self,
+        per_invocation_samples: &[PerInvocationResult],
+    ) -> PerInvocationResult {
+        self.per_invocation_results_aggregator
+            .aggregate(per_invocation_samples, self.config.threshold)
+    }
+
+    /// `RubricBasedEvaluator.aggregate_invocation_results`.
+    pub fn aggregate_invocation_results(
+        &self,
+        per_invocation_results: &[PerInvocationResult],
+    ) -> EvaluationResult {
+        self.invocation_results_summarizer
+            .summarize(per_invocation_results, self.config.threshold)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::eval_case::Invocation;
+    use crate::eval_metrics::{EvalMetric, JudgeModelOptions};
     use crate::evaluator::EvalStatus;
-    use adk_genai::content::Content;
+    use adk_genai::content::{Content, Part};
 
     #[test]
     fn default_parser_parses_a_well_formed_response() {
@@ -557,5 +800,225 @@ Verdict: Maybe";
             normalize_text(Some("\u{2018}quoted\u{2019} \u{2013} text")),
             "quoted' - text"
         );
+    }
+
+    // --- RubricBasedEvaluator ---
+
+    use crate::eval_rubrics::RubricContent;
+
+    fn rubric(id: &str, text: &str, rubric_type: Option<&str>) -> Rubric {
+        Rubric {
+            rubric_id: id.to_string(),
+            rubric_content: RubricContent {
+                text_property: Some(text.to_string()),
+            },
+            description: None,
+            rubric_type: rubric_type.map(|t| t.to_string()),
+        }
+    }
+
+    fn eval_metric_with_criterion(criterion: &RubricsBasedCriterion) -> EvalMetric {
+        let value = rusty_serde::json::to_value(criterion).unwrap();
+        EvalMetric::new("rubric_metric").with_criterion(value)
+    }
+
+    fn criterion(rubrics: Vec<Rubric>) -> RubricsBasedCriterion {
+        RubricsBasedCriterion {
+            threshold: 0.5,
+            include_intermediate_responses_in_final: false,
+            judge_model_options: JudgeModelOptions {
+                judge_model: "gemini-2.5-flash".to_string(),
+                ..Default::default()
+            },
+            rubrics,
+        }
+    }
+
+    fn llm_response_text(text: &str) -> LlmResponse {
+        LlmResponse {
+            content: Some(Content::new("model", vec![Part::text(text)])),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn new_parses_criterion_rubrics_and_populates_the_normalized_map() {
+        let rubrics = vec![
+            rubric("r1", "The response is concise.", None),
+            rubric("r2", "The response is polite.", None),
+        ];
+        let eval_metric = eval_metric_with_criterion(&criterion(rubrics));
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        assert_eq!(evaluator.config.threshold, 0.5);
+        assert_eq!(evaluator.rubrics.len(), 2);
+        assert_eq!(
+            evaluator
+                .normalized_rubric_to_id_map()
+                .get("the response is concise."),
+            Some(&"r1".to_string())
+        );
+    }
+
+    #[test]
+    fn create_effective_rubrics_list_merges_criterion_and_invocation_rubrics() {
+        let eval_metric =
+            eval_metric_with_criterion(&criterion(vec![rubric("r1", "criterion rubric", None)]));
+        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let invocation_rubrics = vec![rubric("r2", "invocation rubric", None)];
+        evaluator
+            .create_effective_rubrics_list(Some(&invocation_rubrics))
+            .unwrap();
+        let effective = evaluator.get_effective_rubrics_list().unwrap();
+        assert_eq!(effective.len(), 2);
+    }
+
+    #[test]
+    fn create_effective_rubrics_list_rejects_a_duplicate_rubric_id() {
+        let eval_metric =
+            eval_metric_with_criterion(&criterion(vec![rubric("r1", "criterion rubric", None)]));
+        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let invocation_rubrics = vec![rubric("r1", "duplicate id", None)];
+        let result = evaluator.create_effective_rubrics_list(Some(&invocation_rubrics));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("r1"));
+    }
+
+    #[test]
+    fn create_effective_rubrics_list_filters_invocation_rubrics_by_rubric_type() {
+        let eval_metric =
+            eval_metric_with_criterion(&criterion(vec![rubric("r1", "criterion rubric", None)]));
+        let mut evaluator =
+            RubricBasedEvaluator::new(&eval_metric, Some("FINAL_RESPONSE_QUALITY".to_string()))
+                .unwrap();
+        let invocation_rubrics = vec![
+            rubric("r2", "matching type", Some("FINAL_RESPONSE_QUALITY")),
+            rubric("r3", "other type", Some("TOOL_USE_QUALITY")),
+        ];
+        evaluator
+            .create_effective_rubrics_list(Some(&invocation_rubrics))
+            .unwrap();
+        let effective = evaluator.get_effective_rubrics_list().unwrap();
+        assert_eq!(effective.len(), 2);
+        assert!(effective.iter().any(|r| r.rubric_id == "r2"));
+        assert!(!effective.iter().any(|r| r.rubric_id == "r3"));
+    }
+
+    #[test]
+    fn create_effective_rubrics_list_errors_without_any_rubrics() {
+        let eval_metric = eval_metric_with_criterion(&criterion(vec![]));
+        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let result = evaluator.create_effective_rubrics_list(None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_effective_rubrics_list_errors_before_initialization() {
+        let eval_metric =
+            eval_metric_with_criterion(&criterion(vec![rubric("r1", "criterion rubric", None)]));
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        assert!(evaluator.get_effective_rubrics_list().is_err());
+    }
+
+    #[test]
+    fn convert_auto_rater_response_to_score_matches_a_rubric_by_id() {
+        let eval_metric =
+            eval_metric_with_criterion(&criterion(vec![rubric("r1", "concise", None)]));
+        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        evaluator.create_effective_rubrics_list(None).unwrap();
+        let response =
+            llm_response_text("ID: r1\nProperty: concise\nRationale: It is short.\nVerdict: Yes");
+        let score = evaluator.convert_auto_rater_response_to_score(&response);
+        let rubric_scores = score.rubric_scores.unwrap();
+        assert_eq!(rubric_scores.len(), 1);
+        assert_eq!(rubric_scores[0].rubric_id, "r1");
+        assert_eq!(rubric_scores[0].score, Some(1.0));
+        assert_eq!(score.score, Some(1.0));
+    }
+
+    #[test]
+    fn convert_auto_rater_response_to_score_falls_back_to_normalized_text_match() {
+        let eval_metric = eval_metric_with_criterion(&criterion(vec![rubric(
+            "r1",
+            "The response is concise.",
+            None,
+        )]));
+        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        evaluator.create_effective_rubrics_list(None).unwrap();
+        // No "ID:" line, so the parser must fall back to matching the
+        // normalized property text against the rubric's own text.
+        let response = llm_response_text(
+            "Property: **The response is concise.**\nRationale: Short.\nVerdict: No",
+        );
+        let score = evaluator.convert_auto_rater_response_to_score(&response);
+        let rubric_scores = score.rubric_scores.unwrap();
+        assert_eq!(rubric_scores.len(), 1);
+        assert_eq!(rubric_scores[0].rubric_id, "r1");
+        assert_eq!(rubric_scores[0].score, Some(0.0));
+    }
+
+    #[test]
+    fn convert_auto_rater_response_to_score_skips_an_unmatched_rubric() {
+        let eval_metric =
+            eval_metric_with_criterion(&criterion(vec![rubric("r1", "concise", None)]));
+        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        evaluator.create_effective_rubrics_list(None).unwrap();
+        let response = llm_response_text(
+            "ID: r-unknown\nProperty: something else\nRationale: n/a\nVerdict: Yes",
+        );
+        let score = evaluator.convert_auto_rater_response_to_score(&response);
+        assert_eq!(score.rubric_scores.unwrap().len(), 0);
+        assert_eq!(score.score, None);
+    }
+
+    #[test]
+    fn convert_auto_rater_response_to_score_returns_empty_for_a_blank_response() {
+        let eval_metric =
+            eval_metric_with_criterion(&criterion(vec![rubric("r1", "concise", None)]));
+        let mut evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        evaluator.create_effective_rubrics_list(None).unwrap();
+        let response = LlmResponse {
+            content: None,
+            ..Default::default()
+        };
+        let score = evaluator.convert_auto_rater_response_to_score(&response);
+        assert_eq!(score.rubric_scores.unwrap().len(), 0);
+        assert_eq!(score.score, None);
+    }
+
+    #[test]
+    fn aggregate_per_invocation_samples_delegates_to_the_configured_aggregator() {
+        let eval_metric =
+            eval_metric_with_criterion(&criterion(vec![rubric("r1", "concise", None)]));
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let samples = vec![per_invocation_result(vec![RubricScore {
+            rubric_id: "r1".to_string(),
+            rationale: None,
+            score: Some(1.0),
+        }])];
+        let result = evaluator.aggregate_per_invocation_samples(&samples);
+        assert_eq!(result.score, Some(1.0));
+        assert_eq!(result.eval_status, EvalStatus::Passed);
+    }
+
+    #[test]
+    fn aggregate_invocation_results_delegates_to_the_configured_summarizer() {
+        let eval_metric =
+            eval_metric_with_criterion(&criterion(vec![rubric("r1", "concise", None)]));
+        let evaluator = RubricBasedEvaluator::new(&eval_metric, None).unwrap();
+        let results = vec![
+            per_invocation_result(vec![RubricScore {
+                rubric_id: "r1".to_string(),
+                rationale: None,
+                score: Some(1.0),
+            }]),
+            per_invocation_result(vec![RubricScore {
+                rubric_id: "r1".to_string(),
+                rationale: None,
+                score: Some(0.0),
+            }]),
+        ];
+        let summary = evaluator.aggregate_invocation_results(&results);
+        assert_eq!(summary.overall_score, Some(0.5));
+        assert_eq!(summary.per_invocation_results.len(), 2);
     }
 }

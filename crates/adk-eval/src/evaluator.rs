@@ -32,10 +32,10 @@ pub fn validate_invocation_lengths(
 ///
 /// **Widened**: `rubric_scores` was an opaque `Value` placeholder while
 /// `eval_rubrics.RubricScore` (C0607) was still `REQUIRED`; now that
-/// it's `DONE` and `rubric_based_evaluator`'s aggregators (C0601,
-/// partial) are real consumers that need the real structure, this
-/// widens to `Option<Vec<RubricScore>>` — the same "widen once a real
-/// consumer needs it" pattern already used for `Invocation.rubrics`/
+/// it's `DONE` and `rubric_based_evaluator`'s aggregators (C0601) are
+/// real consumers that need the real structure, this widens to
+/// `Option<Vec<RubricScore>>` — the same "widen once a real consumer
+/// needs it" pattern already used for `Invocation.rubrics`/
 /// `.app_details`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[rusty_serde(rename_all = "camelCase")]
@@ -66,15 +66,18 @@ pub struct EvaluationResult {
     pub overall_rubric_scores: Option<Vec<RubricScore>>,
 }
 
-/// C0600 (partial): `evaluator.Evaluator` — a metrics evaluator
-/// interface. See the crate root doc for why the source's
-/// `LlmAsJudge[CriterionT]` harness isn't built on top of this yet.
+/// C0600: `evaluator.Evaluator` — a metrics evaluator interface. See
+/// `llm_as_judge.rs`'s module doc for why the LLM-judge harness
+/// (`evaluate_invocations_via_llm_judge`) does not implement this trait.
 ///
 /// **Adaptation**: sync, not `-> EvaluationResult | Awaitable[EvaluationResult]`
-/// — the one implementor this batch ports
-/// ([`crate::trajectory_evaluator::TrajectoryEvaluator`]) does no I/O, so
-/// there's nothing to await; a future LLM-judge-backed implementor will
-/// need its own async story, not modeled here yet.
+/// — every implementor of this trait
+/// ([`crate::trajectory_evaluator::TrajectoryEvaluator`],
+/// [`crate::final_response_match_v1::RougeEvaluator`],
+/// [`crate::custom_metric_evaluator::CustomMetricEvaluator`]) does no
+/// I/O, so there's nothing to await; widening this to `async fn` for a
+/// future LLM-judge-backed implementor would be a breaking change to a
+/// trait these already-shipped types implement — see `llm_as_judge.rs`.
 pub trait Evaluator {
     /// Returns an [`EvaluationResult`] after evaluating `actual_invocations`
     /// against `expected_invocations` (a benchmark/golden set, when

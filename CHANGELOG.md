@@ -5,6 +5,32 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-eval/src/llm_as_judge.rs` (C0600, DONE) and
+  `RubricBasedEvaluator` in `crates/adk-eval/src/rubric_based_evaluator.rs`
+  (C0601, DONE), ported from `evaluation/llm_as_judge.py` and
+  `evaluation/rubric_based_evaluator.py`. `evaluate_invocations_via_llm_judge`
+  is the `LlmAsJudge[CriterionT]` harness: builds one judge-model request
+  per invocation, samples it `num_samples` times, and — verified against
+  the real source, not assumed — marks the *whole* invocation
+  `NOT_EVALUATED` if even one sample fails, discarding its successful
+  samples too. Ported as a free async function taking the source's four
+  abstract hooks as closures rather than a trait: no concrete per-metric
+  evaluator exists yet to supply a real `format_auto_rater_prompt`
+  (every one is GCP-blocked, C0591-C0598), and it also can't implement
+  `Evaluator` itself without a breaking async-widening of that
+  already-shipped trait. `RubricBasedEvaluator` composes an
+  `LlmAsJudgeConfig<RubricsBasedCriterion>` and provides the three hooks
+  the source itself actually implements: rubric-set merging
+  (criterion+invocation scope, duplicate-`rubric_id` rejection, optional
+  `rubric_type` filtering), ID-then-normalized-text rubric-response
+  matching, and the majority-vote/mean-score aggregator delegations.
+  Adaptations disclosed in the module docs: sequential instead of
+  semaphore-bounded concurrent sampling (identical results, only
+  wall-clock parallelism narrows); `judge_model_config` merge and
+  `add_default_retry_options_if_not_present` not applied (existing
+  disclosed gaps); lookbehind regexes become capture groups; NFKC
+  normalization skipped (same gap as `rouge.rs`). 33 new tests
+  (8 + 25).
 - New `crates/adk-models/src/gemma.rs`: `Gemma`/`GemmaFunctionCallingMixin`/
   `GemmaFunctionCallModel` (C0113/C0545/C0546/C0548, all DONE), ported
   from `models/gemma_llm.py`. `Gemma` composes a `Gemini` instance
