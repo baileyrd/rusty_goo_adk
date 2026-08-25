@@ -22,6 +22,47 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `auth/oauth2_discovery.py`: `OAuth2DiscoveryManager` (C0534, C0535)
+**2026-08-25**
+
+- **Added:** `adk-agents::oauth2_discovery::OAuth2DiscoveryManager` —
+  `discover_auth_server_metadata`/`discover_resource_metadata`, the
+  actual `.well-known` fetching logic C0533's data models were built
+  ahead of. Tries the RFC8414/RFC9728 candidate endpoints in the
+  source's exact priority order (for a non-root issuer/resource URL:
+  path-inserted OAuth2 metadata, path-inserted OpenID Connect
+  discovery, then path-appended OpenID Connect discovery; a root URL
+  skips path handling entirely), swallowing per-candidate HTTP/parse
+  errors and falling through to the next. Validates the returned
+  `issuer`/`resource` field against the requested URL before accepting
+  a candidate — the source's explicit defense against OAuth "IdP
+  mix-up" attacks.
+- **Added (dependency):** `reqwest` as a new dependency edge for
+  `adk-agents` (workspace-level crate already adopted by
+  `adk-models::gemini`/`adk-tools::load_web_page`, so this is a new
+  usage site, not a new sovereignty decision — see
+  `crates/adk-agents/Cargo.toml`'s comment). `reqwest::blocking` does
+  the actual fetch inside `rusty_tokio::spawn_blocking`, wrapped in an
+  `async fn` — the same bridging pattern `load_web_page.rs` already
+  established, needed because a real-tokio-backed async client can't
+  nest inside `rusty_tokio`'s own reactor.
+- **Testing:** a new local multi-connection mock HTTP server
+  (`oauth2_discovery::tests::spawn_mock_server`) — `gemini.rs`'s
+  existing `spawn_one_shot_server` only handles one request/response
+  pair, and the candidate-fallback logic here needs a server that can
+  answer several distinct requests against the same mock host within
+  one test. 7 new tests cover: success on the first candidate, falling
+  through to the second after a 404, `None` when every candidate fails,
+  the exact 3-candidate list for a path-carrying issuer (proven by only
+  wiring up the third, path-appended candidate), an immediate `None`
+  for a malformed issuer URL with zero network calls, resource-metadata
+  success, and the mismatched-`resource`-field rejection.
+- **Known limitation:** none — this closes out the last unfinished part
+  of `auth/oauth2_discovery.py` (C0533 already covered the data
+  models); the whole file is now DONE.
+
+---
+
 ## PR #TBD — `auth/oauth2_discovery.py`/`runners.py`: two small data-only ports (C0533, C0835)
 **2026-08-24** · (link added once this PR is opened)
 

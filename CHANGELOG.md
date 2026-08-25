@@ -12,9 +12,21 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
   crate's Google-genai-facing camelCase types); `@experimental`'s
   warn-on-construction ported via an explicit `::new()` calling
   `warn_experimental`, the same `ResumabilityConfig::new` precedent.
-  `OAuth2DiscoveryManager`'s actual fetching logic stays its own rows
-  (C0534/C0535), needing an async HTTP client this port hasn't adopted
-  anywhere. 4 new tests.
+  4 new tests.
+- `adk-agents::oauth2_discovery::OAuth2DiscoveryManager` (C0534/C0535
+  DONE) — `discover_auth_server_metadata`/`discover_resource_metadata`,
+  trying the RFC-specified `.well-known` candidate endpoints in order
+  and validating the returned `issuer`/`resource` field against the
+  requested URL, the explicit defense against OAuth "IdP mix-up"
+  attacks; swallows per-candidate HTTP/parse errors and falls through to
+  the next candidate. `reqwest::blocking` does the fetching inside
+  `rusty_tokio::spawn_blocking`, the same bridging pattern
+  `load_web_page.rs` established — a new usage site of the
+  already-adopted `reqwest` dependency added to `adk-agents` for this
+  (see `crates/adk-agents/Cargo.toml`). Verified against a new local
+  multi-connection mock HTTP server (`spawn_mock_server`), since the
+  candidate-fallback logic needs several distinct responses from the
+  same mock host in one test. 7 new tests.
 - `adk-runners::runner::get_function_responses_from_content` (C0835
   DONE) — extracts every `FunctionResponse` from a `Content`'s parts,
   `[]` for `None`/no-parts, reusing the already-real
