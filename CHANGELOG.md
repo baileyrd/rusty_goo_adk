@@ -5,6 +5,42 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `Workflow` node-scheduling primitives (C0302/C0303, both DONE — see
+  below for narrowings): `Workflow::schedule_ready_nodes`/
+  `start_node_task` and their helpers (`has_waiting_task_agent`,
+  `at_concurrency_limit`, `prepare_node_state_for_starting`, free fns
+  `next_run_id`/`compute_isolation_scope_for_node`/
+  `create_node_state_for_new_run`), plus the resumability-checkpoint
+  builders `Workflow::node_checkpoint_event`/
+  `maybe_reemit_replayed_output_event`/`end_of_agent_event`. `Workflow
+  ::start_node_task` (C0303) is a disclosed, deliberate divergence from
+  the source's literal call chain: rather than routing through
+  `ctx.run_node()`/`DynamicNodeScheduler` (which both need exclusive
+  `&mut Context` access for a node's whole execution — structurally
+  incompatible with the LOOP phase's purpose of running graph nodes
+  concurrently, not just a performance tradeoff), it dispatches via
+  `NodeRunner::run` directly, the only primitive whose shared `&Context`
+  borrow lets multiple pending node futures be built and polled at once.
+  Fidelity is preserved via `start_node_task`'s own inline
+  replay-interception check against `loop_state.recovered_executions`.
+  New `PendingNodeFuture<'a>` type alias (a local boxed, non-`'static`
+  future per pending node — `rusty_tokio::task::JoinSet` needs `Send +
+  'static`, which `NodeRunner::run`'s `&Context`-borrowing future can't
+  satisfy without a breaking rework). `WorkflowLoopState` grows `nodes`/
+  `replayed_nodes`/(private) `pending_tasks` fields and a lifetime
+  parameter; `sequence_barrier` is now `Arc`-wrapped so multiple pending
+  futures can share one barrier. The three checkpoint builders are
+  redesigned as pure functions returning `Option<Event>` (this port's
+  "eagerly collected `Vec`" adaptation) rather than enqueuing onto a live
+  per-invocation event queue, for the not-yet-built LOOP driver (C0301)
+  to push into its own accumulator — gated on `InvocationContext::
+  is_resumable`, matching the source. `has_waiting_task_agent` narrows
+  to always `false` (needs a `node.mode == "task"` check this port's
+  `BaseNode` has no equivalent for, the same C0092 LlmAgent tree-fusion
+  gap already disclosed elsewhere). Still not wired into a `BaseNode`/
+  `NodeBehavior` — nothing yet drives `pending_tasks` to completion; that
+  lands with the LOOP driver (C0301) and the rest of the batch
+  (C0304-C0306).
 - `Workflow` struct skeleton + SETUP phase (C0298/C0299/C0300, all DONE —
   see below for narrowings): new `crates/adk-agents/src/
   workflow_workflow.rs`. `Workflow::new` builds and validates a `Graph`
