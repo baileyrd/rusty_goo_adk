@@ -5,6 +5,63 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P7 node-wrapping trio (C0296/C0317/C0326, all DONE — see below for
+  disclosed narrowings): new `crates/adk-agents/src/
+  workflow_parallel_worker.rs` (`ParallelWorker`/`parallel_worker_node`,
+  C0317) — runs a wrapped node once per list-input item, empty-list
+  short-circuit, non-list input wrapped as a single item; and new
+  `crates/adk-agents/src/workflow_node_factory.rs` (`build_node`/
+  `is_node_like`, C0326; `node`/`NodeFactoryError`, C0296) — converts a
+  `NodeLike` to a concrete `BaseNode`, and composes that with
+  `parallel_worker_node` when `parallel_worker=true` is requested.
+- **Disclosed narrowing (C0317):** `ParallelWorker` dispatches
+  sequentially, not concurrently — `Context::run_node` needs `&mut
+  Context` for a node's entire execution, the same constraint that
+  already forced `Workflow`'s own LOOP phase (C0301) to bypass it and
+  build a bespoke concurrent combinator instead; `ParallelWorker` has
+  no such machinery to reuse, so items run one at a time through the
+  already-shipped `Context::run_node` directly. Deterministic
+  earliest-index failure is preserved by construction rather than by
+  replicating the source's stable-sort tiebreak; "cancel remaining
+  in-flight items"/5s drain timeout are not applicable (nothing is ever
+  concurrently in-flight); an interrupted item stops the batch and
+  yields nothing, relying on `Context::run_node`'s own already-tested
+  interrupt-id propagation. `max_parallel_workers` is preserved as a
+  validated (`>= 1`) field for API-shape fidelity but has no effect
+  under sequential dispatch.
+- **Disclosed narrowing (C0326):** `build_node` narrows to the
+  `BaseNode`/`START` cases of `NodeLike` — `BaseTool`→`_ToolNode` stays
+  out of scope (the `adk-tools`/`adk-agents` crate-cycle, same as
+  C0355/C0356); `LlmAgent`/task-mode-`RemoteA2aAgent` auto-defaulting
+  stays out of scope (needs the C0092 tree-fusion gap); `callable`→
+  `FunctionNode` has no runtime dispatch to build since Rust has no
+  `isinstance`/`callable()` check (a caller constructs `FunctionNode`
+  directly instead). Within the `BaseNode` branch, only the
+  no-overrides case is supported (`node_like.model_copy(update=kwargs)`
+  has no equivalent since `NodeBehavior` has no `Clone` bound — adding
+  one would be a breaking supertrait change to every existing
+  implementor, its own stop-and-ask) — an override attempt returns
+  `BuildNodeError::OverridesNotSupportedForBaseNode`. `is_node_like`
+  narrows to a disclosed constant `true`, since `NodeLike` is already a
+  closed, exhaustively-matched enum.
+- **Disclosed narrowing (C0296):** `node(...)` narrows to its "wrap an
+  already-resolved `NodeLike`" overload — the bare-decorator overload
+  (`@node`/`@node()` on a function) has no Rust equivalent, so
+  `auth_config`/`parameter_binding` (which belong to `FunctionNode`'s
+  own constructor) aren't parameters here. `Node` (the subclassable
+  base class) is a **permanent** narrowing: this port's `NodeBehavior`
+  trait-object design already is the Rust equivalent of "subclass and
+  override" — any implementor wanting parallel-worker fan-out just
+  wraps its own built `BaseNode` with `parallel_worker_node` directly.
+- Also corrected two stale manifest rows while in this area: C0307
+  (`NodeState`/`NodeStatus`/`Trigger`) was fully complete from an
+  earlier batch but still showed `REQUIRED`; C0298 (`Workflow`'s own
+  struct-skeleton row) is updated with the full, compiler-verified
+  detail on the `NodeBehavior`/`BaseNode` wiring blocker (see the
+  dedicated PR that disclosed it).
+- **Tests:** `crates/adk-agents/src/workflow_parallel_worker.rs::tests::*`
+  (7 tests); `crates/adk-agents/src/workflow_node_factory.rs::tests::*`
+  (9 tests).
 - `Workflow` FINALIZE phase (C0306, DONE — see below for disclosed
   adaptations): `Workflow::finalize` propagates interrupt ids onto `ctx`
   or sets `ctx.output` from the single terminal node's output (erroring
