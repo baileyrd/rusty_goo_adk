@@ -5,6 +5,28 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/workflow_{function_node,join_node}.rs`: P7
+  workflow/graph engine Chunk 5 — `FunctionNode` (C0313/C0314/C0315, all
+  DONE, heavily narrowed) and `JoinNode` (C0316, narrowed — `_ToolNode`
+  half stays out of scope). `FunctionNode`'s `auth_config` gate (C0314)
+  ports in full, reusing Chunk 2's HITL utilities verbatim; the source's
+  reflective per-parameter binding/type-coercion machinery
+  (`_bind_parameters`/`_coerce_param`/`get_type_hints`/`TypeAdapter`,
+  C0313/C0315's bulk) has no Rust equivalent — Rust can't introspect a
+  closure's parameter names or build a validator from a runtime type —
+  so a wrapped `FunctionNodeBody::call` receives `(ctx, node_input)`
+  directly, the same "caller supplies the resolved bits" adaptation
+  already established elsewhere. `_to_event`'s normalization and
+  per-yield `state_delta` attachment are already fully subsumed by
+  existing infrastructure (`NodeYield`/`BaseNode::run`, C0295; `NodeRunner`'s
+  trailing flush, C0312) — nothing left to add. `JoinNode` ports its
+  `requires_all_predecessors=true` override and pass-through `_run_impl`
+  in full, plus `_get_common_branch_prefix` (dead code even in the
+  source, ported anyway per this migration's standing rule) as a thin
+  wrapper around the already-shipped `BranchPath::common_prefix`.
+  `NodeBehavior` grows a new `requires_all_predecessors` default trait
+  method (additive, `false` by default) and `BaseNode` a delegating
+  accessor. 15 new tests.
 - New `crates/adk-agents/src/workflow_{rehydration_utils,replay_interceptor,
   replay_manager,replay_sequence_barrier}.rs`: P7 workflow/graph engine
   Chunk 4 — the replay/rehydration stack (C0320/C0321/C0322/C0323, all

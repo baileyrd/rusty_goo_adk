@@ -22,6 +22,41 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `workflow/`: `FunctionNode`/`JoinNode`, P7 Chunk 5 (C0313/C0314/C0315/C0316, all DONE — heavily narrowed)
+**2026-08-25**
+
+- **Added:** `FunctionNode` (`workflow_function_node.rs`) — the
+  `auth_config` gate (C0314) ports in full: constructor-time
+  `rerun_on_resume` validation, and the resume-response/no-credential/
+  has-credential three-way branch, reusing Chunk 2's HITL utilities
+  (`has_auth_credential`/`process_auth_resume`/`create_auth_request_event`)
+  verbatim.
+- **Heavily narrowed, disclosed:** the source's reflective per-parameter
+  binding and type coercion (`_bind_parameters`/`_coerce_param`/
+  `get_type_hints`/`TypeAdapter`-based `dict`→`BaseModel`/`Content`→`str`
+  coercion, C0313/C0315's bulk) has no Rust equivalent — this port can't
+  introspect a closure's parameter names or build a validator from a
+  runtime type annotation. A wrapped `FunctionNodeBody::call` receives
+  `(ctx, node_input)` directly and does its own extraction, the "caller
+  supplies the resolved bits" adaptation already established elsewhere.
+  `_to_event`'s Event/RequestInput-passthrough-or-wrap normalization and
+  per-yield `state_delta` attachment are already fully covered by
+  existing infrastructure (`NodeYield`/`BaseNode::run`, and `NodeRunner`'s
+  trailing flush) — nothing distinct survives to add.
+- **Added:** `JoinNode` (`workflow_join_node.rs`) — `requires_all_predecessors
+  = true` and the pass-through `_run_impl` port in full; `_get_common_branch_prefix`
+  (verified dead code even in the source — no caller anywhere) ported anyway
+  per this migration's standing rule, as a thin wrapper around the already-shipped
+  `BranchPath::common_prefix`. `_ToolNode` stays out of scope: it needs `BaseTool`,
+  and `adk-tools` already depends on `adk-agents` — the same crate-cycle shape
+  already disclosed for `build_node`/`parse_edge_items` and C0355/C0356.
+- **Added:** `NodeBehavior::requires_all_predecessors` (new default
+  trait method, additive — `false` by default, matching the source's
+  own `BaseNode` default) and a delegating `BaseNode` accessor. Has no
+  reader yet — only `Workflow` (C0298-C0306, not built) consumes it —
+  kept correctly wired now.
+- 15 new tests.
+
 ## PR #TBD — `workflow/`: the replay/rehydration stack, P7 Chunk 4 (C0320/C0321/C0322/C0323, all DONE)
 **2026-08-25**
 
