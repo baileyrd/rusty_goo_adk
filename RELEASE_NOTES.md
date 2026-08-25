@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tests/unittests/artifacts/test_artifact_service.py`: cross-backend `ArtifactService` parity suite (C0278)
+**2026-08-25**
+
+- **Added:** `crates/adk-agents/tests/artifact_service_cross_backend.rs`
+  — a new Cargo integration test proving `InMemoryArtifactService` and
+  `FileArtifactService` behave identically through the shared
+  `ArtifactService` trait. Ports 10 of the source's parametrized
+  behaviors as one `assert_*` function per behavior (Rust has no
+  `pytest.mark.parametrize` equivalent), each called once per backend
+  against the same `&dyn ArtifactService`: load-empty, save/load/delete
+  round trip, key listing, version listing, nested-artifact-reference
+  isolation (a nested artifact like `"doc/nested"` must not leak
+  versions into, or get deleted with, its parent `"doc"`), `user:`-prefix
+  preservation, and namespaced `user_id` support (a `user_id` containing
+  its own `/`, exercised because `FileArtifactService` maps `user_id`
+  onto a filesystem path segment).
+- **Known limitation:** `GcsArtifactService` — the source's third
+  parametrized backend — doesn't exist in this port yet (the P5/P6
+  GCP-SDK pocket), so this suite covers the two backends this port has.
+  Also not ported: the source's artifact-reference-URI resolution tests
+  and its ~12 separately-parametrized path-traversal-rejection
+  functions — both backends already carry dedicated coverage for these
+  elsewhere in this port, so duplicating them cross-backend here would
+  be redundant rather than additive.
+- **Testing:** 20 new tests (10 behaviors × 2 backends), all passing on
+  the first run — genuine evidence the two implementations agree, not
+  just that each independently passes its own unit tests.
+
+---
+
 ## PR #TBD — `agents/context.py`: wire `Context` through the real `AuthHandler` (C0062 correction)
 **2026-08-25**
 

@@ -4,6 +4,18 @@ All notable changes to this repo are documented here.
 Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
+### Added
+- New `crates/adk-agents/tests/artifact_service_cross_backend.rs` (C0278
+  REQUIRED+Partial) — a cross-backend `ArtifactService` parity suite:
+  10 shared behaviors (load-empty, save/load/delete, key/version
+  listing, nested-artifact-reference isolation, user-prefix scoping,
+  namespaced `user_id`), each run once against `InMemoryArtifactService`
+  and once against `FileArtifactService` through the same `&dyn
+  ArtifactService` trait object — proving the two backends genuinely
+  behave identically, not just that each independently passes its own
+  unit tests. `GcsArtifactService` (the source's third parametrized
+  backend) stays excluded, still blocked on the P5/P6 GCP-SDK pocket.
+  20 new tests.
 ### Fixed
 - `crates/adk-agents/src/context.rs`: `Context::request_credential` now
   routes through `AuthHandler::generate_auth_request` instead of
