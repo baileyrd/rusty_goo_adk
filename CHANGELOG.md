@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/auth_handler.rs`: `AuthHandler` (C0507 DONE,
+  C0506/C0508 REQUIRED+Partial) — `get_auth_response`/
+  `parse_and_store_auth_response`/`_build_credential_from_string`
+  (C0507)/`generate_auth_request`/`generate_auth_uri`, plus a new pure
+  standalone `resolve_authorization_endpoint_and_scopes` helper (built
+  ahead of its still-blocked authlib-only caller). `get_auth_response`
+  and `_build_credential_from_string` ported in full; `generate_auth_uri`
+  always takes the source's own `not AUTHLIB_AVAILABLE` fallback (this
+  port has no authlib-equivalent OAuth2 client, the same missing-crate
+  gap C0530/C0524/C0526 are blocked on — and genuinely this port's
+  entire reachable behavior today); `parse_and_store_auth_response`'s
+  OAuth2/OIDC token-exchange branch stays unported (`exchange_auth_token`
+  needs a concrete `OAuth2CredentialExchanger`, C0524, blocked on the
+  same missing crate). 22 new tests.
 - New `crates/adk-tools/src/base_retrieval_tool.rs`:
   `retrieval_tool_declaration`/`BaseRetrievalTool` (C0482 DONE) — the
   shared `query`-string `FunctionDeclaration` every retrieval tool
