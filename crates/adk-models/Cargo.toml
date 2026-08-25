@@ -9,6 +9,13 @@ publish.workspace = true
 adk-agents = { path = "../adk-agents" }
 adk-genai = { path = "../adk-genai" }
 adk-platform = { path = "../adk-platform" }
+# C0125: progressive SSE streaming needs FeatureName::ProgressiveSseStreaming
+# (adk-features, a zero-dependency leaf crate) and Event::new_id (adk-events)
+# to synthesize function-call ids. Both were already transitive dependencies
+# via adk-agents; adding them directly is a cycle-free Cargo.toml edit — see
+# streaming_utils.rs's module doc for the full stale-blocker correction.
+adk-features = { path = "../adk-features" }
+adk-events = { path = "../adk-events" }
 rusty_serde = { workspace = true }
 rusty_err = { workspace = true }
 rusty_tokio = { workspace = true }

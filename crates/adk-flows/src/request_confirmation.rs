@@ -416,6 +416,7 @@ mod tests {
             );
         }
         FunctionCall {
+            partial_args: None,
             id: Some(id.to_string()),
             name: Some("adk_request_confirmation".to_string()),
             args: Some(args),
@@ -446,6 +447,7 @@ mod tests {
             Value::String("not a map".to_string()),
         );
         let call = FunctionCall {
+            partial_args: None,
             id: Some("conf-1".to_string()),
             name: Some("adk_request_confirmation".to_string()),
             args: Some(args),
@@ -542,6 +544,7 @@ mod tests {
 
     fn history_call(id: &str, name: &str, args: Vec<(&str, Value)>) -> FunctionCall {
         FunctionCall {
+            partial_args: None,
             id: Some(id.to_string()),
             name: Some(name.to_string()),
             args: Some(args.into_iter().map(|(k, v)| (k.to_string(), v)).collect()),
@@ -569,6 +572,7 @@ mod tests {
             ]),
         );
         FunctionCall {
+            partial_args: None,
             id: Some(conf_id.to_string()),
             name: Some(REQUEST_CONFIRMATION_FUNCTION_CALL_NAME.to_string()),
             args: Some(args),
@@ -633,6 +637,7 @@ mod tests {
             )]),
         );
         let call = FunctionCall {
+            partial_args: None,
             id: Some("conf-1".to_string()),
             name: Some(REQUEST_CONFIRMATION_FUNCTION_CALL_NAME.to_string()),
             args: Some(args),

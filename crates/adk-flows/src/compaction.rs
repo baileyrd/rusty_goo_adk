@@ -241,6 +241,7 @@ mod tests {
         e.content = Some(Content::new(
             "model",
             vec![Part::function_call(FunctionCall {
+                partial_args: None,
                 id: Some(id.to_string()),
                 name: Some("tool".to_string()),
                 args: None,
@@ -359,12 +360,14 @@ mod tests {
             "model",
             vec![
                 Part::function_call(FunctionCall {
+                    partial_args: None,
                     id: Some("id1".to_string()),
                     name: Some("tool".to_string()),
                     args: None,
                     will_continue: None,
                 }),
                 Part::function_call(FunctionCall {
+                    partial_args: None,
                     id: Some("id2".to_string()),
                     name: Some("tool".to_string()),
                     args: None,

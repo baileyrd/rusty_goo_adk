@@ -250,6 +250,7 @@ mod tests {
     fn function_call_part(name: &str) -> Part {
         Part {
             function_call: Some(FunctionCall {
+                partial_args: None,
                 id: None,
                 name: Some(name.to_string()),
                 args: Some(std::collections::BTreeMap::new()),
@@ -525,6 +526,7 @@ mod tests {
         let response_parts = vec![
             Part {
                 function_call: Some(FunctionCall {
+                    partial_args: None,
                     id: None,
                     name: Some(String::new()),
                     args: None,

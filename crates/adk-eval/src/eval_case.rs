@@ -234,6 +234,7 @@ mod tests {
 
     fn function_call(id: &str, name: &str) -> FunctionCall {
         FunctionCall {
+            partial_args: None,
             id: Some(id.to_string()),
             name: Some(name.to_string()),
             args: None,

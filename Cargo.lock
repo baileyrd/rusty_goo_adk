@@ -92,6 +92,8 @@ name = "adk-models"
 version = "0.1.0"
 dependencies = [
  "adk-agents",
+ "adk-events",
+ "adk-features",
  "adk-genai",
  "adk-platform",
  "regex",

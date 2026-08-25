@@ -335,6 +335,7 @@ mod tests {
 
     fn call(id: &str, name: &str, args: Option<StdBTreeMap<String, Value>>) -> FunctionCall {
         FunctionCall {
+            partial_args: None,
             id: Some(id.to_string()),
             name: Some(name.to_string()),
             args,

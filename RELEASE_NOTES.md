@@ -22,6 +22,53 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `utils/streaming_utils.py`: progressive SSE streaming mode (C0125)
+**2026-08-25**
+
+- **Added:** `StreamingResponseAggregator` now ports the source's
+  progressive SSE streaming mode
+  (`FeatureName.PROGRESSIVE_SSE_STREAMING`), alongside the legacy mode
+  this port already had. Progressive mode preserves output ordering
+  across text and function-call parts (only merging consecutive text
+  chunks of the same thought/non-thought type into one part, rather than
+  the legacy mode's "all text first, function calls separate" shape), and
+  assembles function-call arguments that stream in incrementally as
+  JSONPath-addressed chunks (`$.location`, `$.units.precision`, ...)
+  rather than arriving as one complete JSON object.
+- **Why now:** this closes out the rest of C0125, and corrects a stale
+  blocker claim in the same shape as ones already found in C0172, C0178,
+  and C0196: the module doc said progressive mode needed "typed
+  function-call/tool machinery (C0116, Phase 8's `BaseTool`)" this port
+  didn't have — false. Progressive mode never touches `BaseTool` at all;
+  it only needed `adk-features::FeatureName::ProgressiveSseStreaming`
+  (already shipped, a zero-dependency leaf crate) and a new `PartialArg`
+  type plus a `partial_args` field on `adk_genai::content::FunctionCall`.
+  `adk-models` picked up direct `adk-features`/`adk-events` dependencies —
+  both were already transitive via `adk-agents`, so this is a cycle-free
+  `Cargo.toml` edit, not a new architectural dependency.
+- **Disclosed duplication:** the one genuine new primitive this needed,
+  `generate_client_function_call_id`, lives in `adk-flows`
+  (`functions_utils.rs`) — which depends on `adk-models`, not the
+  reverse. The source dodges the identical circular-import problem with a
+  `from ..flows.llm_flows.functions import generate_client_function_call_id`
+  *inside the function body*; this port has no lazy-import equivalent, so
+  the one-line function (`format!("adk-{}", Event::new_id())`) is
+  reproduced locally in `streaming_utils.rs` from the primitive it's
+  actually built from, rather than pulled in from `adk-flows`.
+- **Testing:** 10 new progressive-mode tests (ordering, thought/regular
+  text merge boundaries, streamed-string-argument accumulation across
+  multiple chunks, nested JSONPath fields, id synthesis on both the
+  streaming and non-streaming function-call paths, interleaved
+  text/function-call ordering) plus a fix to the 11 pre-existing
+  legacy-mode tests and one `gemini.rs` streaming test, all of which now
+  explicitly force `ProgressiveSseStreaming` off — the flag defaults on,
+  and without the override they were failing under the new default
+  (confirmed: this is what happens when a feature that's been silently
+  absent becomes real and its already-on-by-default state finally takes
+  effect).
+
+---
+
 ## PR #TBD — `functions.py`: auth/confirmation request-event synthesis (C0196), plus a stale-doc cluster fix
 **2026-08-25**
 
