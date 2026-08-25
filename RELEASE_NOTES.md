@@ -22,6 +22,26 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`: `memory` package export facade (C0246, DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-agents/src/memory.rs` — a plain `pub use`
+  facade re-exporting `BaseMemoryService` (aliased from
+  `crate::services::MemoryService`) and `InMemoryMemoryService`,
+  following the "eager vs. lazy has no Rust equivalent, drop it"
+  precedent already established by `agents.rs`/`plugins.rs`. The
+  source's `_LAZY_MEMBERS`/`__getattr__` split exists only to defer
+  importing heavy backend modules at package-load time; a Rust
+  `pub use` has no such cost to defer.
+- **Disclosed, not re-exported:** `VertexAiMemoryBankService`/
+  `VertexAiRagMemoryService` — both genuinely unbuilt in this port,
+  blocked on the same undecided GCP-SDK dependency as every other
+  Vertex-backed service.
+- 2 new unit tests: `in_memory_memory_service_is_reachable_through_the_facade`,
+  `base_memory_service_is_reachable_through_the_facade`.
+
+---
+
 ## PR #TBD — `agents/`: `ParallelAgent` early cancellation on escalate (C0336, DONE)
 **2026-08-25**
 

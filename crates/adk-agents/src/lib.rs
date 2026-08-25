@@ -168,6 +168,7 @@ pub mod live_request;
 pub mod llm_agent;
 pub mod logging_plugin;
 pub mod loop_agent;
+pub mod memory;
 pub mod oauth2_discovery;
 pub mod oauth2_util;
 pub mod optimization_data_types;
