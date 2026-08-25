@@ -110,9 +110,13 @@ pub fn build_auth_headers(
 }
 
 /// Minimal base64 (standard alphabet, `=` padding) encoder — this port
-/// has no `base64` crate dependency yet, and `Basic` auth is the only
-/// consumer.
-fn base64_encode(bytes: &[u8]) -> String {
+/// has no `base64` crate dependency yet. `pub`, not `pub(crate)`: reused
+/// by `adk-tools::computer_use_tool` (C0447) for the same
+/// `base64.b64encode` shape the source's `ComputerUseTool.run_async`
+/// uses for its screenshot payload, rather than a second hand-rolled
+/// copy — `adk-tools` already depends on `adk-agents`, so this is a
+/// pure reuse-across-an-already-satisfied-dependency, not a new edge.
+pub fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {

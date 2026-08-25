@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- Computer-use tool trio (`tools/computer_use/`): `BaseComputer`
+  (C0445, DONE) — the full browser-automation trait contract
+  (click/hover/type/scroll/wait/navigate/search/key-combo/drag-drop/
+  screenshot/state); `ComputerUseTool` (C0447, DONE) — normalizes
+  model-supplied virtual-coordinate-space input to real screen size and
+  gates execution behind the model's own safety-confirmation protocol;
+  `ComputerUseToolset` (C0446, partial) — a fixed 15-entry tool table
+  (14 real actions plus a confirmed, faithfully-replicated source quirk:
+  `initialize` leaks into the tool set too, since the source's own
+  `EXCLUDED_METHODS` doesn't list it), `navigate` SSRF-hardened by
+  reusing `load_web_page`'s validation (`load_web_page.rs`'s SSRF core
+  is now `pub(crate)`, plus a new `resolve_direct_addresses` combining
+  resolve+block-check). One source check — a raw-backslash-in-netloc
+  special case — isn't ported: verified empirically that this port's
+  WHATWG-spec-compliant URL parser already resolves that exact input the
+  same way a real browser would, closing the parser-disagreement the
+  check exists to prevent. `adapt_computer_use_tool` isn't ported —
+  narrows `gemini.rs::Gemini::preprocess_request`'s (C0132) own
+  disclosed gap down to exactly this one function, blocked on a
+  crate-graph-direction issue (`LlmRequest.tools_dict` would need
+  `BaseTool`, which lives in a crate `adk-models` can't depend on).
 - `Gemini::connect_live` (C0131, DONE) opens a real Live API WebSocket
   connection, sends the `BidiGenerateContentSetup` envelope, and returns
   a ready `GeminiLlmConnection` — the handshake half `Gemini::connect()`
