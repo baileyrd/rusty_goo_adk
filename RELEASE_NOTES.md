@@ -22,6 +22,104 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`: P7 node-wrapping trio (C0296/C0317/C0326, all DONE)
+**2026-08-25**
+
+- **Added:** `ParallelWorker`/`parallel_worker_node` (C0317, new
+  `crates/adk-agents/src/workflow_parallel_worker.rs`) — runs a wrapped
+  node once per list-input item (wrapping a non-list input as a single
+  item, short-circuiting an empty list to an empty result).
+- **Added:** `build_node`/`is_node_like` (C0326) and `node`/
+  `NodeFactoryError` (C0296, new `crates/adk-agents/src/
+  workflow_node_factory.rs`) — converts a `NodeLike` to a concrete
+  `BaseNode`, and composes that with `parallel_worker_node` when
+  `parallel_worker=true` is requested (with the same `max_parallel_
+  workers`-without-`parallel_worker` pre-flight validation the source
+  performs).
+- **Disclosed narrowing:** `ParallelWorker` dispatches sequentially,
+  not concurrently. `Context::run_node` needs `&mut Context` for a
+  node's entire execution — the same constraint that already forced
+  `Workflow`'s own LOOP phase (C0301) to bypass it and build a bespoke
+  concurrent combinator instead. `ParallelWorker` is a single node, not
+  an orchestrator, so it has no such machinery to reuse: items run one
+  at a time through the already-shipped `Context::run_node` directly.
+  Deterministic earliest-index failure is preserved by construction
+  (item *i* is never started until every item before it succeeds, so
+  the first failure encountered is always the earliest-index one)
+  rather than by replicating the source's stable-sort-of-simultaneous-
+  completions tiebreak. "Cancel remaining in-flight items"/the 5s
+  drain timeout are not applicable — nothing is ever concurrently
+  in-flight to cancel. An interrupted item stops the batch and yields
+  nothing, relying on `Context::run_node`'s own already-tested
+  interrupt-id propagation onto the calling `ctx`, rather than
+  replicating the source's behavior of treating `NodeInterruptedError`
+  as an ordinary task exception. `max_parallel_workers` is preserved as
+  a validated (`>= 1`) field for API-shape fidelity but has no effect
+  under sequential dispatch.
+- **Disclosed narrowing:** `build_node` narrows to the `BaseNode`/
+  `START` cases of `NodeLike`. `BaseTool`→`_ToolNode` stays out of
+  scope (the `adk-tools`/`adk-agents` crate-cycle, same as C0355/
+  C0356); `LlmAgent`/task-mode-`RemoteA2aAgent` auto-defaulting
+  (`rerun_on_resume`/`wait_for_output`/`mode`, `parallel_worker`
+  auto-wrapping) stays out of scope (needs the C0092 LlmAgent
+  tree-fusion gap); `callable`→`FunctionNode` has no runtime dispatch
+  to build since Rust has no `isinstance`/`callable()` check — a
+  caller with a function constructs `FunctionNode` directly instead of
+  routing through a dynamic dispatcher, `NodeLike`'s closed enum
+  already being this port's compile-time equivalent of the source's
+  runtime type check. Within the supported `BaseNode` branch,
+  `build_node` further narrows to the no-overrides case — the
+  source's `node_like.model_copy(update=kwargs)` has no equivalent
+  since `NodeBehavior` has no `Clone` bound (adding one would be a
+  breaking supertrait change to every existing implementor —
+  `JoinNode`, `AgentNode`, `ParallelWorker` — its own stop-and-ask, not
+  something decided here); an override attempt returns
+  `BuildNodeError::OverridesNotSupportedForBaseNode`. `is_node_like`
+  narrows to a disclosed constant `true`: `NodeLike` is already a
+  closed, exhaustively-matched enum, so there is nothing left to check
+  at runtime.
+- **Disclosed narrowing:** `node(...)` narrows to its "wrap an
+  already-resolved `NodeLike`" overload. The source's other overload —
+  used as a bare decorator (`@node`/`@node()`) directly on a function —
+  builds a fresh `FunctionNode` from the decorated callable; Rust has
+  no function-decorator mechanism, so a caller with a function to wrap
+  calls `FunctionNode::new`/`build` directly, then passes the result
+  through `node(...)` if it also wants `parallel_worker` wrapping (the
+  same two-step composition the source's own `wrapper(func)` closure
+  performs internally). `auth_config`/`parameter_binding` are
+  therefore not parameters of this port's `node(...)` — they belong to
+  `FunctionNode`'s own constructor. `Node` (the subclassable base
+  class) is a **permanent** narrowing, not a deferred one: this port's
+  `NodeBehavior` trait-object design already is the Rust equivalent of
+  "subclass and override" — every implementor (`JoinNode`, `AgentNode`,
+  `ParallelWorker` itself) already works this way, so a `NodeBehavior`
+  implementor wanting parallel-worker fan-out just wraps its own built
+  `BaseNode` with `parallel_worker_node` directly rather than
+  inheriting from a `Node` base.
+- **Manifest housekeeping:** corrected a stale row while in this area —
+  C0307 (`NodeState`/`NodeStatus`/`Trigger`) was fully, faithfully
+  ported in an early P7 batch but its manifest status was never
+  flipped from `REQUIRED` to `DONE`; verified field-for-field against
+  the Python source and corrected.
+- **Tests:** `crates/adk-agents/src/workflow_parallel_worker.rs::tests::
+  {new_rejects_wrapping_start, new_rejects_a_zero_max_parallel_workers,
+  parallel_worker_node_sets_name_and_rerun_on_resume_from_the_inner_node,
+  runs_the_wrapped_node_once_per_list_item_in_order,
+  wraps_a_non_list_input_as_a_single_item,
+  an_empty_list_short_circuits_to_an_empty_result,
+  stops_at_the_earliest_failing_item_and_surfaces_its_error}`;
+  `crates/adk-agents/src/workflow_node_factory.rs::tests::
+  {is_node_like_is_always_true, build_node_resolves_start_to_the_singleton,
+  build_node_passes_through_a_base_node_unchanged_when_no_overrides_are_given,
+  build_node_rejects_overrides_on_a_base_node,
+  node_passes_through_a_plain_node_like_unchanged,
+  node_wraps_in_a_parallel_worker_when_requested,
+  node_rejects_max_parallel_workers_without_parallel_worker,
+  node_propagates_an_invalid_max_parallel_workers,
+  node_cannot_wrap_start_in_a_parallel_worker}`.
+
+---
+
 ## PR #TBD — `agents/`: `Workflow` FINALIZE phase (C0306, DONE)
 **2026-08-25**
 
