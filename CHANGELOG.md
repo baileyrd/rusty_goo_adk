@@ -5,6 +5,18 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-tools/src/base_retrieval_tool.rs`:
+  `retrieval_tool_declaration`/`BaseRetrievalTool` (C0482 DONE) — the
+  shared `query`-string `FunctionDeclaration` every retrieval tool
+  exposes, gated on `FeatureName::JsonSchemaForFuncDecl` exactly like
+  the source. The source's abstract class becomes a free function (same
+  shape as `request_input_tool.rs`'s `parameters_schema()`) plus a thin
+  `BaseRetrievalTool: BaseTool` marker supertrait, since Rust can't have
+  a subtrait override an inherited default trait method
+  (`BaseTool::get_declaration`) for just its own implementers. Also
+  gives a future `cli.agent_graph`
+  `isinstance(tool_or_agent, BaseRetrievalTool)` port (C0281, deferred)
+  a real marker to check against. 5 new tests.
 - New `crates/adk-agents/src/reflect_retry_utils.rs`:
   `TrackingScope`/`resolve_scope_key`/`ScopedFailureTracker` (C0370
   DONE) — the invocation-vs-global failure-tracking layer behind the

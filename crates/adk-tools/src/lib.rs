@@ -150,6 +150,7 @@ pub mod agent_tool;
 pub mod append_tools;
 pub mod base_code_executor;
 pub mod base_environment;
+pub mod base_retrieval_tool;
 pub mod base_tool;
 pub mod base_toolset;
 pub mod bash_tool;

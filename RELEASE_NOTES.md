@@ -22,6 +22,44 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/retrieval/base_retrieval_tool.py`: `BaseRetrievalTool` (C0482)
+**2026-08-25**
+
+- **Added:** `adk-tools::base_retrieval_tool::{retrieval_tool_declaration,
+  BaseRetrievalTool}` — the shared `query`-string `FunctionDeclaration`
+  every retrieval tool exposes, gated on the same
+  `is_feature_enabled(FeatureName.JSON_SCHEMA_FOR_FUNC_DECL)` switch as
+  the source: when on, the query parameter is described via
+  `parameters_json_schema`; when off, via the typed `parameters` field.
+- **Changed (port shape):** the source's abstract class overrides only
+  `_get_declaration`; every concrete subclass gets it for free by
+  inheritance. Rust can't have a subtrait override an inherited default
+  trait method (`BaseTool::get_declaration`) for just its own
+  implementers, so this ports as a free function
+  (`retrieval_tool_declaration`, the same shape
+  `request_input_tool.rs`'s own `parameters_schema()` helper already
+  uses) plus a thin `BaseRetrievalTool: BaseTool` marker supertrait
+  whose default `retrieval_declaration()` method wraps it — a concrete
+  retrieval tool's own `get_declaration()` calls
+  `self.retrieval_declaration()` explicitly.
+- **Known limitation:** `run_async`'s abstract "expects
+  `args["query"]`" contract is documented, not implemented, since
+  `BaseTool::run_async`'s existing default already errors for exactly
+  this must-override case. The three concrete subclasses —
+  `FilesRetrieval` (C0483), `LlamaIndexRetrieval` (C0484),
+  `VertexAiRagRetrieval` (C0485) — stay their own REQUIRED rows, each
+  blocked on its own not-yet-adopted dependency (LlamaIndex, Vertex AI
+  RAG). The marker trait also gives a future port of
+  `cli.agent_graph`'s `isinstance(tool_or_agent, BaseRetrievalTool)`
+  checks (C0281, docs-only, deferred) something real to check against
+  once that lands.
+- **Testing:** 5 new tests covering both feature-flag branches, the
+  exact `query`-field description text, the marker trait's default
+  method matching the free function, and both branches round-tripping
+  when the flag toggles twice in one test.
+
+---
+
 ## PR #TBD — `plugins/_reflect_retry_utils.py`: `TrackingScope`/`ScopedFailureTracker` (C0370)
 **2026-08-25**
 
