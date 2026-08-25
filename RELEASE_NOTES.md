@@ -22,6 +22,52 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `auth/auth_handler.py`: `AuthHandler` (C0506 partial, C0507, C0508 partial)
+**2026-08-25**
+
+- **Added:** `adk-agents::auth_handler::AuthHandler` —
+  `get_auth_response` (reads `state["temp:" + credential_key]`, falling
+  back to the bare key), `parse_and_store_auth_response` (writes the
+  exchanged credential under the `temp:`-prefixed key),
+  `_build_credential_from_string` (C0507, all four scheme shapes:
+  apiKey/http/oauth2/openIdConnect, plus the custom-scheme fallback),
+  `generate_auth_request` (the full guard/validation chain: non-oauth2
+  early-return, already-exchanged early-return, missing-credential/
+  missing-oauth2/missing-client-id-or-secret errors, reuse-existing-uri
+  branch), and `generate_auth_uri`.
+- **Added:** a new standalone `resolve_authorization_endpoint_and_scopes`
+  function — the source's flow-priority endpoint/scope resolution
+  (`implicit` > `authorizationCode` > `clientCredentials` > `password`)
+  from inside `generate_auth_uri`'s authlib-only branch, ported as pure,
+  tested, reusable logic even though nothing calls it yet — the same
+  "build ahead of a still-blocked caller" precedent as
+  `reflect_retry_utils.rs` and `runner::get_function_responses_from_content`.
+- **Known limitation:** this port has no authlib-equivalent OAuth2
+  client (the same missing-crate gap `create_oauth2_session` (C0530),
+  `OAuth2CredentialExchanger` (C0524), and the credential refresher
+  (C0526) are already blocked on), so `generate_auth_uri` always takes
+  the source's own `not AUTHLIB_AVAILABLE` fallback — a deep copy of
+  `raw_auth_credential` — which is also, genuinely, this port's entire
+  reachable behavior today. The source's PKCE `code_verifier`
+  auto-generation and `code_challenge_method == 'S256'` validation live
+  entirely inside that never-reached branch, so neither is ported.
+  `parse_and_store_auth_response`'s OAuth2/OIDC branch — overwriting the
+  stored credential with `exchange_auth_token`'s result — is unported
+  for the same reason: the source always constructs a concrete
+  `OAuth2CredentialExchanger()` internally, and this port only has the
+  abstract `BaseCredentialExchanger` contract (C0523) so far.
+- **Testing:** 22 new tests covering both `get_auth_response` lookup
+  paths (including the case where a stored value's shape matches
+  neither branch and the lookup correctly falls through rather than
+  short-circuiting), all four `_build_credential_from_string` scheme
+  shapes, every `generate_auth_request` guard/error/success path, both
+  `generate_auth_uri` outcomes, `parse_and_store_auth_response`'s
+  success and empty-key-error cases, and
+  `resolve_authorization_endpoint_and_scopes`'s flow-priority
+  resolution for OAuth2 and OpenID Connect schemes.
+
+---
+
 ## PR #TBD — `tools/retrieval/base_retrieval_tool.py`: `BaseRetrievalTool` (C0482)
 **2026-08-25**
 

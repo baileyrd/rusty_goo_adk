@@ -142,6 +142,7 @@ pub mod app;
 pub mod app_configs;
 pub mod artifact_util;
 pub mod auth_credential;
+pub mod auth_handler;
 pub mod auth_headers;
 pub mod auth_provider_registry;
 pub mod auth_schemes;
