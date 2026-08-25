@@ -138,6 +138,7 @@
 //! signature untouched. No new dependency.
 
 pub mod active_streaming_tool;
+pub mod adk_attributes;
 pub mod agent_optimizer;
 pub mod app;
 pub mod app_configs;

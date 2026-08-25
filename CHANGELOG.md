@@ -5,6 +5,24 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P12 telemetry pure-logic batch (C0668/C0669/C0672/C0673, all DONE;
+  C0661, partial): `crates/adk-models/src/token_usage.rs` (`TokenUsage`,
+  C0668 — token-usage attribute names/aggregation, reading the same
+  opaque camelCase `usage_metadata` keys `cache_performance_analyzer`
+  already reads directly), `crates/adk-models/src/stable_semconv.rs`
+  (`system_message_body`/`user_message_body`/`choice_body`, C0661
+  partial — the three stable-semconv log-body builders; the experimental
+  `gen_ai.client.inference.operation.details` event is a separate, larger
+  surface deferred to its own batch), `crates/adk-agents/src/adk_attributes.rs`
+  (the 6 `adk.experimental.skill.*` attribute-name constants, C0669),
+  and `crates/adk-agents/src/schema_version.rs` (GCP + generic OTel
+  exporter env-var name/default constants, C0672/C0673 — bundled
+  alongside the already-DONE C0671, same "declare ahead of a blocked
+  consumer" precedent). None of these five needs an OTel SDK dependency
+  or touches any already-shipped public surface — every function is a
+  pure data/string transform, and every constants-only row has no
+  consumer yet (the real span/metric-emission machinery is a much
+  larger, still-unbuilt surface).
 - `NodeTool` (C0490, DONE): `crates/adk-tools/src/node_tool.rs` wraps a
   workflow `BaseNode` as a callable `BaseTool`, unblocked once
   `workflow::BaseNode`/`Context::run_node` landed — C0491's evidence

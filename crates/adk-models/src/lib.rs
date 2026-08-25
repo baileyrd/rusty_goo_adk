@@ -34,5 +34,7 @@ pub mod llm_response;
 pub mod ollama;
 pub mod output_schema_utils;
 pub mod registry;
+pub mod stable_semconv;
 pub mod streaming_utils;
+pub mod token_usage;
 pub mod vertex_ai_utils;
