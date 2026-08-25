@@ -5,6 +5,20 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P10 Anthropic (Claude) backend, third slice (C0538, partial):
+  `crates/adk-models/src/anthropic_conversion.rs` gains
+  `AnthropicThinkingParam`/`build_anthropic_thinking_param` — maps genai
+  `ThinkingConfig` to Anthropic's `thinking` request parameter
+  (`thinking_budget`-only subset: absent budget → `Err` with the
+  source's guidance message, `0` → disabled, negative → adaptive,
+  positive → enabled with the given token budget). Reads
+  `GenerateContentConfigStub::thinking_config`'s already-opaque `Value`
+  via the same `"thinkingBudget"` key already used by
+  `llm_backed_user_simulator.rs` — no struct widening needed, correcting
+  C0542's own evidence which had flagged this row as blocked on one.
+  `_build_effort_param`/`AnthropicGenerateContentConfig.effort` and the
+  sampling-params warning stay deferred, needing the still-unbuilt
+  `AnthropicLlm` backend's own config type.
 - P10 Anthropic (Claude) backend, second slice (C0541, DONE):
   `crates/adk-models/src/anthropic_conversion.rs` gains `update_type_string`
   (recursive JSON-Schema `"type"`-string lowercasing, over the exact
