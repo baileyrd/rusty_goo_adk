@@ -370,7 +370,18 @@ mod tests {
             Some((name, run_id)) => (name, run_id.to_string()),
             None => (node_path, "1".to_string()),
         };
-        Context::for_node(ic, "", &[], None, name, run_id, BTreeMap::new(), 1, false)
+        Context::for_node(
+            ic,
+            "",
+            &[],
+            None,
+            name,
+            run_id,
+            BTreeMap::new(),
+            1,
+            false,
+            false,
+        )
     }
 
     fn event_at(path: &str) -> Event {

@@ -22,6 +22,40 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`: dynamic workflow-node dispatch — `Context::run_node` + agent transfer (C0043/C0059/C0060/C0325, all DONE)
+**2026-08-25**
+
+- **Added:** `Context::run_node` — lets a running workflow node
+  dynamically execute another node (or an agent) as a child and await
+  its result, resolving in-place agent transfers along the way (a
+  transfer to a sibling/child/parent agent runs the target under the
+  correct parent context without recursing). Standalone dispatch only:
+  `Workflow`-scheduled dispatch (Mode 1 in the source) is dead code in
+  this port today since neither `Workflow` nor `DynamicNodeScheduler`
+  exist yet — disclosed, not silently dropped. An interrupted child
+  (HITL wait) surfaces as a plain `RunNodeOutcome::Interrupted` value
+  instead of the source's deliberately-uncatchable raised exception,
+  since nothing in this port's own `NodeBehavior::run_impl` machinery
+  needs a generic-catch guard to defeat in the first place.
+- **Added:** `agent_node`/`AgentNode` (`workflow_agent_node.rs`) — wraps
+  a `BaseAgent` as a workflow `BaseNode`, running it once and collecting
+  every event (this port's `BaseAgent` and `BaseNode` are unrelated
+  types, unlike the source where `BaseAgent` is itself a `BaseNode`
+  subclass). Scoped to the generic adapter; `LlmAgent`'s task/chat-mode
+  dispatch loop is the separate, larger C0407.
+- **Added:** `resolve_and_derive_transfer_context`
+  (`workflow_transfer_utils.rs`) — resolves an agent-transfer target and
+  the correct parent context for the self/child/sibling/parent-climb/
+  root-bypass-fallback/unrelated relationship cases, operating on a
+  local per-call ancestry chain rather than a permanent `Context.node`/
+  `Context.parent_ctx` pair (deliberately never added to this port's
+  `Context` — see the module's own doc for why).
+- **Known limitation:** Mode 1 (`Workflow`-scheduled dynamic dispatch)
+  is not ported — revisit once `Workflow` (C0298) and
+  `DynamicNodeScheduler` (C0318/C0319) land.
+
+---
+
 ## PR #TBD — `flows/llm_flows/`: wire NL planning into the request/response pipeline (C0176/C0179/C0200, all DONE)
 **2026-08-25**
 

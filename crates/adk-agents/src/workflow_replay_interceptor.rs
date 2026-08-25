@@ -172,6 +172,7 @@ pub fn create_mock_context(
         BTreeMap::new(),
         1,
         false,
+        node.rerun_on_resume(),
     );
 
     if let Some(output) = &result.output {
