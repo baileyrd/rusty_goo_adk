@@ -22,6 +22,74 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`: `Workflow` node-scheduling primitives (C0302/C0303, both DONE)
+**2026-08-25**
+
+- **Added:** `Workflow::schedule_ready_nodes`/`start_node_task` (C0302/
+  C0303) — pops ready triggers in deterministic (insertion) order,
+  skips nodes already `RUNNING` or `WAITING`-on-unresolved-interrupts,
+  stops once `max_concurrency` is reached, and either fast-forwards a
+  recovered/replayed node's cached result or starts a real execution.
+  Plus the resumability-checkpoint builders `node_checkpoint_event`/
+  `maybe_reemit_replayed_output_event`/`end_of_agent_event`, all `None`
+  when the session isn't resumable.
+- **Changed (disclosed divergence):** `start_node_task` dispatches
+  through `NodeRunner::run` directly rather than the source's literal
+  `ctx._run_node_internal(...)` call chain (which would route through
+  `ctx.run_node()`/`DynamicNodeScheduler`). Both of those need exclusive
+  `&mut Context` access for a node's entire execution — Rust's borrow
+  checker structurally disallows two overlapping `&mut Context` borrows
+  of the same context, which would silently serialize the LOOP phase's
+  whole point (running graph nodes concurrently), not just cost
+  performance. `NodeRunner::run`'s shared `&Context` borrow is the only
+  primitive multiple pending node futures can be built and polled
+  against at once. Fidelity is preserved: `start_node_task` still does
+  its own inline replay-interception check against
+  `loop_state.recovered_executions`, independent of the scheduler's own
+  dedup (which exists to protect concurrent *dynamic* `ctx.run_node()`
+  calls — a case `schedule_ready_nodes`'s "skip if already RUNNING"
+  check already covers for static graph nodes).
+- **Changed (disclosed narrowing):** `has_waiting_task_agent` always
+  returns `false` — needs `node.mode == "task"`, the same LlmAgent
+  tree-fusion gap (C0092) already disclosed for `compute_isolation_
+  scope_for_node`'s Case 2 and elsewhere in this port. Structurally
+  correct today since no node type in this port can ever set it `true`.
+- **Changed (adaptation):** the three checkpoint emitters
+  (`_emit_node_checkpoint`/`_maybe_reemit_replayed_output`/
+  `_emit_end_of_agent`) enqueue onto a live per-invocation event queue
+  in the source; this port has no such queue (the established "eagerly
+  collected `Vec`" adaptation), so they're redesigned as pure functions
+  returning `Option<Event>` for the not-yet-built LOOP driver (C0301)
+  to push into its own accumulator instead of enqueuing directly.
+- **Added:** `PendingNodeFuture<'a>` type alias — a local, boxed,
+  non-`'static` future per pending node, not `rusty_tokio::
+  task::JoinSet` (which requires `Send + 'static`, incompatible with
+  `NodeRunner::run`'s `&Context`-borrowing, non-`'static` future).
+  `WorkflowLoopState` grows a lifetime parameter plus `nodes`/
+  `replayed_nodes`/(private) `pending_tasks` fields; `sequence_barrier`
+  is now `Arc`-wrapped so multiple pending futures can share one
+  barrier without conflicting with `pending_tasks`'s own mutable
+  borrow.
+- **Known limitation:** still not wired into a `BaseNode`/
+  `NodeBehavior` — nothing yet drives `pending_tasks` to completion.
+  That's the LOOP driver itself (`_run_loop`, C0301) plus completion
+  handling (C0304), downstream-trigger buffering (C0305), and FINALIZE
+  (C0306) — a separate follow-up batch.
+- **Tests:** `crates/adk-agents/src/workflow_workflow.rs::tests::
+  {schedule_ready_nodes_starts_a_ready_node_and_produces_a_pending_task,
+  schedule_ready_nodes_respects_the_concurrency_limit,
+  schedule_ready_nodes_skips_a_node_already_running,
+  schedule_ready_nodes_fast_forwards_a_recovered_completed_node,
+  node_checkpoint_event_is_none_when_not_resumable,
+  node_checkpoint_event_snapshots_node_statuses_when_resumable,
+  maybe_reemit_replayed_output_event_is_none_without_output,
+  maybe_reemit_replayed_output_event_is_none_when_not_resumable,
+  maybe_reemit_replayed_output_event_carries_the_output_when_resumable,
+  end_of_agent_event_is_none_when_not_resumable,
+  end_of_agent_event_sets_the_flag_when_resumable}`.
+
+---
+
 ## PR #TBD — `agents/`: `Workflow` struct skeleton + SETUP phase (C0298/C0299/C0300, all DONE)
 **2026-08-25**
 
