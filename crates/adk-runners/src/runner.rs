@@ -602,10 +602,10 @@ pub struct Runner {
     memory_service: Option<Arc<dyn MemoryService + Send + Sync>>,
     credential_service: Option<Arc<dyn CredentialService + Send + Sync>>,
     plugin_manager: PluginManager,
-    /// C0844: stored for parity with the source's constructor contract.
-    /// Not yet applied as an actual per-plugin timeout bound in
-    /// [`Runner::close`] — this port's `PluginManager::close` has no
-    /// timeout parameter of its own yet (see its own module doc).
+    /// C0844: applied onto a cloned [`PluginManager`] at [`Runner::close`]
+    /// time via `PluginManager::set_close_timeout` (now a real per-plugin
+    /// timeout bound, C0361) — cloned rather than mutating `self.
+    /// plugin_manager` directly since `Runner::close` only takes `&self`.
     plugin_close_timeout: f64,
     /// C0845: the single switch controlling whether `run_async` creates
     /// a missing session or reports it as not found.
@@ -1058,9 +1058,20 @@ impl Runner {
     /// C0924 (partial, see the module doc): closes what actually exists
     /// today — `session_service.flush()` and every registered plugin.
     /// Toolset collection is deferred (see the module doc).
+    ///
+    /// A plugin that fails to close (a timeout, C0361) is logged rather
+    /// than propagated — `Runner::close` keeps its existing `()` return
+    /// type rather than becoming fallible, since it's called across a
+    /// crate boundary (`adk-tools::agent_tool`) that only ever awaits it
+    /// today; changing that shared signature would be a breaking change
+    /// to already-shipped surface well beyond this capability's scope.
     pub async fn close(&self) {
         self.session_service.flush().await;
-        self.plugin_manager.close().await;
+        let mut plugin_manager = self.plugin_manager.clone();
+        plugin_manager.set_close_timeout(self.plugin_close_timeout);
+        if let Err(err) = plugin_manager.close().await {
+            eprintln!("Runner: {err}");
+        }
     }
 
     /// C0891/C0894: rewinds the session to before the given invocation
@@ -1762,6 +1773,35 @@ mod tests {
             Err(PluginManagerError::DuplicateName(name)) => assert_eq!(name, "p1"),
             Ok(_) => panic!("expected a DuplicateName error"),
         }
+    }
+
+    struct SlowClosingPlugin;
+
+    impl adk_agents::services::BasePlugin for SlowClosingPlugin {
+        fn name(&self) -> &str {
+            "slow"
+        }
+
+        fn close(&self) -> adk_agents::services::BoxFuture<'_, ()> {
+            Box::pin(async {
+                rusty_tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            })
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn close_applies_the_configured_plugin_close_timeout() {
+        // C0361/C0844: `plugin_close_timeout` used to be a dead field —
+        // this proves `Runner::close` actually bounds a slow plugin's
+        // close by it instead of hanging for its full 5s sleep.
+        let r = runner(true)
+            .with_plugin(Arc::new(SlowClosingPlugin))
+            .unwrap()
+            .with_plugin_close_timeout(0.01);
+
+        let start = std::time::Instant::now();
+        r.close().await;
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

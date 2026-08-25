@@ -5,6 +5,43 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- Plugin package close/export closure (C0352/C0361, both DONE — plus
+  C0360's stale manifest status corrected): new `crates/adk-agents/src/
+  plugins.rs` re-exports `BasePlugin`/`PluginManager`/`LoggingPlugin`
+  (the plugin package's public export surface, C0352) — only what
+  actually exists in this port; `DebugLoggingPlugin`/
+  `ReflectAndRetryModelPlugin`/`ReflectAndRetryToolPlugin` stay
+  unexported since they don't exist as Rust types yet (blocked on
+  C0355/C0356, see below). `PluginManager` gains `set_close_timeout`
+  and `PluginManager::close` (C0361) now enforces a per-plugin timeout,
+  aggregating every timed-out plugin's name into one
+  `PluginCloseError::Failed`, rather than returning `()` unconditionally.
+  `Runner::close` (`adk-runners`) now actually applies
+  `plugin_close_timeout` — previously a dead field — by cloning
+  `PluginManager` and calling `set_close_timeout` before `close()`,
+  logging (not propagating) a close failure so `Runner::close`'s own
+  `()` return type doesn't change for its existing cross-crate caller.
+- **Disclosed narrowing (C0361):** `BasePlugin::close` returns `()`,
+  not a `Result` — this port's hooks have no fallible-close channel at
+  all, so the only failure `PluginCloseError` can represent is a
+  plugin that doesn't finish within the configured timeout; a
+  panicking `close()` still propagates unchanged.
+- **Manifest housekeeping:** C0360 (`PluginManager`'s early-exit/
+  notify-all dispatch contract) was fully implemented and tested for
+  every hook this port has today, but its manifest status was never
+  flipped from `REQUIRED` to `DONE` — corrected, noting that C0355/
+  C0356's eventual hooks will apply this same already-established
+  pattern rather than needing new dispatch work of their own.
+  Investigated C0355/C0356 (`BasePlugin`'s model-level/tool-level
+  hooks) directly and confirmed they remain correctly blocked on the
+  `adk-agents`↔`adk-models`/`adk-tools` crate-cycle already documented
+  — no change needed there, just re-verified rather than assumed.
+- **Tests:** `crates/adk-agents/src/plugins.rs::tests::*` (2 tests);
+  `crates/adk-agents/src/services.rs::tests::
+  {close_reports_a_timeout_for_a_slow_plugin,
+  close_aggregates_multiple_slow_plugins_into_one_error}`;
+  `crates/adk-runners/src/runner.rs::tests::
+  close_applies_the_configured_plugin_close_timeout`.
 - P7 node-wrapping trio (C0296/C0317/C0326, all DONE — see below for
   disclosed narrowings): new `crates/adk-agents/src/
   workflow_parallel_worker.rs` (`ParallelWorker`/`parallel_worker_node`,

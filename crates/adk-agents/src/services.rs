@@ -89,6 +89,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::base_agent::{AgentRunError, BaseAgent};
 use crate::context::Context;
@@ -919,6 +920,25 @@ pub enum PluginManagerError {
     DuplicateName(String),
 }
 
+/// [`PluginManager::close`]'s failure — the source's own
+/// `RuntimeError(f"Failed to close plugins: {error_summary}")`, raised
+/// when one or more plugins failed to close.
+///
+/// **Narrowed to timeouts only, disclosed**: the source's `close()`
+/// aggregates *any* exception a plugin's own `close()` raises (reported
+/// via `type(exc).__name__`); this port's [`BasePlugin::close`] returns
+/// `()`, not a `Result`, so there is no fallible channel for a plugin's
+/// close to fail through in the first place — the only failure mode
+/// representable here is a plugin that doesn't finish within
+/// [`PluginManager`]'s configured timeout. A panicking `close()` still
+/// propagates the panic unchanged (the same posture [`PluginManager`]'s
+/// own module doc already discloses for the dispatch hooks).
+#[derive(Debug, rusty_err::Error)]
+pub enum PluginCloseError {
+    #[error("Failed to close plugins: {0}")]
+    Failed(String),
+}
+
 /// C0359-C0361 (partial — see [`BasePlugin`]'s module doc for the hook
 /// levels this doesn't cover yet): manages plugin registration and
 /// dispatch. Runs registered plugins in registration order; for the
@@ -939,11 +959,25 @@ pub enum PluginManagerError {
 /// anyio/MCP), not its docstring's claim of running plugins concurrently;
 /// the manifest flags that inconsistency explicitly rather than
 /// replicating it blindly.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PluginManager {
     plugins: Vec<Arc<dyn BasePlugin>>,
     skip_closing_plugins: bool,
+    close_timeout: Duration,
 }
+
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self {
+            plugins: Vec::new(),
+            skip_closing_plugins: false,
+            close_timeout: Duration::from_secs_f64(DEFAULT_PLUGIN_CLOSE_TIMEOUT_SECONDS),
+        }
+    }
+}
+
+/// `PluginManager.__init__`'s own `close_timeout: float = 5.0` default.
+const DEFAULT_PLUGIN_CLOSE_TIMEOUT_SECONDS: f64 = 5.0;
 
 impl PluginManager {
     pub fn new() -> Self {
@@ -970,6 +1004,12 @@ impl PluginManager {
     /// component (e.g. a parent `Runner` sharing its plugin list).
     pub fn set_skip_closing_plugins(&mut self, value: bool) {
         self.skip_closing_plugins = value;
+    }
+
+    /// `PluginManager.close_timeout`: the per-plugin timeout
+    /// [`PluginManager::close`] enforces, in seconds.
+    pub fn set_close_timeout(&mut self, seconds: f64) {
+        self.close_timeout = Duration::from_secs_f64(seconds.max(0.0));
     }
 
     pub fn run_on_user_message_callback<'a>(
@@ -1089,13 +1129,29 @@ impl PluginManager {
         })
     }
 
-    pub fn close(&self) -> BoxFuture<'_, ()> {
+    /// `PluginManager.close`: closes every registered plugin
+    /// sequentially, enforcing [`Self::set_close_timeout`]'s timeout per
+    /// plugin — see this type's own module doc for why sequentially
+    /// (matching the source's own implementation) and why a timeout is
+    /// the only failure this port's [`PluginCloseError`] can report.
+    pub fn close(&self) -> BoxFuture<'_, Result<(), PluginCloseError>> {
         Box::pin(async move {
             if self.skip_closing_plugins {
-                return;
+                return Ok(());
             }
+            let mut failures = Vec::new();
             for plugin in &self.plugins {
-                plugin.close().await;
+                if rusty_tokio::time::timeout(self.close_timeout, plugin.close())
+                    .await
+                    .is_err()
+                {
+                    failures.push(format!("'{}': timed out", plugin.name()));
+                }
+            }
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(PluginCloseError::Failed(failures.join(", ")))
             }
         })
     }
@@ -1182,6 +1238,24 @@ mod tests {
             let closed = self.closed.clone();
             Box::pin(async move {
                 *closed.lock().unwrap() = true;
+            })
+        }
+    }
+
+    struct SlowClosingPlugin {
+        name: String,
+        delay: Duration,
+    }
+
+    impl BasePlugin for SlowClosingPlugin {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn close(&self) -> BoxFuture<'_, ()> {
+            let delay = self.delay;
+            Box::pin(async move {
+                rusty_tokio::time::sleep(delay).await;
             })
         }
     }
@@ -1291,7 +1365,7 @@ mod tests {
         let closed = plugin.closed.clone();
         manager.register_plugin(Arc::new(plugin)).unwrap();
 
-        manager.close().await;
+        manager.close().await.unwrap();
         assert!(*closed.lock().unwrap());
     }
 
@@ -1303,8 +1377,52 @@ mod tests {
         manager.register_plugin(Arc::new(plugin)).unwrap();
         manager.set_skip_closing_plugins(true);
 
-        manager.close().await;
+        manager.close().await.unwrap();
         assert!(!*closed.lock().unwrap());
+    }
+
+    #[rusty_tokio::test]
+    async fn close_reports_a_timeout_for_a_slow_plugin() {
+        let mut manager = PluginManager::new();
+        manager.set_close_timeout(0.01);
+        manager
+            .register_plugin(Arc::new(SlowClosingPlugin {
+                name: "slow".to_string(),
+                delay: Duration::from_secs(5),
+            }))
+            .unwrap();
+
+        let Err(err) = manager.close().await else {
+            panic!("expected a timeout error");
+        };
+        let PluginCloseError::Failed(message) = err;
+        assert!(message.contains("'slow'"));
+        assert!(message.contains("timed out"));
+    }
+
+    #[rusty_tokio::test]
+    async fn close_aggregates_multiple_slow_plugins_into_one_error() {
+        let mut manager = PluginManager::new();
+        manager.set_close_timeout(0.01);
+        manager
+            .register_plugin(Arc::new(SlowClosingPlugin {
+                name: "slow-1".to_string(),
+                delay: Duration::from_secs(5),
+            }))
+            .unwrap();
+        manager
+            .register_plugin(Arc::new(SlowClosingPlugin {
+                name: "slow-2".to_string(),
+                delay: Duration::from_secs(5),
+            }))
+            .unwrap();
+
+        let Err(err) = manager.close().await else {
+            panic!("expected a timeout error");
+        };
+        let PluginCloseError::Failed(message) = err;
+        assert!(message.contains("'slow-1'"));
+        assert!(message.contains("'slow-2'"));
     }
 
     #[test]

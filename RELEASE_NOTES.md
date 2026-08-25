@@ -22,6 +22,59 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `agents/`+`runners/`: plugin close timeout + export surface (C0352/C0361, both DONE)
+**2026-08-25**
+
+- **Added:** `crates/adk-agents/src/plugins.rs` (C0352) — the plugin
+  package's public export surface, re-exporting `BasePlugin`/
+  `PluginManager`/`LoggingPlugin` from one facade module. Only what
+  actually exists in this port is re-exported: `SaveFilesAsArtifactsPlugin`
+  (real, but never surfaced from the source's own package root either)
+  stays unexported, matching the source exactly; `DebugLoggingPlugin`/
+  `ReflectAndRetryModelPlugin`/`ReflectAndRetryToolPlugin` don't exist
+  as Rust types yet — all three need `BasePlugin`'s model-level/
+  tool-level hooks (C0355/C0356), which remain correctly blocked on the
+  `adk-agents`↔`adk-models`/`adk-tools` crate-cycle already documented
+  on `BasePlugin` itself (re-verified directly this batch, not assumed).
+- **Added:** `PluginManager::set_close_timeout` and a rewritten
+  `PluginManager::close` (C0361) — now enforces a per-plugin timeout
+  (defaulting to the source's own 5.0s) and aggregates every timed-out
+  plugin's name into one `PluginCloseError::Failed`, rather than
+  closing every plugin unconditionally with no failure signal at all.
+- **Added:** `Runner::close` (`adk-runners`) now actually applies
+  `plugin_close_timeout` — previously a dead field, set via
+  `Runner::with_plugin_close_timeout` but never read anywhere. It
+  clones its `PluginManager`, calls `set_close_timeout`, and logs
+  (rather than propagates) a close failure — `Runner::close`'s own
+  `()` return type is unchanged, since changing it would be a breaking
+  change to its existing cross-crate caller (`adk-tools::agent_tool`),
+  well beyond this capability's scope.
+- **Disclosed narrowing:** `BasePlugin::close` returns `()`, not a
+  `Result` — this port's hooks have no fallible-close channel at all,
+  so the only failure `PluginCloseError` can represent is a plugin
+  that doesn't finish within the configured timeout; a panicking
+  `close()` still propagates unchanged, the same posture this port's
+  callback closures already have.
+- **Manifest housekeeping:** corrected C0360's stale status —
+  `PluginManager`'s early-exit-on-first-non-None / notify-all-
+  regardless dispatch contract was already fully implemented and
+  tested for every hook this port has today, but its manifest status
+  was never flipped from `REQUIRED` to `DONE`. Also directly
+  re-investigated C0355/C0356 (`BasePlugin`'s model-level/tool-level
+  hooks) rather than trusting the existing evidence at face value, and
+  confirmed both remain correctly blocked on the crate-cycle their own
+  rows already describe — no change needed there.
+- **Tests:** `crates/adk-agents/src/plugins.rs::tests::
+  {base_plugin_and_plugin_manager_are_reachable_through_the_facade,
+  logging_plugin_is_reachable_through_the_facade}`;
+  `crates/adk-agents/src/services.rs::tests::
+  {close_reports_a_timeout_for_a_slow_plugin,
+  close_aggregates_multiple_slow_plugins_into_one_error}`;
+  `crates/adk-runners/src/runner.rs::tests::
+  close_applies_the_configured_plugin_close_timeout`.
+
+---
+
 ## PR #TBD — `agents/`: P7 node-wrapping trio (C0296/C0317/C0326, all DONE)
 **2026-08-25**
 
