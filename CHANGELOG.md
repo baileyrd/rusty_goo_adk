@@ -5,6 +5,43 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Fixed
+- `crates/adk-flows/src/functions_utils.rs`: closed out the remaining gap
+  in C0196 — `build_auth_request_event`, `generate_auth_event`, and
+  `generate_request_confirmation_event` are now real, tested code.
+  Corrects a stale blocker claim (same pattern as C0172/C0178): the
+  module doc said these needed `AuthConfig` (Phase 9, "doesn't exist in
+  this port yet"), but `AuthConfig` (C0504), `AuthToolArguments`, and
+  `ToolConfirmation` all landed long ago and are already `adk-flows`
+  dependencies. `EventActions.requested_auth_configs`/
+  `requested_tool_confirmations` stay `Value`-typed for good (`adk-events`
+  sits beneath `adk-agents`/`adk-tools`, so a real crate cycle — not
+  staleness — blocks typing them directly); the two `generate_*`
+  functions round-trip each entry through `rusty_serde::json::from_value`
+  and silently drop malformed ones, and both new builders sort by key
+  instead of relying on `HashMap`'s absent insertion order — both
+  disclosed narrowings. 11 new tests.
+- `crates/adk-events/src/event_actions.rs`: corrected the module doc's
+  claim that `AuthConfig`/`ToolConfirmation` "aren't built yet" — both
+  exist now; the `Value`-typed fields are a permanent adaptation forced
+  by the crate dependency direction, not a placeholder waiting on a
+  future phase.
+- `crates/adk-tools/src/tool_context.rs`: closed out C0415 — added the
+  `AuthCredential`/`AuthHandler`/`AuthConfig` back-compat re-exports the
+  module doc had marked as blocked on "Phase 9, which doesn't exist."
+  All three types exist in `adk-agents`, already a dependency of
+  `adk-tools`; ported as plain `pub use` re-exports (this port's
+  "static instead of lazy" substitute for the source's
+  `__getattr__`-based lazy import). 3 new tests.
+- `crates/adk-agents/src/auth_tool.rs`: `AuthToolArguments` now derives
+  `Serialize`/`Deserialize`, needed for `build_auth_request_event` to
+  round-trip it through `Value`. Matches `AuthConfig`'s own already-
+  shipped snake_case wire shape for internal consistency, rather than
+  introducing a fresh camelCase/snake_case mismatch inside one nested
+  value.
+- `crates/adk-flows/src/request_confirmation.rs`: removed a duplicate
+  `REQUEST_CONFIRMATION_FUNCTION_CALL_NAME` constant introduced in the
+  C0172 batch — `contents.rs` already defined the same public constant
+  with the same value; now imported from there instead.
 - `crates/adk-flows/src/request_confirmation.rs`: closed most of the
   remaining gap in C0172 (`request_confirmation`) — `resolve_confirmation_targets`
   (the full 3-check validation: registered in session history, author

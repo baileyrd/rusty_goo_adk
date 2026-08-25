@@ -172,7 +172,17 @@ impl AuthConfig {
 
 /// `auth.auth_tool.AuthToolArguments` — arguments for the special
 /// long-running function tool used to request end-user credentials.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// **Wire shape, same as [`AuthConfig`]'s own**: the source's
+/// `BaseModelWithConfig` sets `alias_generator=to_camel`, so
+/// `model_dump(by_alias=True)` really does produce camelCase keys —
+/// but `AuthConfig` itself (C0504, already shipped) has no
+/// `rename_all = "camelCase"` here, so its wire shape is already
+/// snake_case in this port. `AuthToolArguments` embeds an `AuthConfig`
+/// and matches that same already-established shape for internal
+/// consistency, rather than introducing a fresh, inconsistent
+/// camelCase-vs-snake_case mismatch within one nested value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthToolArguments {
     pub function_call_id: String,
     pub auth_config: AuthConfig,

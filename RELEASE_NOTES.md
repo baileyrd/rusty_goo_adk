@@ -22,6 +22,59 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `functions.py`: auth/confirmation request-event synthesis (C0196), plus a stale-doc cluster fix
+**2026-08-25**
+
+- **Added:** `functions_utils.rs::build_auth_request_event` builds an
+  auth-request event carrying one synthetic `adk_request_credential`
+  function call per deduplicated auth request, deduplicated by
+  `credential_key` exactly like the source (a request with no key is
+  never deduplicated against another). `generate_auth_event`/
+  `generate_request_confirmation_event` are the two thin wrappers the
+  source itself calls from the function-execution path — `None` when
+  nothing was requested, otherwise a real event built from the
+  `EventActions` fields that record what was requested.
+- **Why now:** this closes out C0196, and corrects a stale blocker claim
+  identical in shape to ones already found and fixed in C0172 and C0178:
+  the module doc said these three functions needed `AuthConfig` (Phase
+  9), "which doesn't exist in this port yet." `AuthConfig` (C0504),
+  `AuthToolArguments` (same module), and `ToolConfirmation` all landed
+  well before this PR and are already dependencies of `adk-flows` — the
+  claim was simply never revisited once those shipped.
+- **Disclosed narrowings:** `EventActions.requested_auth_configs`/
+  `requested_tool_confirmations` are `Value`-typed in this port, not
+  `AuthConfig`/`ToolConfirmation`-typed like the source's already-typed
+  dicts — and unlike the C0196 blocker itself, this one is permanent:
+  `adk-events` sits beneath `adk-agents`/`adk-tools` in the crate
+  dependency graph, so `EventActions` can never reference either type
+  without a cycle. `generate_auth_event`/`generate_request_confirmation_event`
+  round-trip each `Value` entry through `rusty_serde::json::from_value`
+  and silently drop malformed entries (this port's dict entries were
+  never typed at construction the way the source's are). Both new
+  builders also sort their `HashMap` inputs by key before building parts
+  — `HashMap` has no insertion order to mirror the source's
+  `dict[str, AuthConfig]` with, so this substitutes a deterministic
+  order for an unreproducible one, the same adaptation
+  `InMemoryArtifactService::list_artifact_keys` already established.
+- **Bundled:** `adk-events/src/event_actions.rs`'s own module doc carried
+  the same stale claim about these two types "not being built yet" —
+  corrected in place. `adk-tools/src/tool_context.rs` (C0415) had an
+  identical stale claim blocking its `AuthCredential`/`AuthHandler`/
+  `AuthConfig` back-compat re-exports; all three now exist in
+  `adk-agents`, already a dependency of `adk-tools`, so they're ported
+  as plain `pub use` re-exports (the source's `__getattr__`-based lazy
+  re-export has no lazy-attribute equivalent in this port). Also fixed:
+  a duplicate `REQUEST_CONFIRMATION_FUNCTION_CALL_NAME` constant this
+  migration itself introduced in the C0172 PR, not realizing
+  `contents.rs` already defined the same public constant.
+- **Testing:** 14 new tests — 11 on the three new `functions_utils.rs`
+  functions (dedup-by-key both branches, author/role defaulting, the
+  `None`-when-nothing-requested case for both `generate_*` wrappers, the
+  malformed-entry-gets-dropped case, and the original-call-not-found-gets-
+  skipped case) plus 3 on `tool_context.rs`'s new re-exports.
+
+---
+
 ## PR #TBD — `flows/llm_flows/request_confirmation.py`: validation + re-execution (C0172)
 **2026-08-25**
 

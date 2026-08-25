@@ -10,12 +10,19 @@ use std::collections::HashMap;
 
 /// Side-effects and routing decisions attached to an [`crate::Event`].
 ///
-/// **Adaptation**: `requested_auth_configs`/`requested_tool_confirmations`
-/// hold the source's `AuthConfig`/`ToolConfirmation` types, which belong to
-/// the auth (P9) and tools (P8) phases respectively and aren't built yet —
-/// typed as JSON [`Value`] placeholders here, narrowing to concrete types
-/// once those phases land (same wire shape either way). `set_model_response`
-/// is likewise a placeholder for an arbitrary structured-output value.
+/// **Adaptation, permanent**: `requested_auth_configs`/
+/// `requested_tool_confirmations` hold the source's `AuthConfig`/
+/// `ToolConfirmation` types. Both now exist in this port
+/// (`adk-agents::auth_tool::AuthConfig`, `adk-tools::tool_confirmation::
+/// ToolConfirmation`) — but `adk-events` sits *beneath* both crates in the
+/// dependency graph (`adk-agents`/`adk-tools` depend on `adk-events`, never
+/// the reverse), so `EventActions` can't reference either type without a
+/// crate cycle. These stay JSON [`Value`] placeholders for good, not
+/// pending a later phase; callers that need the typed value (see
+/// `adk-flows::functions_utils::{generate_auth_event,
+/// generate_request_confirmation_event}`) round-trip through
+/// `rusty_serde::json::from_value` instead. `set_model_response` is
+/// likewise a placeholder for an arbitrary structured-output value.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[rusty_serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventActions {

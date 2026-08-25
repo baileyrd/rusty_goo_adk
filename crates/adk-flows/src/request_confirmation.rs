@@ -47,12 +47,10 @@ use adk_tools::tool_confirmation::{ToolConfirmation, ToolConfirmationError};
 use rusty_serde::value::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use crate::contents::REQUEST_CONFIRMATION_FUNCTION_CALL_NAME;
 use crate::functions::{
     create_tool_context, execute_function_calls, FunctionExecutionError, ToolsDict,
 };
-
-/// `functions.REQUEST_CONFIRMATION_FUNCTION_CALL_NAME`.
-pub const REQUEST_CONFIRMATION_FUNCTION_CALL_NAME: &str = "adk_request_confirmation";
 
 /// The key an `adk_request_confirmation` function call's args carry the
 /// original (pre-confirmation) function call payload under.
