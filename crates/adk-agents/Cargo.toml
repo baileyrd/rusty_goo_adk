@@ -30,3 +30,9 @@ rusty_err = { workspace = true }
 # `adk-tools` -- a new usage site of an already-vetted workspace
 # dependency, not a new sovereignty decision.
 regex = { workspace = true }
+# `OAuth2DiscoveryManager` (C0534/C0535) needs a plain HTTP GET against a
+# `.well-known` endpoint. `reqwest` is already adopted at the workspace
+# level (`gemini.rs`/`load_web_page.rs` — see the root `Cargo.toml`'s own
+# note on why `reqwest::blocking` is the right fit rather than its async
+# client) — a new usage site, not a new sovereignty decision.
+reqwest = { workspace = true }

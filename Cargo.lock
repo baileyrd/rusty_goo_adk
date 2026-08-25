@@ -12,6 +12,7 @@ dependencies = [
  "adk-genai",
  "adk-platform",
  "regex",
+ "reqwest",
  "rusty_err",
  "rusty_serde",
  "rusty_tokio",
