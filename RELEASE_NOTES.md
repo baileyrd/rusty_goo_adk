@@ -22,6 +22,52 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/llm_flows/compaction.py`: the `compaction` request processor (C0173), plus an `AgentTool` stale-doc fix
+**2026-08-25**
+
+- **Added:** the `compaction` request processor now runs as part of
+  every `LlmFlow::preprocess` call, right after `instructions`/
+  `identity` and before `interactions_processor`/`contents` — matching
+  the source's own `REQUEST_PROCESSORS` ordering. When
+  `ctx.events_compaction_config` is fully configured for token-threshold
+  compaction and the current prompt token count crosses the threshold,
+  it summarizes the retention-window candidates into a compaction event,
+  appends it to the session, and marks `ctx.token_compaction_checked` —
+  a flag `Runner`'s post-invocation sliding-window trigger (C0872,
+  already shipped) reads back as `skip_token_compaction`, so the same
+  compaction decision isn't redone a second time at the end of the same
+  invocation.
+- **Why now:** every real building block was already built and tested —
+  `run_compaction_for_token_threshold_config`
+  (`apps_compaction.rs`, C0293) already computed the compaction event
+  end-to-end, it just had no caller besides the Runner-level
+  post-invocation trigger, which hardcodes `agent_name=""`/
+  `current_branch=None` for its own no-invocation-context call site.
+  This batch adds a real caller with real values for both, matching the
+  source's second actual caller of the same underlying function.
+- **Adaptation, disclosed:** the source's `require_agent` raises when
+  `invocation_context.agent` is unset; this port treats a missing
+  `ctx.agent` as "nothing to compact against" and no-ops instead — the
+  same defensive posture `instructions.rs`'s own no-tree fallback
+  already established.
+- **Bundled:** `AgentTool`'s nested `Runner` (`agent_tool.rs`, C0406)
+  now gets an `InMemoryMemoryService`, matching the source's own
+  unconditional `memory_service=InMemoryMemoryService()`. Corrects a
+  stale blocker claim in the same shape as ones already found in C0172,
+  C0178, C0196, and C0125: the module doc said this was "Phase 6, not
+  built" — false, it shipped long ago and `adk-tools` already depends on
+  `adk-agents`. The manifest row's own evidence repeated a second stale
+  claim too (that `ForwardingArtifactService` wasn't ported either, when
+  it actually landed a while back) — corrected in place alongside the
+  fix.
+- **Testing:** 6 new tests — 5 on `apply_compaction_processor` (no-op
+  without a config, no-op without an agent in context, no-op below the
+  token threshold, appends the event and marks the flag, doesn't mark
+  the flag when the summarizer yields nothing) plus 1 confirming the
+  nested `Runner` in `AgentTool` always has a memory service available.
+
+---
+
 ## PR #TBD — `utils/streaming_utils.py`: progressive SSE streaming mode (C0125)
 **2026-08-25**
 

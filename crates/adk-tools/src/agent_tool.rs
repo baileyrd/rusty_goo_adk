@@ -13,8 +13,6 @@
 //!   uses the generic `{"request": string}` parameter shape (the
 //!   source's own no-input-schema fallback), and `run_async` never
 //!   schema-validates the merged response text.
-//! - `InMemoryMemoryService` is Phase 6, not built — the nested `Runner`
-//!   runs with no memory service.
 //! - Plugin propagation (`include_plugins`) needs `Runner` to accept a
 //!   `PluginManager`, which `adk-runners::runner`'s own module doc
 //!   already discloses `Runner` doesn't do yet ("a genuine, disclosed
@@ -38,11 +36,21 @@
 //! own, so the nested agent can read/write real artifacts — see that
 //! module's own doc for its disclosed post-hoc artifact-delta-merge
 //! adaptation, applied here the same way state deltas already are.
+//!
+//! **`InMemoryMemoryService`, now wired**: corrects a stale blocker claim
+//! (same pattern as C0172/C0178/C0196/C0125) — an earlier version of this
+//! doc said `InMemoryMemoryService` was "Phase 6, not built," but it
+//! shipped long ago (`adk_agents::in_memory_memory_service`) and
+//! `adk-tools` already depends on `adk-agents`. Matches the source
+//! exactly: unconditional (`memory_service=InMemoryMemoryService()`), a
+//! fresh instance per nested run, never forwarded from the parent tool
+//! context the way the artifact service above is.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use adk_agents::base_agent::BaseAgent;
+use adk_agents::in_memory_memory_service::InMemoryMemoryService;
 use adk_agents::services::{InMemorySessionService, SessionService};
 use adk_genai::content::{Content, FunctionDeclaration, Part};
 use adk_runners::runner::Runner;
@@ -163,6 +171,11 @@ impl BaseTool for AgentTool {
             if let Some(forwarding_artifact_service) = &forwarding_artifact_service {
                 runner = runner.with_artifact_service(forwarding_artifact_service.clone());
             }
+            // Source: `memory_service=InMemoryMemoryService()`, unconditional
+            // (unlike the artifact service above, never forwarded from the
+            // parent tool context — the source's own nested `Runner` always
+            // gets a fresh, isolated in-memory instance).
+            runner = runner.with_memory_service(Arc::new(InMemoryMemoryService::new()));
 
             let events = runner
                 .run_async(&session.user_id, &session.id, content)
@@ -477,5 +490,47 @@ mod tests {
         let result = tool.run_async(&args, &mut context).await.unwrap();
         assert_eq!(result, Value::String("hello from nested agent".to_string()));
         assert!(context.actions().artifact_delta.is_empty());
+    }
+
+    struct ReportsMemoryServicePresence;
+
+    impl AgentBehavior for ReportsMemoryServicePresence {
+        fn run_async_impl<'a>(
+            &'a self,
+            ctx: &'a mut InvocationContext,
+        ) -> TestFuture<'a, Result<Vec<Event>, adk_agents::base_agent::AgentRunError>> {
+            Box::pin(async move {
+                let mut event =
+                    Event::new(ctx.invocation_id.clone(), "helper", NodeInfo::new("helper"));
+                event.content = Some(Content::new(
+                    "model",
+                    vec![Part::text(if ctx.memory_service.is_some() {
+                        "has memory service"
+                    } else {
+                        "no memory service"
+                    })],
+                ));
+                Ok(vec![event])
+            })
+        }
+
+        fn run_live_impl<'a>(
+            &'a self,
+            _ctx: &'a mut InvocationContext,
+        ) -> TestFuture<'a, Result<Vec<Event>, adk_agents::base_agent::AgentRunError>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn the_nested_runner_always_gets_a_fresh_in_memory_memory_service() {
+        let agent = BaseAgent::new("helper", ReportsMemoryServicePresence).unwrap();
+        let tool = AgentTool::new(agent);
+        let mut context = ctx();
+        let mut args = BTreeMap::new();
+        args.insert("request".to_string(), Value::String("hi".to_string()));
+
+        let result = tool.run_async(&args, &mut context).await.unwrap();
+        assert_eq!(result, Value::String("has memory service".to_string()));
     }
 }

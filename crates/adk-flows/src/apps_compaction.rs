@@ -45,6 +45,16 @@
 //! stripped for the same reason batch 1 disclosed for C0288 — what's
 //! left is just `config.summarizer.maybe_summarize_events(..)`.
 //!
+//! **Scope, batch 4 (C0173)**: `run_compaction_for_token_threshold` split
+//! into itself (the `App`-level, no-context wrapper it always was) plus
+//! [`run_compaction_for_token_threshold_config`] (the real, general
+//! entrypoint taking `agent_name`/`current_branch` explicitly) — needed
+//! once `crate::compaction_request_processor` (the source's
+//! `flows/llm_flows/compaction.py::CompactionRequestProcessor`, run
+//! *before* contents assembly, distinct from this batch's own
+//! post-invocation trigger) became the second real caller, with real
+//! values for both instead of the `App`-level caller's `""`/`None`.
+//!
 //! **Adaptation, disclosed**: the source's `_count_chars_in_content`
 //! `json.dumps`s a function call's `args`/a function response's
 //! `response`, falling back to `str()` on a serialization failure. This
@@ -409,17 +419,21 @@ impl From<EnsureCompactionSummarizerError> for CompactionTriggerError {
     }
 }
 
-/// C0293: `_run_compaction_for_token_threshold`/
-/// `_run_compaction_for_token_threshold_config` — checks whether
+/// C0293: `_run_compaction_for_token_threshold_config` — checks whether
 /// token-threshold compaction is fully configured and triggered by the
 /// latest observed/estimated prompt token count, and if so, generates a
-/// compaction event summarizing the retention-window candidates.
-/// `agent_name`/`current_branch` are hardcoded to `""`/`None`, matching
-/// the source's own `App`-wrapper call site.
-pub async fn run_compaction_for_token_threshold(
+/// compaction event summarizing the retention-window candidates. Takes
+/// `agent_name`/`current_branch` explicitly — the source's second real
+/// caller, the `compaction` request processor (C0173,
+/// `crate::compaction_request_processor`), has real values for both
+/// (the invocation's current agent/branch), unlike the `App`-level
+/// caller [`run_compaction_for_token_threshold`] wraps.
+pub async fn run_compaction_for_token_threshold_config(
     config: &EventsCompactionConfig,
     agent: &BaseAgent,
     session_events: &[Event],
+    agent_name: &str,
+    current_branch: Option<&str>,
 ) -> Result<Option<Event>, CompactionTriggerError> {
     let (Some(token_threshold), Some(event_retention_size)) =
         (config.token_threshold, config.event_retention_size)
@@ -429,7 +443,8 @@ pub async fn run_compaction_for_token_threshold(
 
     let events = adk_events::rewind::apply_rewinds(session_events);
 
-    let Some(prompt_token_count) = latest_prompt_token_count(&events, None, "")? else {
+    let Some(prompt_token_count) = latest_prompt_token_count(&events, current_branch, agent_name)?
+    else {
         return Ok(None);
     };
     if prompt_token_count < token_threshold {
@@ -443,6 +458,19 @@ pub async fn run_compaction_for_token_threshold(
 
     let summarizer = ensure_compaction_summarizer(config, agent)?;
     Ok(summarizer.maybe_summarize_events(&events_to_compact).await)
+}
+
+/// C0293: `_run_compaction_for_token_threshold` — the `App`-level
+/// entrypoint, calling [`run_compaction_for_token_threshold_config`]
+/// with `agent_name`/`current_branch` hardcoded to `""`/`None`, matching
+/// the source's own no-invocation-context call site
+/// (`Runner`'s post-invocation trigger, C0871/C0872).
+pub async fn run_compaction_for_token_threshold(
+    config: &EventsCompactionConfig,
+    agent: &BaseAgent,
+    session_events: &[Event],
+) -> Result<Option<Event>, CompactionTriggerError> {
+    run_compaction_for_token_threshold_config(config, agent, session_events, "", None).await
 }
 
 /// C0293: `_run_compaction_for_sliding_window` — the interval-based
