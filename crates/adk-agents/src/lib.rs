@@ -168,6 +168,7 @@ pub mod oauth2_util;
 pub mod optimization_data_types;
 pub mod parallel_agent;
 pub mod readonly_context;
+pub mod reflect_retry_utils;
 pub mod run_config;
 pub mod sampler;
 pub mod save_files_as_artifacts_plugin;
