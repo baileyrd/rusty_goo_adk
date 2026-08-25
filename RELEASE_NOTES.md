@@ -22,6 +22,22 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/`: credential-gated tools (C0412, DONE)
+**2026-08-25**
+
+- **Added:** `BaseAuthenticatedTool`/`AuthenticatedFunctionTool` resolve
+  an `AuthConfig` credential via `CredentialManager` before running a
+  tool, returning a "Pending User Authorization" placeholder (or a
+  configured alternative) instead of the real tool logic when no
+  credential is available yet. `AuthenticatedFunctionTool` wraps a
+  `FunctionTool` and injects the resolved credential into its call
+  args; `BaseAuthenticatedTool` wraps an arbitrary async closure.
+- **Known limitation, disclosed:** the OAuth2/ADC `GoogleTool`
+  (C0413/C0414) stays out of scope — it needs a real `google-auth`-
+  equivalent client stack this workspace doesn't have.
+
+---
+
 ## PR #TBD — `evaluation/`: offline session replay + final eval status (C0617, C0624, both partial)
 **2026-08-25**
 

@@ -47,6 +47,12 @@ pub enum ToolError {
     /// create its session or complete the nested agent's turn.
     #[error("{0}")]
     NestedRunFailed(String),
+    /// `BaseAuthenticatedTool`/`AuthenticatedFunctionTool` (C0412) failed
+    /// to resolve or request an auth credential. The source lets the
+    /// underlying exception propagate uncaught; this port surfaces it
+    /// through `run_async`'s `Result` instead.
+    #[error("{0}")]
+    CredentialResolutionFailed(String),
 }
 
 /// `types.FunctionResponseScheduling` — controls when the model reacts to

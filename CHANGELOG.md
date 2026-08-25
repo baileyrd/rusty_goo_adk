@@ -5,6 +5,25 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-tools/src/base_authenticated_tool.rs` and
+  `crates/adk-tools/src/authenticated_function_tool.rs`: `BaseAuthenticatedTool`/
+  `AuthenticatedFunctionTool` (C0412, DONE), ported from
+  `tools/base_authenticated_tool.py`/`tools/authenticated_function_tool.py`.
+  Both resolve an `AuthConfig` credential via `CredentialManager` before
+  invocation, returning a configurable "Pending User Authorization"
+  placeholder when no credential is available yet instead of running
+  the wrapped logic. `BaseAuthenticatedTool` takes a boxed closure
+  standing in for the source's abstract `_run_async_impl`
+  (composition, same shape `FunctionTool` already uses for its wrapped
+  closure); `AuthenticatedFunctionTool` composes an inner `FunctionTool`
+  rather than subclassing it. Both hold their `CredentialManager` behind
+  a `rusty_tokio::sync::Mutex` since `get_auth_credential` is itself
+  `async` and needs `&mut self`. Gated by their existing
+  `FeatureName::BaseAuthenticatedTool`/`FeatureName::AuthenticatedFunctionTool`
+  registry entries. `GoogleTool`/`_google_credentials.py` (C0413/C0414)
+  stays explicitly out of this batch — it needs a real OAuth2/ADC
+  client stack (`google.auth`/`google.oauth2`), a new third-party
+  dependency this batch doesn't add. 10 new tests.
 - New `crates/adk-eval/src/local_eval_service.rs`: `generate_final_eval_status`
   (C0617, partial), ported from `evaluation/local_eval_service.py`'s
   `LocalEvalService._generate_final_eval_status` — the one synchronous,
