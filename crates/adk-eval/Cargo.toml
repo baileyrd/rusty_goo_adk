@@ -6,6 +6,13 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# `process_query_with_session` (C0624) needs the real `Session` type to
+# replay recorded events -- `adk-agents` has no dependency back on
+# `adk-eval` (verified: no crate in `adk-agents`'s own dependency chain
+# reaches `adk-eval` either), so this is a plain new leaf edge, not a
+# cycle, same bar as this crate's existing `adk-errors`/`adk-platform`
+# adoptions (C0613).
+adk-agents = { path = "../adk-agents" }
 adk-errors = { path = "../adk-errors" }
 adk-events = { path = "../adk-events" }
 adk-genai = { path = "../adk-genai" }
