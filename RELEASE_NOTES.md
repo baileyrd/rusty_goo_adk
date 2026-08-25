@@ -22,6 +22,29 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `workflow/`: `parse_edge_items`/`Graph::from_edge_items`, P7 Chunk 6 (C0327, DONE — narrowed)
+**2026-08-25**
+
+- **Added:** `workflow_graph_parser.rs` — the chain-building convenience
+  syntax on top of `Edge`/`Graph` (landed in Chunk 2): plain chains
+  (`(a, b, c)`), fan-out tuples, routing-map dicts (`{"route": node}`),
+  and the source's own consecutive-routing-map and empty-routing-map
+  rejections all port in full. `Graph::from_edge_items` (new method on
+  `Graph`, `workflow_graph.rs`) wires it up.
+- **Narrowed, disclosed at length in the module doc:** `NodeLike` keeps
+  only `BaseNode`/`"START"` — no `BaseAgent`/`BaseTool`/raw-callable
+  chain elements, since those need `build_node`/`is_node_like` (C0326),
+  itself still blocked on the `adk-tools`/`adk-agents` crate cycle
+  (C0355/C0356) that `workflow_graph.rs`'s own module doc already
+  disclosed when this convenience path was originally deferred.
+  `_get_or_build_node` degenerates to identity dedup via the
+  already-shipped `BaseNode::ptr_eq`, since `build_node` is a no-op
+  passthrough for the only case this narrowed `NodeLike` can ever
+  produce (a `BaseNode` already); the source's runtime
+  `isinstance`/`is_node_like` validation checks are dropped since this
+  port's typed enums make invalid values unrepresentable at parse time.
+- 9 new tests (`cargo test -p adk-agents workflow_graph_parser`).
+
 ## PR #TBD — `workflow/`: `FunctionNode`/`JoinNode`, P7 Chunk 5 (C0313/C0314/C0315/C0316, all DONE — heavily narrowed)
 **2026-08-25**
 

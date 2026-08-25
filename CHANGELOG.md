@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/workflow_graph_parser.rs`: P7 workflow/graph
+  engine Chunk 6 — `parse_edge_items`/`Graph::from_edge_items` (C0327,
+  narrowed), the chain-building convenience syntax on top of `Edge`/
+  `Graph` (Chunk 2). Plain chains, fan-out tuples, routing-map dicts,
+  and the consecutive-routing-map/empty-routing-map rejections all port
+  in full. Narrowed, disclosed at length in the module doc: `NodeLike`
+  keeps only `BaseNode`/`"START"` — no `BaseAgent`/`BaseTool`/raw-callable
+  chain elements, since those need `build_node`/`is_node_like` (C0326),
+  itself still blocked on the `adk-tools`/`adk-agents` crate cycle
+  (C0355/C0356) `workflow_graph.rs`'s own module doc already disclosed.
+  `_get_or_build_node` degenerates to identity dedup via the
+  already-shipped `BaseNode::ptr_eq`, since `build_node` is a no-op
+  passthrough for the only case this narrowed `NodeLike` can produce;
+  the source's runtime `isinstance`/`is_node_like` validation checks are
+  dropped since this port's typed enums make invalid values
+  unrepresentable at parse time. 9 new tests.
 - New `crates/adk-agents/src/workflow_{function_node,join_node}.rs`: P7
   workflow/graph engine Chunk 5 — `FunctionNode` (C0313/C0314/C0315, all
   DONE, heavily narrowed) and `JoinNode` (C0316, narrowed — `_ToolNode`

@@ -3,27 +3,17 @@
 //! the P7 workflow/graph engine — see `workflow_node_state.rs`'s module
 //! doc for the standing crate-placement decision.
 //!
-//! **Not ported this batch, disclosed**: `Graph::from_edge_items`/
-//! `parse_edge_items` (C0327) and the `NodeLike`/`RoutingMap`/
-//! `ChainElement`/`EdgeItem` chain-building sugar the source builds on
-//! top of `Edge`/`Graph`. `parse_edge_items` needs `build_node`/
-//! `is_node_like` (C0326), which itself needs `FunctionNode`/
-//! `_ToolNode`/`_ParallelWorker` (C0313/C0316/C0317, not built) and
-//! `BaseTool` — and `BaseTool` lives in `adk-tools`, which already
-//! depends on this crate (`adk-agents`), so `adk-agents` depending back
-//! on `adk-tools` would be the same crate-cycle shape already disclosed
-//! for C0355/C0356. A future batch that lands the node-wrapper types can
-//! revisit this once they exist — likely by building `build_node`
-//! itself inside `adk-tools` (which can see both `BaseNode` and
-//! `BaseTool`), or via a caller-supplied resolver, mirroring the C0092
-//! "caller supplies the resolved bits" pattern this port already uses
-//! everywhere a similar cross-crate gap shows up — rather than by
-//! `adk-agents` depending on `adk-tools` directly.
-//!
-//! [`Edge`]/[`Graph`] construction directly from already-built
-//! [`BaseNode`] values (this module's actual scope) never touches
-//! `BaseTool` at all — only the deferred `from_edge_items` convenience
-//! path does.
+//! **`Graph::from_edge_items`/`parse_edge_items` (C0327), narrowed —
+//! see `workflow_graph_parser.rs`'s own doc**: the chain-building sugar
+//! now ports, but only over `NodeLike::Node`/`NodeLike::Start` — no
+//! `BaseAgent`/`BaseTool`/raw-callable chain elements, since those need
+//! `build_node`/`is_node_like` (C0326), which itself needs
+//! `FunctionNode`/`_ToolNode`/`_ParallelWorker` (C0313/C0316/C0317) and
+//! `BaseTool` — `BaseTool` lives in `adk-tools`, which already depends
+//! on this crate, so `adk-agents` depending back would be the same
+//! crate-cycle shape already disclosed for C0355/C0356. A future batch
+//! that lands the node-wrapper types can widen `NodeLike` once they
+//! exist.
 
 use std::collections::HashSet;
 
@@ -173,6 +163,16 @@ impl Graph {
         self.terminal_node_names =
             crate::workflow_graph_validation::validate_graph(&self.nodes, &self.edges)?;
         Ok(())
+    }
+
+    /// `Graph.from_edge_items` (C0327, narrowed — see
+    /// `workflow_graph_parser.rs`'s own doc): builds a `Graph` from a
+    /// list of edge items (explicit edges or chains).
+    pub fn from_edge_items(
+        edge_items: Vec<crate::workflow_graph_parser::EdgeItem>,
+    ) -> Result<Self, String> {
+        let edges = crate::workflow_graph_parser::parse_edge_items(edge_items)?;
+        Ok(Self::new(edges))
     }
 }
 
