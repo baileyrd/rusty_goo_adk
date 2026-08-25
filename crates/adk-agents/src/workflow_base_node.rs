@@ -95,6 +95,18 @@ pub trait NodeBehavior: AsAny + Send + Sync + 'static {
         ctx: &'a mut Context,
         node_input: Value,
     ) -> BoxFuture<'a, Result<Vec<NodeYield>, NodeRunError>>;
+
+    /// `BaseNode._requires_all_predecessors`: whether this node's
+    /// orchestrator (`Workflow`, C0298-C0306, not built) should wait for
+    /// every predecessor to complete before triggering it. Defaults to
+    /// `false`, matching the source's own `BaseNode` default; overridden
+    /// by [`crate::workflow_join_node::JoinNode`] (C0316). Has no reader
+    /// yet in this port — `Workflow` is its only consumer — kept
+    /// correctly wired now so a future batch that builds `Workflow`
+    /// doesn't also have to revisit `NodeBehavior`.
+    fn requires_all_predecessors(&self) -> bool {
+        false
+    }
 }
 
 /// A behavior that produces no yields — the source's own default
@@ -238,6 +250,11 @@ impl BaseNode {
     /// inferred from edges.
     pub fn ptr_eq(&self, other: &BaseNode) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    /// See [`NodeBehavior::requires_all_predecessors`]'s own doc.
+    pub fn requires_all_predecessors(&self) -> bool {
+        self.0.behavior.requires_all_predecessors()
     }
 
     fn validate_input_data(&self, data: Value) -> Value {
