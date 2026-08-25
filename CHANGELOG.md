@@ -4,6 +4,22 @@ All notable changes to this repo are documented here.
 Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
+### Fixed
+- `crates/adk-flows/src/output_schema.rs`/`llm_flow.rs`: closed out C0178
+  (`_output_schema_processor`) — `apply_output_schema_processor` now
+  actually injects the synthetic `set_model_response` tool + its
+  instruction into the request, and is wired directly into
+  `LlmFlow::preprocess` (near the end, matching the source's own
+  `REQUEST_PROCESSORS` ordering after `contents`/`context_cache`). Two
+  stale blocker claims are corrected: `LlmRequest::append_tools` (a
+  *method* on `LlmRequest` inside `adk-models`) really is blocked by the
+  `adk-models`/`adk-tools` crate cycle, but the free-function
+  `append_tools`/`merge_declarations` (C0116) lives in `adk-tools`,
+  which `adk-flows` already depends on; and "needs `InvocationContext.agent`
+  to resolve a concrete `LlmAgent`" was never actually true — every
+  sibling processor (`basic`/`identity`/`instructions`) already solves
+  this by taking `&LlmAgent` as a plain free-function parameter. 5 new
+  tests.
 ### Added
 - New `crates/adk-agents/tests/artifact_service_cross_backend.rs` (C0278
   REQUIRED+Partial) — a cross-backend `ArtifactService` parity suite:
