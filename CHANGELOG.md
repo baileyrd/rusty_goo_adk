@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-flows/src/llm_flow.rs`: wired auth-request/tool-confirmation-
+  request/`set_model_response`-final-event synthesis into `LlmFlow::run_one_step`
+  (C0158), plus the `end_invocation` short-circuit (rest of C0149) — a
+  direct follow-up to the turn-loop batch below. Mirrors
+  `_postprocess_handle_function_calls_async`'s exact yield order after a
+  function call executes: auth-request event (`generate_auth_event`,
+  `functions_utils.rs`, C0504 — setting `ctx.end_invocation = true` when
+  one is yielded), tool-confirmation-request event
+  (`generate_request_confirmation_event`), the function-response event
+  itself, then (conditionally) a synthesized final event when the response
+  carries a validated `set_model_response` result
+  (`create_final_model_response_event`/`get_structured_model_response`,
+  `output_schema.rs`, C0178). `run_one_step` now returns an empty step
+  immediately once `ctx.end_invocation` is set, since a function-response
+  event isn't itself a final response and `run_async`'s outer loop would
+  otherwise issue one more invalid model call after an auth request. Not
+  ported: recursive re-run of a transferred sub-agent (`transfer_to_agent`
+  action handling) — `get_agent_to_run` (C0159, DONE) already provides the
+  resolution half. No new dependency, no breaking change to `LlmFlow`'s
+  public surface. 3 new tests.
 - `crates/adk-flows/src/llm_flow.rs`: the multi-step tool-calling turn
   loop (C0148/C0149/C0151/C0152) — `LlmFlow::run_async`, a new outer loop
   mirroring the source's `run_async`/`_run_one_step_async` structure that
