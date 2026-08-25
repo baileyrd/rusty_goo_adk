@@ -57,6 +57,47 @@ impl Edge {
     }
 }
 
+/// Converts a single dynamically-typed emitted-route [`rusty_serde::value::Value`]
+/// into the [`RouteValue`] [`Graph::get_next_pending_nodes`] matches
+/// against — `Value::Bool`/`Value::Int`/`Value::String` map directly;
+/// `Value::UInt` widens into `RouteValue::Int` (lossy only for a route
+/// value outside `i64::MAX`, never realistic for a route tag); anything
+/// else (`Value::Null`/`Value::Float`/`Value::Seq`/`Value::Map`) has no
+/// `RouteValue` equivalent and matches nothing.
+fn value_to_route_value(value: &rusty_serde::value::Value) -> Option<RouteValue> {
+    use rusty_serde::value::Value;
+    match value {
+        Value::Bool(b) => Some(RouteValue::Bool(*b)),
+        Value::Int(i) => Some(RouteValue::Int(*i)),
+        Value::UInt(u) => Some(RouteValue::Int(*u as i64)),
+        Value::String(s) => Some(RouteValue::Str(s.clone())),
+        _ => None,
+    }
+}
+
+/// Converts a node's emitted `ctx.route` — a raw, dynamically-typed
+/// `Value` (this port never refines it further, matching the source's
+/// own dynamically-typed `child.route`, see `workflow_rehydration_utils
+/// .rs`'s own disclosure of the same choice for `ChildScanState::route`)
+/// — into the [`RouteSpec`] [`Graph::get_next_pending_nodes`] needs.
+/// `Value::Seq` becomes [`RouteSpec::Many`] (filtering out any
+/// unconvertible element; `None` if every element is unconvertible —
+/// same as no route emitted at all); any other convertible scalar
+/// becomes [`RouteSpec::Single`]; everything else is `None`.
+pub(crate) fn value_to_route_spec(value: &rusty_serde::value::Value) -> Option<RouteSpec> {
+    match value {
+        rusty_serde::value::Value::Seq(items) => {
+            let values: Vec<RouteValue> = items.iter().filter_map(value_to_route_value).collect();
+            if values.is_empty() {
+                None
+            } else {
+                Some(RouteSpec::Many(values))
+            }
+        }
+        other => value_to_route_value(other).map(RouteSpec::Single),
+    }
+}
+
 /// `workflow._graph.Graph` — a workflow graph.
 #[derive(Debug, Clone, Default)]
 pub struct Graph {
@@ -298,5 +339,54 @@ mod tests {
             Some(&RouteSpec::Single(RouteValue::Str("unmatched".to_string()))),
         );
         assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn value_to_route_spec_converts_each_scalar_variant() {
+        use rusty_serde::value::Value;
+        assert_eq!(
+            value_to_route_spec(&Value::Bool(true)),
+            Some(RouteSpec::Single(RouteValue::Bool(true)))
+        );
+        assert_eq!(
+            value_to_route_spec(&Value::Int(-3)),
+            Some(RouteSpec::Single(RouteValue::Int(-3)))
+        );
+        assert_eq!(
+            value_to_route_spec(&Value::UInt(7)),
+            Some(RouteSpec::Single(RouteValue::Int(7)))
+        );
+        assert_eq!(
+            value_to_route_spec(&Value::String("yes".to_string())),
+            Some(RouteSpec::Single(RouteValue::Str("yes".to_string())))
+        );
+    }
+
+    #[test]
+    fn value_to_route_spec_converts_a_seq_to_many_filtering_unconvertible_entries() {
+        use rusty_serde::value::Value;
+        let value = Value::Seq(vec![
+            Value::String("a".to_string()),
+            Value::Null,
+            Value::Int(1),
+        ]);
+        assert_eq!(
+            value_to_route_spec(&value),
+            Some(RouteSpec::Many(vec![
+                RouteValue::Str("a".to_string()),
+                RouteValue::Int(1),
+            ]))
+        );
+    }
+
+    #[test]
+    fn value_to_route_spec_is_none_for_unconvertible_values() {
+        use rusty_serde::value::Value;
+        assert_eq!(value_to_route_spec(&Value::Null), None);
+        assert_eq!(value_to_route_spec(&Value::Float(1.5)), None);
+        assert_eq!(
+            value_to_route_spec(&Value::Seq(vec![Value::Null, Value::Float(1.0)])),
+            None
+        );
     }
 }

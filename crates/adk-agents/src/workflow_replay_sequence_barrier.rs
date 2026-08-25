@@ -21,22 +21,39 @@
 //! a key marked complete before a waiter arrives still fast-forwards
 //! immediately — the same guarantee `asyncio.Event.is_set()` gives for
 //! free.
+//!
+//! **`check_and_advance` takes `&self`, not `&mut self`**: the source's
+//! `current_index`/mutable set are private, single-owner Python
+//! attributes. `workflow_workflow.rs`'s `WorkflowLoopState::
+//! sequence_barrier` wraps this type in an `Arc` so every concurrently
+//! pending node future (the LOOP phase's whole point) can hold its own
+//! `.wait()`-capable clone — an `&mut self` `check_and_advance` would be
+//! unreachable once more than one clone exists. `current_index`/
+//! `unblocked` move into a `std::sync::Mutex` (never held across an
+//! `.await` — both methods only touch it for a few synchronous
+//! statements) so `check_and_advance` can take `&self` too, matching
+//! `wait`'s already-shared-ref shape.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use rusty_tokio::sync::Notify;
 
 const DEFAULT_TIMEOUT_SEC: f64 = 15.0;
 
+struct BarrierState {
+    current_index: usize,
+    unblocked: HashSet<String>,
+}
+
 /// `ReplaySequenceBarrier`: unified chronological sequence barrier to
 /// ensure deterministic replay ordering.
 pub struct ReplaySequenceBarrier {
     sequence: Vec<String>,
     timeout: Duration,
-    current_index: usize,
     notifies: HashMap<String, Notify>,
-    unblocked: HashSet<String>,
+    state: Mutex<BarrierState>,
 }
 
 impl ReplaySequenceBarrier {
@@ -56,10 +73,19 @@ impl ReplaySequenceBarrier {
         Self {
             sequence,
             timeout,
-            current_index: 0,
             notifies,
-            unblocked,
+            state: Mutex::new(BarrierState {
+                current_index: 0,
+                unblocked,
+            }),
         }
+    }
+
+    /// The chronological sequence this barrier was built from — read by
+    /// `Workflow::run_loop` (C0301) to sort simultaneously-completed
+    /// tasks into recovered-history order.
+    pub fn sequence(&self) -> &[String] {
+        &self.sequence
     }
 
     /// `ReplaySequenceBarrier.wait`: waits for the barrier if `key` is
@@ -72,8 +98,11 @@ impl ReplaySequenceBarrier {
         let Some(notify) = self.notifies.get(key) else {
             return Ok(());
         };
-        if self.unblocked.contains(key) {
-            return Ok(());
+        {
+            let state = self.state.lock().expect("sequence barrier mutex poisoned");
+            if state.unblocked.contains(key) {
+                return Ok(());
+            }
         }
         match rusty_tokio::time::timeout(self.timeout, notify.notified()).await {
             Ok(()) => Ok(()),
@@ -85,16 +114,17 @@ impl ReplaySequenceBarrier {
 
     /// `ReplaySequenceBarrier.check_and_advance`: advances the sequence
     /// if `key` matches the current expected execution.
-    pub fn check_and_advance(&mut self, key: &str) {
-        let Some(expected_key) = self.sequence.get(self.current_index) else {
+    pub fn check_and_advance(&self, key: &str) {
+        let mut state = self.state.lock().expect("sequence barrier mutex poisoned");
+        let Some(expected_key) = self.sequence.get(state.current_index) else {
             return;
         };
         if expected_key != key {
             return;
         }
-        self.current_index += 1;
-        if let Some(next_key) = self.sequence.get(self.current_index) {
-            self.unblocked.insert(next_key.clone());
+        state.current_index += 1;
+        if let Some(next_key) = self.sequence.get(state.current_index) {
+            state.unblocked.insert(next_key.clone());
             if let Some(notify) = self.notifies.get(next_key) {
                 notify.notify_waiters();
             }
@@ -120,14 +150,14 @@ mod tests {
 
     #[rusty_tokio::test]
     async fn advancing_past_a_key_unblocks_the_next_one() {
-        let mut barrier = ReplaySequenceBarrier::new(vec!["a".to_string(), "b".to_string()]);
+        let barrier = ReplaySequenceBarrier::new(vec!["a".to_string(), "b".to_string()]);
         barrier.check_and_advance("a");
         barrier.wait("b").await.unwrap();
     }
 
     #[rusty_tokio::test]
     async fn advancing_with_the_wrong_key_does_not_move_the_sequence() {
-        let mut barrier = ReplaySequenceBarrier::with_timeout(
+        let barrier = ReplaySequenceBarrier::with_timeout(
             vec!["a".to_string(), "b".to_string()],
             Duration::from_millis(10),
         );
@@ -148,7 +178,7 @@ mod tests {
 
     #[rusty_tokio::test]
     async fn advancing_past_every_key_leaves_check_and_advance_a_no_op() {
-        let mut barrier = ReplaySequenceBarrier::new(vec!["a".to_string()]);
+        let barrier = ReplaySequenceBarrier::new(vec!["a".to_string()]);
         barrier.check_and_advance("a");
         // No next key to unblock; a further advance call must not panic.
         barrier.check_and_advance("a");
