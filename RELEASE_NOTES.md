@@ -22,6 +22,83 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `workflow/`: the P7 workflow/graph engine's pure-data slice, first batch (C0307/C0308/C0309/C0324, all DONE)
+**2026-08-25**
+
+- **Added:** the first batch of the previously-entirely-unbuilt P7
+  workflow/graph engine (`google.adk.workflow/` + `workflow/utils/`,
+  ~6,300 Python source lines across 26 files, manifest rows
+  C0294-C0339). This batch covers exactly the pure-data slice with zero
+  dependency on `BaseAgent`/`BaseTool`/`Context`/`Event`, or any other
+  not-yet-built P7 piece:
+  - `NodeStatus` (`crates/adk-agents/src/workflow_node_status.rs`) — the
+    7-variant node-execution status enum.
+  - `NodeState` (`workflow_node_state.rs`) — per-node execution state,
+    8 fields, including the `attempt_count`/`run_counter`
+    exclude-at-default serialization behavior the source's `Field
+    (exclude_if=...)` establishes.
+  - `Trigger` (`workflow_trigger.rs`) — the 4-field downstream-node
+    trigger data model.
+  - `NodeInterruptedError`/`WorkflowNodeError` (`workflow_errors.rs`) —
+    `WorkflowNodeError` covers the source's `NodeTimeoutError`/
+    `DynamicNodeFailError` (exact source message formats);
+    `NodeInterruptedError` is a standalone unit struct.
+  - `RetryConfig` (`workflow_retry_config.rs`) — all 6 fields.
+  - `should_retry_node`/`get_retry_delay` (`workflow_retry_utils.rs`) —
+    16 tests, 11 ported directly from the source's own
+    `tests/unittests/workflow/utils/test_retry_utils.py`, including a
+    2000-sample statistical test guarding the cap-before-jitter
+    ordering and the `max_attempts` 0-or-1 falsy-coalescing regression
+    test.
+- **Crate placement, a deliberate decision recorded for every future P7
+  batch**: landed as flat `workflow_*.rs` modules inside `adk-agents`,
+  not a new `adk-workflow` crate. `adk-agents` already discloses (in
+  `base_agent.rs`/`context.rs`/`app.rs`) that it needs `workflow::
+  BaseNode` once it exists; the eventual `Workflow` orchestrator
+  (C0298-C0306, not built — genuinely blocked on C0092) needs `agents.
+  context.Context` directly. Two crates depending on each other in both
+  directions isn't expressible in Cargo — the same crate-cycle shape
+  C0355/C0356 already hit and disclosed for `adk-tools`/`adk-agents`.
+  Landing P7 in `adk-agents` from the start avoids walking into a
+  second instance of that mistake once a later batch reaches the
+  orchestrator.
+- **`NodeInterruptedError`, adaptation disclosed**: the source is
+  deliberately a `BaseException` (not `Exception`) so a node body's
+  `except Exception` can't accidentally swallow an in-flight HITL
+  interrupt. Rust's `Result`-based control flow has no runtime "catch"
+  to guard against in the first place, so this port preserves the
+  *type-system* shape of the guarantee instead: `NodeInterruptedError`
+  deliberately doesn't implement `std::error::Error`/`rusty_err::Error`,
+  so it can never gain a `?`/`.map_err`/`#[from]` conversion path into
+  `WorkflowNodeError` (or any future `NodeRunner` error type) — the
+  compiler enforces non-catchability rather than a runtime test.
+- **Other adaptations, disclosed**: `NodeStatus` serializes as its
+  variant name rather than the source's underlying int value (`INACTIVE
+  = 0`, ...) — the same cosmetic, no-consumer-yet choice
+  `adk-eval::eval_metrics::EvalStatus` already established for an
+  identical situation. `RetryConfig.exceptions` accepts
+  `Option<Vec<String>>` directly rather than porting the source's
+  class-object-or-string duality (`list[str | type[BaseException]]`) —
+  Rust has no way to pass "a type" as an ordinary value, so every
+  caller already has a plain string to supply. `should_retry_node`
+  takes the failed exception's type name as a caller-supplied `&str`
+  rather than the exception value itself, since Rust has no generic way
+  to recover a short, source-matching type name from an arbitrary `&dyn
+  std::error::Error`. Jitter uses `adk_platform::random`'s existing
+  seeded/injectable RNG seam — a different, non-cryptographic PRNG than
+  Python's Mersenne Twister (bit-for-bit cross-language parity was never
+  that seam's goal); the ported `jitter_uses_platform_random_provider`
+  test is adapted to check reproducibility under a seeded provider
+  rather than exact numeric parity with the source's Python-RNG-specific
+  expected values.
+- **Not ported this batch, disclosed**: `BaseNode`/`Graph`/`Edge`
+  (C0294/C0295/C0297) and everything downstream — separate, larger,
+  independently-shippable follow-up batches.
+- No new dependency, no breaking API change.
+- **29 new tests** across the six new files.
+
+---
+
 ## PR #TBD — `evaluation/simulation/user_simulator_provider.py`: `UserSimulatorProvider` (C0627, partial)
 **2026-08-25**
 

@@ -5,6 +5,37 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/workflow_{node_status,node_state,trigger,
+  errors,retry_config,retry_utils}.rs`: the first batch of the
+  previously-entirely-unbuilt P7 workflow/graph engine (C0294-C0339,
+  ~6,300 Python source lines) — the pure-data slice with zero
+  dependency on `BaseAgent`/`BaseTool`/`Context`/`Event` (C0307/C0308/
+  C0309/C0324, all now DONE). `NodeStatus` (7 variants), `NodeState`
+  (8 fields, including the `attempt_count`/`run_counter`
+  exclude-at-default serialization behavior), `Trigger` (4 fields),
+  `NodeInterruptedError`/`WorkflowNodeError` (`NodeTimeoutError`/
+  `DynamicNodeFailError`), `RetryConfig`, and `should_retry_node`/
+  `get_retry_delay` (16 tests, 11 ported directly from the source's own
+  test suite, including a 2000-sample statistical cap-before-jitter
+  test). Landed as flat `workflow_*.rs` modules inside `adk-agents`
+  rather than a new crate — `adk-agents` already discloses needing
+  `workflow::BaseNode` once it exists (`base_agent.rs`/`context.rs`/
+  `app.rs`), and the eventual `Workflow` orchestrator needs
+  `agents.context.Context` directly, so two separate crates would hit
+  a mutual-dependency cycle Cargo can't express, the same shape already
+  disclosed for C0355/C0356. Adaptations, disclosed: `NodeStatus`
+  serializes as its variant name rather than the source's underlying
+  int value (same cosmetic choice `EvalStatus` already established);
+  `RetryConfig.exceptions` accepts `Option<Vec<String>>` directly
+  rather than porting the source's class-object-or-string duality
+  (nothing in Rust to normalize *from*); `should_retry_node` takes the
+  failed exception's type name as a caller-supplied `&str` (Rust has
+  no generic way to recover a short type name from an arbitrary `&dyn
+  std::error::Error`); jitter uses `adk_platform::random`'s existing
+  seeded RNG seam, a different (and already-disclosed) PRNG than
+  Python's. Not ported: `BaseNode`/`Graph`/`Edge` (C0294/C0295/C0297)
+  and everything downstream — separate, larger follow-up batches,
+  several already sized in the scoping notes for this area.
 - `crates/adk-eval/src/user_simulator.rs`: `UserSimulatorProvider`
   (C0627, partial) — routes a per-`EvalCase` `UserSimulator`: a case
   carrying a static `conversation` always gets a `StaticUserSimulator`
