@@ -22,6 +22,7 @@ pub mod debug_log;
 pub mod gemini;
 pub mod gemini_context_cache_manager;
 pub mod gemini_llm_connection;
+pub mod gemma;
 pub mod generate_content_request;
 pub mod generate_content_response;
 pub mod google_client_headers;

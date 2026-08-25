@@ -227,6 +227,20 @@ pub fn default_registry() -> &'static std::sync::RwLock<LlmRegistry> {
                 }),
             )
             .expect("Gemini's own supported_models regexes are all valid");
+        // C0113: registered after `Gemini` (whose own `supported_models`
+        // already lists `gemma-4.*`) so a `gemma-4-*` model name still
+        // resolves first-match to `Gemini` (native function calling) and
+        // only a `gemma-3-*`-shaped name falls through to `Gemma`'s own
+        // broader `gemma-.*` pattern — see `gemma.rs`'s own module doc.
+        registry
+            .register(
+                &crate::gemma::Gemma::supported_models(),
+                "Gemma",
+                Arc::new(|model: &str| {
+                    Box::new(crate::gemma::Gemma::new(model)) as Box<dyn BaseLlm>
+                }),
+            )
+            .expect("Gemma's own supported_models regexes are all valid");
         registry
             .register(
                 &crate::ollama::OllamaLlm::supported_models(),
