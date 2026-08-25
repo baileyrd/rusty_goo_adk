@@ -150,7 +150,21 @@
 //! yet); agent-origin inference and its warnings (C0851-C0854) — Rust
 //! has no runtime module-path reflection to inspect, and no logging
 //! framework is adopted to warn through even if it did.
+//!
+//! **Node-path resolution helpers batch** (C0834/C0856/C0857/C0858):
+//! [`find_active_task_scope`], [`extract_resume_inputs`],
+//! [`validate_new_message`], [`resolve_invocation_id_from_fr`] — pure
+//! functions from the node/task-delegation turn setup (`_run_node_async`,
+//! C0859-C0866), all built ahead of that caller (same "widen/build once a
+//! real consumer needs it" precedent as C0835's
+//! [`get_function_responses_from_content`]) since the workflow/node
+//! engine itself isn't wired into `Runner` yet. See each function's own
+//! doc for its disclosed narrowing — [`find_active_task_scope`]'s locally
+//! duplicated `finish_task` constants/predicate (a crate-cycle
+//! workaround) and [`resolve_invocation_id_from_fr`]'s deterministic
+//! (sorted) error-message ordering are the two worth knowing about.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use adk_agents::app::App;
@@ -187,6 +201,23 @@ pub enum RunnerError {
     AgentRun(String),
     #[error("Invocation ID not found: {0}")]
     InvocationNotFound(String),
+    #[error(
+        "Message cannot contain both function responses and text. Function \
+         responses resume an existing invocation while text starts a new one."
+    )]
+    MixedFunctionResponseAndText,
+    #[error(
+        "Function call not found for function response ids: {0}. Ensure each \
+         function response ID matches an existing function call in the \
+         session history."
+    )]
+    FunctionCallNotFoundForResponses(String),
+    #[error(
+        "Function responses resolve to multiple invocations: {0}. All \
+         function responses in a single message must belong to the same \
+         invocation."
+    )]
+    FunctionResponsesResolveMultipleInvocations(String),
 }
 
 /// C0911: `run_debug`'s `user_messages: str | list[str]` parameter — a
@@ -306,6 +337,210 @@ pub fn get_function_responses_from_content(content: Option<&Content>) -> Vec<Fun
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Name/result-marker constants for the `finish_task` tool, needed by
+/// [`find_active_task_scope`]'s terminal-scope detection.
+///
+/// **Disclosed duplication**: these already exist in
+/// `adk-tools::finish_task_tool`, along with an equivalent per-event
+/// predicate (`is_finish_task_terminal_fr`) — but `adk-tools` depends on
+/// `adk-runners` (for `AgentTool`'s nested `Runner`), so `adk-runners`
+/// can't depend back without a crate cycle. Duplicated locally rather
+/// than restructured across a crate boundary for one call site, the same
+/// "duplicated here since that one is a private helper" posture
+/// `adk-flows::code_execution` already established for an identical
+/// cross-crate-visibility situation.
+const FINISH_TASK_TOOL_NAME: &str = "finish_task";
+const FINISH_TASK_SUCCESS_RESULT: &str = "Task completed.";
+const FINISH_TASK_ERROR_RESULT: &str = "Task failed.";
+
+/// True iff `event` carries a `finish_task` function response whose
+/// `result` field is [`FINISH_TASK_SUCCESS_RESULT`]/
+/// [`FINISH_TASK_ERROR_RESULT`] — see [`FINISH_TASK_TOOL_NAME`]'s doc for
+/// why this duplicates `adk-tools::finish_task_tool::is_finish_task_terminal_fr`.
+fn is_finish_task_terminal_fr(event: &Event) -> bool {
+    let responses = event
+        .content
+        .as_ref()
+        .map(|content| content.get_function_responses())
+        .unwrap_or_default();
+    for fr in responses {
+        if fr.name.as_deref() == Some(FINISH_TASK_TOOL_NAME) {
+            return matches!(
+                fr.response.as_ref().and_then(|r| r.get("result")),
+                Some(Value::String(s))
+                    if s == FINISH_TASK_SUCCESS_RESULT || s == FINISH_TASK_ERROR_RESULT
+            );
+        }
+    }
+    false
+}
+
+/// C0834: `_find_active_task_scope` — walks `session.events` backward to
+/// find the still-open task-delegation scope (either FC-delegation,
+/// scoped to the delegating function-call's id, or a workflow-node
+/// task-mode agent, scoped to `<node_name>@<run_id>`). Two passes,
+/// matching the source exactly: pass 1 forward-scans every event,
+/// collecting the `isolation_scope`s closed by a terminal `finish_task`
+/// function response (see [`is_finish_task_terminal_fr`] — a
+/// validation-failure response that doesn't match either terminal
+/// result does NOT close the scope); pass 2 walks backward, returning
+/// the first non-empty scope not in that finished set (paired with its
+/// event's `invocation_id`), or `None` if every scope has finished.
+///
+/// Built ahead of its own caller (`_append_user_event`, C0862 — needs
+/// the workflow/node/task-delegation engine this port doesn't have yet),
+/// the same "widen/build once a real consumer needs it" precedent
+/// already used elsewhere in this crate (see
+/// [`get_function_responses_from_content`]'s own doc).
+pub fn find_active_task_scope(session: &Session) -> Option<(String, String)> {
+    let mut finished_scopes: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for event in &session.events {
+        let Some(scope) = event.isolation_scope.as_deref() else {
+            continue;
+        };
+        if is_finish_task_terminal_fr(event) {
+            finished_scopes.insert(scope);
+        }
+    }
+    for event in session.events.iter().rev() {
+        let Some(scope) = event.isolation_scope.as_deref() else {
+            continue;
+        };
+        if !finished_scopes.contains(scope) {
+            return Some((scope.to_string(), event.invocation_id.clone()));
+        }
+    }
+    None
+}
+
+/// C0856: `_extract_resume_inputs` — builds `{function_response.id:
+/// response}` from every function-response part in `message` whose id
+/// is non-empty; `None` (not an empty map) when nothing qualifies —
+/// used by the node path to detect a resume attempt. Built ahead of its
+/// own caller (the node/task-delegation path, C0860-C0861 — same
+/// blocker as [`find_active_task_scope`]).
+pub fn extract_resume_inputs(
+    message: Option<&Content>,
+) -> Option<BTreeMap<String, Option<BTreeMap<String, Value>>>> {
+    let message = message?;
+    if message.parts.is_empty() {
+        return None;
+    }
+    let mut inputs = BTreeMap::new();
+    for part in &message.parts {
+        let Some(fr) = &part.function_response else {
+            continue;
+        };
+        let Some(id) = fr.id.as_deref() else {
+            continue;
+        };
+        if id.is_empty() {
+            continue;
+        }
+        inputs.insert(id.to_string(), fr.response.clone());
+    }
+    if inputs.is_empty() {
+        None
+    } else {
+        Some(inputs)
+    }
+}
+
+/// C0857: `_validate_new_message` — rejects a message that mixes
+/// function-response parts with any text part, since function responses
+/// resume an existing invocation while text starts a new one. A no-op
+/// when there are no `resume_inputs` at all (i.e. `message` isn't a
+/// resume attempt to begin with). Built ahead of its own caller, same
+/// reason as [`extract_resume_inputs`].
+pub fn validate_new_message(
+    message: Option<&Content>,
+    resume_inputs: Option<&BTreeMap<String, Option<BTreeMap<String, Value>>>>,
+) -> Result<(), RunnerError> {
+    let Some(resume_inputs) = resume_inputs else {
+        return Ok(());
+    };
+    if resume_inputs.is_empty() {
+        return Ok(());
+    }
+    let Some(message) = message else {
+        return Ok(());
+    };
+    if message.parts.is_empty() {
+        return Ok(());
+    }
+    let has_text = message
+        .parts
+        .iter()
+        .any(|part| part.text.as_deref().is_some_and(|text| !text.is_empty()));
+    if has_text {
+        return Err(RunnerError::MixedFunctionResponseAndText);
+    }
+    Ok(())
+}
+
+/// C0858: `_resolve_invocation_id_from_fr` — the node-path counterpart
+/// to `_resolve_invocation_id` (C0855): collects every function-response
+/// id in `new_message`, backward-scans `session.events` matching each
+/// against a function-call id, and resolves the single invocation id
+/// they all share. Errors if any function-response id has no matching
+/// function call in the session, or if the matched function calls span
+/// more than one invocation. Returns `None` (not an error) when
+/// `new_message` carries no function responses at all. Built ahead of
+/// its own caller, same reason as [`extract_resume_inputs`].
+///
+/// **Disclosed narrowing**: the source's error messages interpolate a
+/// Python `set`, whose iteration/repr order is hash-dependent (not
+/// sorted). This port sorts the offending ids before joining them into
+/// the error message — a cosmetic, deterministic-output improvement
+/// over the source's arbitrary order, not a behavioral divergence in
+/// when the error fires.
+pub fn resolve_invocation_id_from_fr(
+    session: &Session,
+    new_message: &Content,
+) -> Result<Option<String>, RunnerError> {
+    let mut fr_ids: std::collections::HashSet<String> = new_message
+        .parts
+        .iter()
+        .filter_map(|part| part.function_response.as_ref())
+        .filter_map(|fr| fr.id.as_deref())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect();
+    if fr_ids.is_empty() {
+        return Ok(None);
+    }
+
+    let mut invocation_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for event in session.events.iter().rev() {
+        for fc in event.get_function_calls() {
+            if let Some(id) = fc.id.as_deref() {
+                if fr_ids.remove(id) {
+                    invocation_ids.insert(event.invocation_id.clone());
+                }
+            }
+        }
+        if fr_ids.is_empty() {
+            break;
+        }
+    }
+
+    if !fr_ids.is_empty() {
+        let mut unmatched: Vec<String> = fr_ids.into_iter().collect();
+        unmatched.sort();
+        return Err(RunnerError::FunctionCallNotFoundForResponses(
+            unmatched.join(", "),
+        ));
+    }
+    if invocation_ids.len() > 1 {
+        let mut resolved: Vec<String> = invocation_ids.into_iter().collect();
+        resolved.sort();
+        return Err(RunnerError::FunctionResponsesResolveMultipleInvocations(
+            resolved.join(", "),
+        ));
+    }
+    Ok(invocation_ids.into_iter().next())
 }
 
 /// Mirrors `_apply_run_config_custom_metadata`: merges
@@ -2186,6 +2421,267 @@ mod tests {
         assert_eq!(responses.len(), 2);
         assert_eq!(responses[0].id.as_deref(), Some("fc-1"));
         assert_eq!(responses[1].id.as_deref(), Some("fc-2"));
+    }
+
+    // C0834: `find_active_task_scope`.
+
+    fn scoped_event(invocation_id: &str, scope: &str) -> Event {
+        let mut event = Event::new(invocation_id, "task_agent", NodeInfo::new("root"));
+        event.isolation_scope = Some(scope.to_string());
+        event
+    }
+
+    fn finish_task_event(invocation_id: &str, scope: &str, result: &str) -> Event {
+        let mut event = scoped_event(invocation_id, scope);
+        event.content = Some(Content::new(
+            "user",
+            vec![Part::function_response(FunctionResponse {
+                name: Some("finish_task".to_string()),
+                response: Some(BTreeMap::from([(
+                    "result".to_string(),
+                    Value::String(result.to_string()),
+                )])),
+                ..Default::default()
+            })],
+        ));
+        event
+    }
+
+    #[test]
+    fn find_active_task_scope_returns_none_for_no_scoped_events() {
+        let mut session = Session::new("app", "user", "s1");
+        session
+            .events
+            .push(Event::new("inv-1", "agent", NodeInfo::new("root")));
+        assert!(find_active_task_scope(&session).is_none());
+    }
+
+    #[test]
+    fn find_active_task_scope_finds_the_open_scope() {
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(scoped_event("inv-1", "fc-1"));
+        let (scope, invocation_id) = find_active_task_scope(&session).unwrap();
+        assert_eq!(scope, "fc-1");
+        assert_eq!(invocation_id, "inv-1");
+    }
+
+    #[test]
+    fn find_active_task_scope_treats_a_successful_finish_task_as_closing_the_scope() {
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(scoped_event("inv-1", "fc-1"));
+        session
+            .events
+            .push(finish_task_event("inv-1", "fc-1", "Task completed."));
+        assert!(find_active_task_scope(&session).is_none());
+    }
+
+    #[test]
+    fn find_active_task_scope_treats_a_failed_finish_task_as_closing_the_scope_too() {
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(scoped_event("inv-1", "fc-1"));
+        session
+            .events
+            .push(finish_task_event("inv-1", "fc-1", "Task failed."));
+        assert!(find_active_task_scope(&session).is_none());
+    }
+
+    #[test]
+    fn find_active_task_scope_a_validation_error_response_does_not_close_the_scope() {
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(scoped_event("inv-1", "fc-1"));
+        let mut error_event = scoped_event("inv-1", "fc-1");
+        error_event.content = Some(Content::new(
+            "user",
+            vec![Part::function_response(FunctionResponse {
+                name: Some("finish_task".to_string()),
+                response: Some(BTreeMap::from([(
+                    "error".to_string(),
+                    Value::String("bad output".to_string()),
+                )])),
+                ..Default::default()
+            })],
+        ));
+        session.events.push(error_event);
+        let (scope, _) = find_active_task_scope(&session).unwrap();
+        assert_eq!(scope, "fc-1");
+    }
+
+    #[test]
+    fn find_active_task_scope_returns_the_latest_open_scope_when_an_earlier_one_finished() {
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(scoped_event("inv-1", "fc-1"));
+        session
+            .events
+            .push(finish_task_event("inv-1", "fc-1", "Task completed."));
+        session.events.push(scoped_event("inv-2", "fc-2"));
+        let (scope, invocation_id) = find_active_task_scope(&session).unwrap();
+        assert_eq!(scope, "fc-2");
+        assert_eq!(invocation_id, "inv-2");
+    }
+
+    // C0856: `extract_resume_inputs`.
+
+    #[test]
+    fn extract_resume_inputs_returns_none_for_no_message() {
+        assert!(extract_resume_inputs(None).is_none());
+    }
+
+    #[test]
+    fn extract_resume_inputs_returns_none_for_no_parts() {
+        let content = Content::new("user", vec![]);
+        assert!(extract_resume_inputs(Some(&content)).is_none());
+    }
+
+    #[test]
+    fn extract_resume_inputs_returns_none_when_no_part_has_a_function_response_id() {
+        let content = Content::new(
+            "user",
+            vec![
+                Part::text("hi"),
+                Part::function_response(FunctionResponse {
+                    id: Some(String::new()),
+                    ..Default::default()
+                }),
+            ],
+        );
+        assert!(extract_resume_inputs(Some(&content)).is_none());
+    }
+
+    #[test]
+    fn extract_resume_inputs_collects_responses_keyed_by_id() {
+        let content = Content::new(
+            "user",
+            vec![Part::function_response(FunctionResponse {
+                id: Some("fc-1".to_string()),
+                response: Some(BTreeMap::from([("value".to_string(), Value::Int(1))])),
+                ..Default::default()
+            })],
+        );
+        let inputs = extract_resume_inputs(Some(&content)).unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(
+            inputs.get("fc-1").unwrap().as_ref().unwrap().get("value"),
+            Some(&Value::Int(1))
+        );
+    }
+
+    // C0857: `validate_new_message`.
+
+    #[test]
+    fn validate_new_message_is_a_noop_without_resume_inputs() {
+        let content = Content::new("user", vec![Part::text("hello")]);
+        assert!(validate_new_message(Some(&content), None).is_ok());
+    }
+
+    #[test]
+    fn validate_new_message_rejects_a_message_mixing_function_responses_and_text() {
+        let resume_inputs = BTreeMap::from([("fc-1".to_string(), None)]);
+        let content = Content::new(
+            "user",
+            vec![
+                Part::function_response(FunctionResponse {
+                    id: Some("fc-1".to_string()),
+                    ..Default::default()
+                }),
+                Part::text("also some text"),
+            ],
+        );
+        let err = validate_new_message(Some(&content), Some(&resume_inputs)).unwrap_err();
+        assert!(matches!(err, RunnerError::MixedFunctionResponseAndText));
+    }
+
+    #[test]
+    fn validate_new_message_allows_a_pure_function_response_message() {
+        let resume_inputs = BTreeMap::from([("fc-1".to_string(), None)]);
+        let content = Content::new(
+            "user",
+            vec![Part::function_response(FunctionResponse {
+                id: Some("fc-1".to_string()),
+                ..Default::default()
+            })],
+        );
+        assert!(validate_new_message(Some(&content), Some(&resume_inputs)).is_ok());
+    }
+
+    // C0858: `resolve_invocation_id_from_fr`.
+
+    fn fc_event(invocation_id: &str, fc_id: &str) -> Event {
+        let mut event = Event::new(invocation_id, "agent", NodeInfo::new("root"));
+        event.content = Some(Content::new(
+            "model",
+            vec![Part::function_call(adk_genai::content::FunctionCall {
+                id: Some(fc_id.to_string()),
+                name: Some("some_tool".to_string()),
+                ..Default::default()
+            })],
+        ));
+        event
+    }
+
+    fn fr_message(fc_id: &str) -> Content {
+        Content::new(
+            "user",
+            vec![Part::function_response(FunctionResponse {
+                id: Some(fc_id.to_string()),
+                ..Default::default()
+            })],
+        )
+    }
+
+    #[test]
+    fn resolve_invocation_id_from_fr_returns_none_without_any_function_response() {
+        let session = Session::new("app", "user", "s1");
+        let message = Content::new("user", vec![Part::text("hi")]);
+        assert_eq!(
+            resolve_invocation_id_from_fr(&session, &message).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_invocation_id_from_fr_resolves_the_matching_invocation() {
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(fc_event("inv-1", "fc-1"));
+        let message = fr_message("fc-1");
+        assert_eq!(
+            resolve_invocation_id_from_fr(&session, &message).unwrap(),
+            Some("inv-1".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_invocation_id_from_fr_errors_on_an_unmatched_function_response_id() {
+        let session = Session::new("app", "user", "s1");
+        let message = fr_message("missing-fc");
+        let err = resolve_invocation_id_from_fr(&session, &message).unwrap_err();
+        assert!(
+            matches!(err, RunnerError::FunctionCallNotFoundForResponses(ref ids) if ids.contains("missing-fc"))
+        );
+    }
+
+    #[test]
+    fn resolve_invocation_id_from_fr_errors_when_responses_span_multiple_invocations() {
+        let mut session = Session::new("app", "user", "s1");
+        session.events.push(fc_event("inv-1", "fc-1"));
+        session.events.push(fc_event("inv-2", "fc-2"));
+        let message = Content::new(
+            "user",
+            vec![
+                Part::function_response(FunctionResponse {
+                    id: Some("fc-1".to_string()),
+                    ..Default::default()
+                }),
+                Part::function_response(FunctionResponse {
+                    id: Some("fc-2".to_string()),
+                    ..Default::default()
+                }),
+            ],
+        );
+        let err = resolve_invocation_id_from_fr(&session, &message).unwrap_err();
+        assert!(matches!(
+            err,
+            RunnerError::FunctionResponsesResolveMultipleInvocations(_)
+        ));
     }
 
     // C0836: `apply_run_config_custom_metadata` — exercised indirectly by

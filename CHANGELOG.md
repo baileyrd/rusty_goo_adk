@@ -5,6 +5,26 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-runners/src/runner.rs`: four node-path resolution helpers
+  from `runners.py` (C0834/C0856/C0857/C0858), all built ahead of their
+  own caller (`_run_node_async`, the workflow/node/task-delegation turn
+  loop — still out of scope pending that engine's own wiring into
+  `Runner`). `find_active_task_scope` (`_find_active_task_scope`) is a
+  two-pass backward scan over session events locating a still-open task
+  delegation's scope, closed only by a terminal `finish_task` function
+  response (a validation-error response leaves it open) — its
+  `FINISH_TASK_TOOL_NAME`/`FINISH_TASK_SUCCESS_RESULT`/
+  `FINISH_TASK_ERROR_RESULT` constants and per-event predicate are
+  duplicated locally from `adk-tools::finish_task_tool`, since
+  `adk-tools` depends on `adk-runners` and a reverse dependency would be
+  a crate cycle. `extract_resume_inputs`/`validate_new_message`/
+  `resolve_invocation_id_from_fr` round out the resume-detection/
+  invocation-id-resolution trio, ported exactly including the source's
+  truthy-id filtering and dual error conditions (unmatched function
+  response ids, function responses spanning multiple invocations) — the
+  latter's error message sorts its offending ids for deterministic
+  output, a disclosed cosmetic divergence from the source's
+  hash-order-dependent Python `set` interpolation. 20 new tests.
 - `crates/adk-agents/src/services.rs`/`session.rs`: completed the
   in-memory session-service's state-scoping architecture (C0208/C0212/
   C0214, C0204 partial), ported from `sessions/in_memory_session_service.py`
