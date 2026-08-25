@@ -22,6 +22,23 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/`: general code-executor response path (C0180, DONE)
+**2026-08-25**
+
+- **Added:** `apply_code_execution_response` now handles a general
+  (non-built-in) `BaseCodeExecutor`, not just `BuiltInCodeExecutor`:
+  extracts the first fenced code block from the model's response,
+  executes it, tracks a per-invocation error-retry count, saves any
+  output files as artifacts, and clears the original response so the
+  agent loops for another turn — matching the source's
+  `_code_execution.py` general-executor branch.
+- **Known limitation, disclosed:** still not wired into
+  `LlmFlow::postprocess` — same standing blocker as every sibling
+  request/response processor in this file (needs a way to resolve a
+  concrete `LlmAgent`/its tools from `InvocationContext`).
+
+---
+
 ## PR #TBD — `flows/`: model callback dispatch (C0153/C0154/C0155, all DONE)
 **2026-08-25**
 
