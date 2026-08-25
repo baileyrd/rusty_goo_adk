@@ -253,7 +253,10 @@ pub fn is_valid_user_simulator_template(template_str: &str, required_params: &[&
     })
 }
 
-fn substitute_placeholders(template: &str, values: &[(&str, &str)]) -> String {
+/// `pub(crate)`: reused by `per_turn_user_simulator_quality_prompts.rs`
+/// (C0633) for the same flat `{{ var }}` substitution over its own
+/// no-persona template.
+pub(crate) fn substitute_placeholders(template: &str, values: &[(&str, &str)]) -> String {
     let mut rendered = template.to_string();
     for (name, value) in values {
         let pattern = format!(r"\{{\{{\s*{name}\s*\}}\}}");

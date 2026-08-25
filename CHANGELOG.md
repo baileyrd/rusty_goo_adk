@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- P11 eval/optimization batch (C0633, C0642, both DONE):
+  - `crates/adk-eval/src/per_turn_user_simulator_quality_prompts.rs`
+    (new): the per-turn user-simulator-quality evaluator's flat,
+    no-persona prompt template, transcribed byte-for-byte, plus
+    `get_per_turn_user_simulator_quality_prompt`. The persona-decorated
+    variant needs real Jinja2 (loops/filters) this port doesn't have, so
+    it returns an error rather than mis-rendering — same shape as the
+    sibling `llm_backed_user_simulator_prompts` template. Found in the
+    process: C0633's `llm_backed_user_simulator_prompts` half was
+    already shipped under C0628, but this row's own manifest evidence
+    had never been filled in — corrected.
+  - `crates/adk-eval/src/gepa_utils.rs` (new):
+    `require_static_instruction`/`generate_reflection_response`, the
+    shared preconditions and reflection-model call helper both GEPA
+    optimizers need. The optimizers themselves (C0640/C0641) stay
+    deferred — they need the optional third-party `gepa` package, a
+    new-dependency stop-and-ask trigger this dependency-free helper
+    pair doesn't hit.
+  - `substitute_placeholders` in `llm_backed_user_simulator.rs` widened
+    from private to `pub(crate)` so the new prompt module can reuse it.
+  - 6 new unit tests total.
 - P10 Apigee backend, first slice (C0549/C0550/C0551, all DONE): new
   `crates/adk-models/src/apigee_llm.rs` — `ApiType`/`validate_model_string`
   (the `apigee/[provider/][version/]model_id` DSL), `ApigeeLlm::new`'s
