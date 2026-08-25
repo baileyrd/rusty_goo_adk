@@ -116,6 +116,39 @@ pub fn append_built_in_tool_marker(llm_request: &mut LlmRequest, key: &str) {
     entries.push(Value::Map(vec![(key.to_string(), Value::Map(Vec::new()))]));
 }
 
+/// `true` if `llm_request.config.tools` already carries an entry with
+/// `key` present — matches the source's `isinstance(tool, types.Tool)
+/// and tool.computer_use` truthy check regardless of that entry's own
+/// field values, used by `computer_use_toolset.rs` to avoid double-adding
+/// its own marker.
+pub fn has_built_in_tool_marker(llm_request: &LlmRequest, key: &str) -> bool {
+    let Some(Value::Seq(entries)) = &llm_request.config.tools else {
+        return false;
+    };
+    entries.iter().any(|entry| match entry {
+        Value::Map(fields) => fields.iter().any(|(k, _)| k == key),
+        _ => false,
+    })
+}
+
+/// Like [`append_built_in_tool_marker`], but with a fields payload
+/// instead of an empty object — e.g. `{"computerUse": {"environment":
+/// ..., "excludedPredefinedFunctions": [...]}}` (`ComputerUseToolset`,
+/// C0446).
+pub fn append_built_in_tool_marker_with_fields(
+    llm_request: &mut LlmRequest,
+    key: &str,
+    fields: Value,
+) {
+    if !matches!(llm_request.config.tools, Some(Value::Seq(_))) {
+        llm_request.config.tools = Some(Value::Seq(Vec::new()));
+    }
+    let Some(Value::Seq(entries)) = &mut llm_request.config.tools else {
+        unreachable!("just ensured config.tools is Some(Value::Seq(_))");
+    };
+    entries.push(Value::Map(vec![(key.to_string(), fields)]));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

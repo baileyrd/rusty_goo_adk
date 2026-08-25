@@ -22,6 +22,36 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `tools/computer_use/`: computer-use tool trio (C0445/C0447 DONE, C0446 partial)
+**2026-08-25**
+
+- **Added:** `BaseComputer` — the full browser-automation trait
+  contract a concrete computer implementation (e.g. a sandboxed
+  browser) implements: click/hover/type/scroll/wait/navigate/search/
+  key-combination/drag-and-drop/screenshot/state, all in absolute,
+  screen-scaled coordinates.
+- **Added:** `ComputerUseTool` — normalizes model-supplied
+  virtual-coordinate-space input (1000x1000 by default) to the real
+  screen size, and gates execution behind the model's own
+  safety-confirmation protocol before ever calling the underlying
+  action.
+- **Added:** `ComputerUseToolset` — auto-generates one tool per
+  `BaseComputer` action, hardens `navigate` against SSRF by reusing the
+  existing `load_web_page` URL/host validation, and wires the computer
+  tools plus a `computerUse` marker into the outgoing LLM request.
+- **Known limitation, disclosed:** one function
+  (`adapt_computer_use_tool`, which lets a caller swap in a modified
+  version of a single computer-use tool) isn't ported — it needs a
+  `name -> tool` registry on the outgoing request that this port's
+  request type structurally can't hold without a larger refactor.
+  Verified, not assumed: a URL-parsing edge case the source specially
+  guards against (a backslash character confusing two different URL
+  parsers about which host a link actually points to) doesn't need a
+  separate guard here, because this port's URL parser already agrees
+  with what a real browser would do for that exact input.
+
+---
+
 ## PR #TBD — `models/`: Gemini Live WebSocket handshake + request preprocessing (C0131 DONE, C0132 partial)
 **2026-08-25**
 

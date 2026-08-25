@@ -60,7 +60,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 /// reference the source's own `is_global` calls resolve to, so matching
 /// it here is matching the source's actual behavior, not an
 /// approximation of it.
-mod ip_classification {
+pub(crate) mod ip_classification {
     use super::*;
 
     const fn v4(a: u8, b: u8, c: u8, d: u8) -> Ipv4Addr {
@@ -245,7 +245,7 @@ mod ip_classification {
     }
 }
 
-fn is_blocked_hostname(hostname: &str) -> bool {
+pub(crate) fn is_blocked_hostname(hostname: &str) -> bool {
     let normalized = hostname.trim_end_matches('.').to_lowercase();
     normalized == "localhost" || normalized.ends_with(".localhost")
 }
@@ -254,9 +254,24 @@ fn failed_to_fetch_message(url: &str) -> String {
     format!("Failed to fetch url: {url}")
 }
 
-struct RequestTarget {
-    url: reqwest::Url,
-    host: url::Host,
+pub(crate) struct RequestTarget {
+    pub(crate) url: reqwest::Url,
+    pub(crate) host: url::Host,
+}
+
+impl RequestTarget {
+    /// The hostname as a plain string, suitable for
+    /// [`is_blocked_hostname`]/[`resolve_direct_addresses`] — an IP
+    /// literal renders as its own string form (`to_socket_addrs`, and
+    /// thus [`resolve_addresses`], accepts an IP-literal string directly,
+    /// no separate short-circuit needed on this port's side).
+    pub(crate) fn hostname(&self) -> String {
+        match &self.host {
+            url::Host::Domain(domain) => domain.clone(),
+            url::Host::Ipv4(addr) => addr.to_string(),
+            url::Host::Ipv6(addr) => addr.to_string(),
+        }
+    }
 }
 
 /// Formats what the Host header would read for `url` — used only by
@@ -275,7 +290,7 @@ fn host_header_for_test(url_str: &str) -> String {
     }
 }
 
-fn parse_request_target(url_str: &str) -> Result<RequestTarget, String> {
+pub(crate) fn parse_request_target(url_str: &str) -> Result<RequestTarget, String> {
     let parsed =
         reqwest::Url::parse(url_str).map_err(|_| format!("Unsupported url scheme: {url_str}"))?;
     let scheme = parsed.scheme().to_lowercase();
@@ -289,7 +304,7 @@ fn parse_request_target(url_str: &str) -> Result<RequestTarget, String> {
     Ok(RequestTarget { url: parsed, host })
 }
 
-fn resolve_addresses(hostname: &str) -> Result<Vec<IpAddr>, String> {
+pub(crate) fn resolve_addresses(hostname: &str) -> Result<Vec<IpAddr>, String> {
     use std::net::ToSocketAddrs;
     let addrs = (hostname, 0u16)
         .to_socket_addrs()
@@ -305,6 +320,26 @@ fn resolve_addresses(hostname: &str) -> Result<Vec<IpAddr>, String> {
         return Err(format!("Unable to resolve host: {hostname}"));
     }
     Ok(resolved)
+}
+
+/// `load_web_page._resolve_direct_addresses` — resolves `hostname` (an
+/// IP literal short-circuits inside [`resolve_addresses`]'s own
+/// `to_socket_addrs` call, the same way the source's
+/// `_resolve_host_addresses` special-cases `_parse_ip_literal` first)
+/// and rejects if any resolved address isn't globally reachable.
+/// Reused by `computer_use_toolset.rs`'s `navigate` SSRF validator — see
+/// that module's doc for why the source's separate raw-backslash-netloc
+/// check isn't ported (verified structurally unreachable under this
+/// port's WHATWG-spec-compliant URL parser).
+pub(crate) fn resolve_direct_addresses(hostname: &str) -> Result<Vec<IpAddr>, String> {
+    let addresses = resolve_addresses(hostname)?;
+    if addresses
+        .iter()
+        .any(|addr| ip_classification::is_blocked_address(*addr))
+    {
+        return Err(format!("Blocked host: {hostname}"));
+    }
+    Ok(addresses)
 }
 
 fn fetch_response(url_str: &str) -> Result<(u16, Vec<u8>), String> {
