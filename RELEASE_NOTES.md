@@ -22,6 +22,48 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `auth/`: `CredentialManager`, the credential-resolution orchestrator (C0517/C0519/C0520/C0521, DONE — C0518 partial)
+**2026-08-25**
+
+- **Added:** `CredentialManager` (`credential_manager.rs`) — the master
+  orchestrator for authentication-credential lifecycle: loading,
+  exchanging, refreshing, and caching. `get_auth_credential`'s full
+  9-step state machine ports in full: custom-scheme dispatch, config
+  validation, a fast path for already-usable API-key/HTTP credentials,
+  loading an existing credential from the credential service, falling
+  back to a stored auth response, a client-credentials-flow shortcut
+  (or signaling that user authorization is needed), exchange, refresh,
+  and conditional persistence. A source quirk is preserved faithfully
+  rather than "fixed": step 4 unconditionally marks the credential as
+  having come from an auth response on entering that branch, even when
+  the lookup itself also finds nothing.
+- **Added:** `register_auth_provider`/`default_auth_provider_registry`
+  (C0517) — a process-wide registry using this crate's own established
+  `OnceLock<Mutex<_>>`-inside-an-accessor-fn singleton pattern (matching
+  `adk-eval::metric_evaluator_registry`/`adk-features::feature_registry`).
+- **Narrowed, disclosed at length in the module doc:**
+  - `CredentialManager::new` (C0518) registers no default exchangers or
+    refreshers — none of `OAuth2CredentialExchanger`/
+    `ServiceAccountCredentialExchanger`/`OAuth2CredentialRefresher`
+    exist in this port yet (still blocked on an authlib-equivalent HTTP
+    credential exchange, C0524/C0526). `register_credential_exchanger`
+    stays the only way in until those land.
+  - `_populate_auth_scheme` (OAuth2 auto-discovery, C0520) is kept as a
+    real, called step but always returns `false`: this port's
+    `ExtendedOAuth2` is a flattened struct outside the `AuthScheme`
+    enum entirely (a pre-existing tree-fusion gap from an earlier
+    batch), so no `AuthScheme` value can ever be the `ExtendedOAuth2`
+    the source's discovery check requires to trigger.
+  - `_rehydrate_custom_scheme`'s `__subclasses__()` runtime reflection
+    has no port — this port's `AuthScheme::Custom` only ever holds a
+    plain `CustomAuthScheme`, with no subclass hierarchy to rehydrate
+    into.
+  - `request_credential`'s `hasattr(context, "request_credential")`
+    guard is moot and dropped: `CallbackContext` is already a unified
+    alias for `Context` (C0048), so every `Context` value already has
+    the method.
+- 7 new tests (`cargo test -p adk-agents credential_manager`).
+
 ## PR #TBD — `workflow/`: `parse_edge_items`/`Graph::from_edge_items`, P7 Chunk 6 (C0327, DONE — narrowed)
 **2026-08-25**
 

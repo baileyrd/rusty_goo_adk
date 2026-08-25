@@ -155,6 +155,7 @@ pub mod base_credential_refresher;
 pub mod context;
 pub mod context_cache_config;
 pub mod credential_exchanger_registry;
+pub mod credential_manager;
 pub mod credential_refresher_registry;
 pub mod file_artifact_service;
 pub mod in_memory_artifact_service;
