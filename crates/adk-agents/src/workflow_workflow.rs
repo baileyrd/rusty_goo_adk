@@ -1,23 +1,61 @@
-//! Capabilities C0298-C0300, C0302, C0303: `Workflow`'s struct skeleton,
-//! SETUP phase, and node-scheduling primitives, ported from
-//! `google.adk.workflow._workflow`. Part of the P7 workflow/graph engine
-//! — see `workflow_node_state.rs`'s module doc for the standing
-//! crate-placement decision.
+//! Capabilities C0298-C0306: `Workflow`'s struct skeleton, SETUP phase,
+//! node-scheduling primitives, LOOP driver, completion handling, and
+//! FINALIZE, ported from `google.adk.workflow._workflow`. Part of the
+//! P7 workflow/graph engine — see `workflow_node_state.rs`'s module doc
+//! for the standing crate-placement decision.
 //!
-//! **Scope, this batch (C0302/C0303 added to the earlier C0298-C0300)**:
-//! [`Workflow::schedule_ready_nodes`]/[`Workflow::start_node_task`] and
-//! their helpers, plus the resumability-checkpoint builders
-//! ([`Workflow::node_checkpoint_event`]/[`Workflow::
-//! maybe_reemit_replayed_output_event`]/[`Workflow::end_of_agent_event`]).
-//! The LOOP driver itself (`_run_loop`, C0301), completion handling
-//! (C0304), downstream-trigger buffering (C0305), and FINALIZE (C0306)
-//! are **not** ported here — nothing yet *drives* [`WorkflowLoopState::
-//! pending_tasks`] to completion, so `Workflow` still isn't wired into a
-//! [`crate::workflow_base_node::BaseNode`]/`NodeBehavior` (the same
-//! "build the layer, defer the caller" shape already used for
-//! `NodeRunner`/`ReplayManager`/`check_interception`, each shipped and
+//! **Scope, this batch (C0306 added to the earlier C0298-C0305)**:
+//! [`Workflow::finalize`]/[`Workflow::cleanup_all_tasks`] and their
+//! small helpers ([`Workflow::collect_remaining_interrupts`]/
+//! [`Workflow::has_terminal_output`]/[`Workflow::validate_output_data`]).
+//! `Workflow` still isn't wired into a [`crate::workflow_base_node::
+//! BaseNode`]/`NodeBehavior` — that glue (`setup` → `run_loop` →
+//! `cleanup_all_tasks` → `finalize`, matching `_run_impl`'s own
+//! SETUP/LOOP/FINALIZE sequencing) is deliberately a separate follow-up,
+//! the same "build the layer, defer the caller" shape already used for
+//! `NodeRunner`/`ReplayManager`/`check_interception` (each shipped and
 //! unit-tested standalone before something called them — see those
-//! modules' own docs). Revisit once the LOOP-phase batch lands.
+//! modules' own docs), kept separate here specifically because it also
+//! needs to settle how `Workflow`'s own `max_concurrency`/
+//! `rerun_on_resume` fields map onto `BaseNode::build`'s constructor
+//! parameters — a real scope-defining question this batch doesn't need
+//! to answer to land `finalize`/`cleanup_all_tasks` on their own.
+//!
+//! **`finalize` is `async fn`, unlike the source's sync `_finalize`**:
+//! propagating interrupt ids onto `ctx` needs the union of two separate
+//! accumulators — [`WorkflowLoopState::interrupt_ids`] (populated by
+//! [`Workflow::handle_completion`] for *static* graph nodes that went
+//! WAITING) and [`crate::workflow_dynamic_node_scheduler::
+//! DynamicNodeScheduler::interrupt_ids`] (populated for *dynamic*
+//! `ctx.run_node()` nodes). The source's single `_LoopState
+//! (DynamicNodeState)` inheritance means both are literally the same
+//! Python attribute, so `_finalize`'s own `loop_state.interrupt_ids`
+//! check already covers both; this port's two unrelated structs keep
+//! them as genuinely separate `HashSet<String>`s, so `finalize` unions
+//! them explicitly — and reading the scheduler's side needs its async
+//! `Mutex` guard. Skipping this union would silently drop an interrupt
+//! raised by a dynamic node nested inside a running static node.
+//!
+//! **`cleanup_all_tasks` needs no `async`/explicit cancellation, unlike
+//! the source's `task.cancel()` + `asyncio.gather(..., return_exceptions
+//! =True)`**: [`PendingNodeFuture`] is a boxed future this port only
+//! ever polls from within [`Workflow::run_loop`]'s own combinator, never
+//! spawned onto the runtime as a real OS-schedulable task — dropping an
+//! unfinished one without polling it to completion already **is**
+//! cancellation (Rust's standard async-cancellation-by-drop model), so
+//! this method is a plain, synchronous drain. The source's dynamic-task
+//! half (`loop_state.get_dynamic_tasks()`/`loop_state.runs`) has no
+//! equivalent here either, for the same reason `run_loop`'s own doc
+//! already discloses: this port's dynamic dispatch always executes
+//! inline via `DynamicNodeScheduler::call`, never as a separately
+//! scheduled task, so there is nothing dynamic left to cancel.
+//!
+//! **`validate_output_data`, narrowed to a no-op**: matches
+//! [`Workflow::validate_state_schema`]'s already-established shape —
+//! `output_schema` is an opaque `Value` placeholder crate-wide (the same
+//! reason [`crate::workflow_base_node::BaseNode`]'s own
+//! `validate_output_data` is already a disclosed no-op), so there's
+//! nothing yet to validate against.
 //!
 //! **`_start_node_task` dispatches via `NodeRunner` directly, not
 //! `ctx.run_node()`/`DynamicNodeScheduler` — a deliberate, disclosed
@@ -59,10 +97,10 @@
 //! requires `Future: Send + 'static`, but `NodeRunner::run` borrows
 //! `&Context` with a lifetime tied to the workflow's own `ctx` argument
 //! (not `'static`), and `Context` has no `Clone`/`Arc` wrapping to make
-//! it so without a breaking rework of already-shipped, tested code. The
-//! LOOP phase (C0301, not built yet) will need a small local combinator
-//! to poll several of these concurrently and return whichever complete
-//! first — no `futures`/`indexmap` dependency needed for that either.
+//! it so without a breaking rework of already-shipped, tested code.
+//! [`Workflow::run_loop`]'s own free-fn combinator (`wait_for_completions`)
+//! polls several of these concurrently and collects whichever complete —
+//! no `futures`/`indexmap` dependency needed for that either.
 //!
 //! **`edges`, not kept as a field**: the source keeps `self.edges: list
 //! [EdgeItem]` as a real (Pydantic) field, but nothing in `_workflow.py`
@@ -125,7 +163,7 @@ use adk_events::node_info::NodeInfo;
 use adk_events::{Event, EventActions};
 use rusty_serde::value::Value;
 
-use crate::context::Context;
+use crate::context::{Context, ContextError};
 use crate::workflow_base_node::{start, BaseNode};
 use crate::workflow_dynamic_node_scheduler::DynamicNodeScheduler;
 use crate::workflow_graph::Graph;
@@ -158,6 +196,15 @@ type PendingNodeFuture<'a> = Pin<Box<dyn Future<Output = (Context, Vec<Event>)> 
 pub enum WorkflowError {
     #[error("{0}")]
     Graph(String),
+    /// `_finalize`'s `raise ValueError(f"Workflow {name}: multiple
+    /// terminal nodes produced output ...")`.
+    #[error(
+        "Workflow {workflow_name}: multiple terminal nodes produced output ({count}). \
+         A workflow must have at most one terminal output."
+    )]
+    MultipleTerminalOutputs { workflow_name: String, count: usize },
+    #[error("{0}")]
+    Context(#[from] ContextError),
 }
 
 /// `workflow._workflow.Workflow`'s struct skeleton (C0298) — see this
@@ -299,19 +346,17 @@ impl<'a> WorkflowLoopState<'a> {
     }
 
     /// The number of nodes with a pending (in-flight or fast-forwarded)
-    /// execution — the LOOP phase's driver (C0301, not built yet) will
-    /// poll these to completion.
+    /// execution — [`Workflow::run_loop`] polls these to completion.
     pub fn pending_task_count(&self) -> usize {
         self.pending_tasks.len()
     }
 
     /// The scheduler this loop state installed on `ctx` — dynamic
     /// `ctx.run_node()` calls from a running node's own body resolve
-    /// through this instance (Mode 1). No reader in *this* batch's own
-    /// code (`start_node_task` deliberately bypasses it — see this
-    /// module's own doc); kept wired for the same reason
-    /// `DynamicNodeScheduler::interrupt_ids` is.
-    #[allow(dead_code)]
+    /// through this instance (Mode 1). `start_node_task`'s own dispatch
+    /// deliberately bypasses it (see this module's own doc);
+    /// [`Workflow::finalize`] is its first real reader, via
+    /// [`DynamicNodeScheduler::interrupt_ids`].
     pub(crate) fn scheduler(&self) -> &Arc<rusty_tokio::sync::Mutex<DynamicNodeScheduler>> {
         &self.scheduler
     }
@@ -1109,6 +1154,132 @@ impl Workflow {
             }
         }
     }
+
+    /// `Workflow._collect_remaining_interrupts`: gathers interrupt ids
+    /// from nodes still `WAITING` (with unresolved interrupts) after the
+    /// LOOP phase — called between LOOP and FINALIZE in `_run_impl`, on
+    /// the clean (non-`error_shut_down`) exit path only. No production
+    /// caller yet — the not-yet-built `NodeBehavior` wiring (see this
+    /// module's own doc) is what sequences this correctly against
+    /// [`Self::run_loop`]/[`Self::finalize`]; exercised directly by this
+    /// module's own tests in the meantime.
+    #[allow(dead_code)]
+    fn collect_remaining_interrupts(&self, loop_state: &mut WorkflowLoopState) {
+        let remaining: Vec<String> = loop_state
+            .nodes
+            .values()
+            .filter(|node_state| {
+                node_state.status == NodeStatus::Waiting && !node_state.interrupts.is_empty()
+            })
+            .flat_map(|node_state| node_state.interrupts.iter().cloned())
+            .collect();
+        loop_state.interrupt_ids.extend(remaining);
+    }
+
+    /// `Workflow._has_terminal_output`: whether any terminal node
+    /// produced output — `_run_impl` uses this to mark `ctx`'s output as
+    /// delegated (so the workflow's own `NodeRunner` skips creating a
+    /// duplicate output event) before calling [`Self::finalize`]. No
+    /// production caller yet — see [`Self::collect_remaining_interrupts`]'s
+    /// own doc.
+    #[allow(dead_code)]
+    fn has_terminal_output(&self, loop_state: &WorkflowLoopState) -> bool {
+        let graph = self
+            .graph
+            .as_ref()
+            .expect("has_terminal_output requires a built graph");
+        graph
+            .terminal_node_names()
+            .iter()
+            .any(|name| loop_state.node_outputs.contains_key(name))
+    }
+
+    /// C0306: narrowed to a no-op — see this module's own doc.
+    fn validate_output_data(&self, data: Value) -> Value {
+        data
+    }
+
+    /// `Workflow._finalize`: propagates interrupt ids or the terminal
+    /// node's output onto `ctx`. `async`, unlike the source's sync
+    /// `_finalize` — see this module's own doc for why (unioning
+    /// [`WorkflowLoopState::interrupt_ids`] with [`crate::
+    /// workflow_dynamic_node_scheduler::DynamicNodeScheduler::
+    /// interrupt_ids`] needs the scheduler's async lock). Errors if more
+    /// than one terminal node produced output, matching the source's own
+    /// `raise ValueError`.
+    pub async fn finalize(
+        &self,
+        loop_state: &WorkflowLoopState<'_>,
+        ctx: &mut Context,
+    ) -> Result<(), WorkflowError> {
+        let mut interrupt_ids = loop_state.interrupt_ids.clone();
+        interrupt_ids.extend(
+            loop_state
+                .scheduler()
+                .lock()
+                .await
+                .interrupt_ids()
+                .iter()
+                .cloned(),
+        );
+
+        if !interrupt_ids.is_empty() {
+            ctx.add_interrupt_ids(interrupt_ids);
+            return Ok(());
+        }
+
+        let graph = self
+            .graph
+            .as_ref()
+            .expect("finalize requires a built graph");
+        let terminal_outputs: Vec<&Value> = graph
+            .terminal_node_names()
+            .iter()
+            .filter_map(|name| loop_state.node_outputs.get(name))
+            .collect();
+
+        match terminal_outputs.len() {
+            0 => {}
+            1 => {
+                let output = self.validate_output_data(terminal_outputs[0].clone());
+                ctx.set_output(output)?;
+            }
+            count => {
+                return Err(WorkflowError::MultipleTerminalOutputs {
+                    workflow_name: self.name.clone(),
+                    count,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// `Workflow._cleanup_all_tasks`: drops any still-pending node
+    /// futures and marks their nodes `CANCELLED`. Not `async`, and drops
+    /// rather than explicitly cancelling — see this module's own doc for
+    /// why. Called unconditionally after [`Self::run_loop`] returns,
+    /// whether it stopped cleanly or on an error. No production caller
+    /// yet — see [`Self::collect_remaining_interrupts`]'s own doc.
+    #[allow(dead_code)]
+    fn cleanup_all_tasks(&self, loop_state: &mut WorkflowLoopState) {
+        let leftover: Vec<String> = loop_state
+            .pending_tasks
+            .drain(..)
+            .map(|(name, _)| name)
+            .collect();
+        if !leftover.is_empty() {
+            eprintln!(
+                "Workflow {}: cancelling {} leftover tasks.",
+                self.name,
+                leftover.len()
+            );
+        }
+        for name in leftover {
+            if let Some(node_state) = loop_state.nodes.get_mut(&name) {
+                node_state.status = NodeStatus::Cancelled;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1697,5 +1868,135 @@ mod tests {
         assert_eq!(outputs.len(), 2);
         assert!(outputs.contains(&("a".to_string(), Value::String("out-a".to_string()))));
         assert!(outputs.contains(&("c".to_string(), Value::String("out-c".to_string()))));
+    }
+
+    #[rusty_tokio::test]
+    async fn collect_remaining_interrupts_gathers_from_waiting_nodes_only() {
+        let workflow = Workflow::new("wf", linear_edges(node("a"), node("b")), None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+
+        loop_state.nodes.insert(
+            "a".to_string(),
+            NodeState {
+                status: NodeStatus::Waiting,
+                interrupts: vec!["i1".to_string()],
+                ..Default::default()
+            },
+        );
+        loop_state.nodes.insert(
+            "b".to_string(),
+            NodeState {
+                status: NodeStatus::Completed,
+                interrupts: vec!["ignored".to_string()],
+                ..Default::default()
+            },
+        );
+
+        workflow.collect_remaining_interrupts(&mut loop_state);
+
+        assert_eq!(loop_state.interrupt_ids, HashSet::from(["i1".to_string()]));
+    }
+
+    #[rusty_tokio::test]
+    async fn has_terminal_output_checks_only_terminal_node_outputs() {
+        let workflow = Workflow::new("wf", linear_edges(node("a"), node("b")), None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+
+        assert!(!workflow.has_terminal_output(&loop_state));
+
+        loop_state
+            .node_outputs
+            .insert("a".to_string(), Value::String("not terminal".to_string()));
+        assert!(!workflow.has_terminal_output(&loop_state));
+
+        loop_state
+            .node_outputs
+            .insert("b".to_string(), Value::String("terminal".to_string()));
+        assert!(workflow.has_terminal_output(&loop_state));
+    }
+
+    #[rusty_tokio::test]
+    async fn finalize_propagates_interrupt_ids_and_skips_terminal_output() {
+        let workflow = Workflow::new("wf", linear_edges(node("a"), node("b")), None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+        loop_state.interrupt_ids.insert("i1".to_string());
+        loop_state.node_outputs.insert(
+            "b".to_string(),
+            Value::String("should be ignored".to_string()),
+        );
+
+        workflow.finalize(&loop_state, &mut c).await.unwrap();
+
+        assert_eq!(c.interrupt_ids(), HashSet::from(["i1".to_string()]));
+        assert!(c.output().is_none());
+    }
+
+    #[rusty_tokio::test]
+    async fn finalize_sets_ctx_output_from_the_single_terminal_output() {
+        let workflow = Workflow::new("wf", linear_edges(node("a"), node("b")), None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+        loop_state
+            .node_outputs
+            .insert("b".to_string(), Value::String("final".to_string()));
+
+        workflow.finalize(&loop_state, &mut c).await.unwrap();
+
+        assert_eq!(c.output(), Some(&Value::String("final".to_string())));
+    }
+
+    #[rusty_tokio::test]
+    async fn finalize_is_a_no_op_with_no_terminal_output_and_no_interrupts() {
+        let workflow = Workflow::new("wf", linear_edges(node("a"), node("b")), None, true).unwrap();
+        let mut c = ctx();
+        let loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+
+        workflow.finalize(&loop_state, &mut c).await.unwrap();
+
+        assert!(c.output().is_none());
+        assert!(c.interrupt_ids().is_empty());
+    }
+
+    #[rusty_tokio::test]
+    async fn finalize_errors_when_more_than_one_terminal_node_has_output() {
+        let a = node("a");
+        let c_node = node("c");
+        let edges = vec![
+            EdgeItem::Edge(Edge::new(start(), a.clone(), None)),
+            EdgeItem::Edge(Edge::new(start(), c_node.clone(), None)),
+        ];
+        let workflow = Workflow::new("wf", edges, None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+        loop_state
+            .node_outputs
+            .insert("a".to_string(), Value::String("out-a".to_string()));
+        loop_state
+            .node_outputs
+            .insert("c".to_string(), Value::String("out-c".to_string()));
+
+        let err = workflow.finalize(&loop_state, &mut c).await.unwrap_err();
+
+        match err {
+            WorkflowError::MultipleTerminalOutputs { count, .. } => assert_eq!(count, 2),
+            other => panic!("expected MultipleTerminalOutputs, got {other:?}"),
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn cleanup_all_tasks_drains_pending_tasks_and_marks_nodes_cancelled() {
+        let workflow = Workflow::new("wf", linear_edges(node("a"), node("b")), None, true).unwrap();
+        let mut c = ctx();
+        let mut loop_state = workflow.setup(&mut c, Value::Null).await.unwrap();
+        workflow.schedule_ready_nodes(&mut loop_state, &c);
+        assert_eq!(loop_state.pending_task_count(), 1);
+
+        workflow.cleanup_all_tasks(&mut loop_state);
+
+        assert_eq!(loop_state.pending_task_count(), 0);
+        assert_eq!(loop_state.nodes["a"].status, NodeStatus::Cancelled);
     }
 }
