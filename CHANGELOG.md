@@ -5,6 +5,36 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-agents/src/workflow_{base_node,graph,graph_validation,
+  hitl_utils}.rs`: P7 workflow/graph engine Chunk 2 — `BaseNode`
+  (C0294/C0295), `Edge`/`Graph`/routing (C0297, narrowed), `validate_graph`
+  (C0328), and the HITL utilities `BaseNode::run` itself calls (C0329),
+  all now DONE. `NodeBehavior` (trait, override point `run_impl`) +
+  `BaseNode` (`Arc`-backed handle) mirror the `AgentBehavior`/`BaseAgent`
+  split already established, including a `NoopNodeBehavior` mirroring
+  `NoopBehavior` (used by the `START` sentinel and as a test double) and
+  reusing `base_agent::AsAny` for the downcast escape hatch. `start()`
+  caches a single `BaseNode` behind a `OnceLock` so it always returns the
+  same singleton instance — load-bearing for `Graph::new`'s identity-based
+  node dedup and `validate_graph`'s duplicate-name detection, both of
+  which compare nodes by `Arc` pointer identity. `Graph::get_next_pending_nodes`
+  ports the source's full route-matching logic (untagged edges always
+  fire, `DEFAULT_ROUTE` only as a fallback, a dead-end warning). All 9 of
+  `validate_graph`'s checks run in the source's exact order; the
+  chat-agent-wiring check is ported as a real, called step but is a
+  disclosed structural no-op — it's only reachable in the source because
+  `LlmAgent` IS a `BaseNode` there (the already-known C0092 tree-fusion
+  gap), and this port's `BaseNode`/`LlmAgent` are separate types. HITL
+  utilities (`create_request_input_event`/`create_auth_request_event`/
+  `process_auth_resume`/`has_auth_credential`) port in full, including the
+  OAuth-state CSRF-style mismatch check. Narrowed, disclosed at length in
+  `workflow_graph.rs`'s module doc: `Graph::from_edge_items`/
+  `parse_edge_items` (C0327) and `build_node`/`is_node_like` (C0326) are
+  deferred — they need `FunctionNode`/`_ToolNode`/`_ParallelWorker`
+  (C0313/C0316/C0317, not yet built) and `BaseTool`, and `adk-tools`
+  (home of `BaseTool`) already depends on `adk-agents`, so a dependency
+  back would be the same crate-cycle shape already disclosed for
+  C0355/C0356. 34 new tests across the four modules.
 - New `crates/adk-agents/src/workflow_{node_status,node_state,trigger,
   errors,retry_config,retry_utils}.rs`: the first batch of the
   previously-entirely-unbuilt P7 workflow/graph engine (C0294-C0339,
