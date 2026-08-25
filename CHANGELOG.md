@@ -5,6 +5,29 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `crates/adk-flows/src/code_execution.rs`: the general (non-built-in)
+  code-executor response path (C0180, `DONE`), ported from
+  `flows/llm_flows/_code_execution.py`'s general-executor branch.
+  `apply_code_execution_response` (now `&mut InvocationContext`) gains a
+  second branch alongside the pre-existing `BuiltInCodeExecutor` one:
+  checks the per-invocation error-retry limit via `CodeExecutorContext`,
+  extracts and truncates the first fenced code block
+  (`extract_code_and_truncate_content`), emits a code event, resolves a
+  stateful-or-per-invocation execution id (new
+  `get_or_set_execution_id`), calls `BaseCodeExecutor::execute_code`, and
+  post-processes the result (new `post_process_code_execution_result`) —
+  updating the error-retry counter, saving every output file as an
+  artifact (base64-encoded `MediaBlobStub` `Part`, the same convention
+  `file_artifact_service.rs`/`load_artifacts_tool.rs` already use), and
+  clearing the original response content so the agent loops for another
+  turn. Disclosed in the module doc: `CodeExecutorContext`'s buffered
+  nested `_code_execution_context` sub-dict isn't auto-flushed to session
+  state on drop, so each scoped instance that mutates it explicitly
+  applies `get_state_delta()` back before the borrow ends; Python's
+  `get_content_as_bytes` union-resolution helper isn't needed since this
+  port's `File.content` is already normalized to `Vec<u8>`. Still not
+  wired into `LlmFlow::postprocess` (same standing C0092 blocker every
+  sibling processor in this file discloses). 8 new tests.
 - `crates/adk-flows/src/llm_flow.rs`: before/after/on-error model
   callback dispatch (C0153/C0154/C0155, all `DONE`), ported from
   `flows/llm_flows/base_llm_flow.py`'s `_handle_before_model_callback`/

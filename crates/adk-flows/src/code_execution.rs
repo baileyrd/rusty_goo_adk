@@ -23,6 +23,52 @@
 //! `LlmFlow::preprocess`/`postprocess` this batch — left ready for a
 //! future C0092-unblocking batch, exactly like those other processors.
 //!
+//! **General (non-built-in) executor response path, now ported
+//! (C0180)**: [`apply_code_execution_response`]'s non-built-in branch —
+//! `_run_post_processor`'s general-executor half — extracts the first
+//! code block and truncates the response to it
+//! ([`extract_code_and_truncate_content`], a no-op return if there's no
+//! code to run), emits the truncated response as its own event, executes
+//! the code via [`BaseCodeExecutor::execute_code`], and emits a second
+//! event carrying the result (via [`post_process_code_execution_result`]
+//! — C0180's `_post_process_code_execution_result`/
+//! `_get_or_set_execution_id`), then clears `llm_response.content` so the
+//! turn loop keeps generating rather than treating this as the final
+//! response — matching the source exactly, including the error-retry
+//! skip (`code_executor_context.get_error_count(...) >=
+//! code_executor.error_retry_attempts`) and the stdout/stderr-driven
+//! error-count reset/increment. `apply_code_execution_response` now
+//! takes `ctx: &mut InvocationContext` (was `&InvocationContext`) — it
+//! needs to mutate `ctx.session.state` through [`CodeExecutorContext`];
+//! nothing outside this crate calls it yet (confirmed by grep), so this
+//! isn't a breaking change to any real external caller.
+//!
+//! **`get_content_as_bytes`, not needed**: the source's helper exists
+//! to resolve `File.content`'s `str | bytes` union before handing it to
+//! `types.Part.from_bytes`. This port's own [`File`] (from
+//! `code_execution_utils`, C0391) already normalizes `content` to a
+//! plain `Vec<u8>` — see that module's own disclosed narrowing — so
+//! there is no union left to resolve; [`post_process_code_execution_result`]
+//! reads `output_file.content` directly.
+//!
+//! **`CodeExecutorContext`'s buffered nested-context field, disclosed**:
+//! per `code_executor_context.rs`'s own module doc, only the nested
+//! `_code_execution_context` sub-dict (`execution_session_id`/
+//! `processed_input_files`) is buffered in a `CodeExecutorContext`
+//! instance's own memory and needs `get_state_delta()` applied back
+//! explicitly — the other three keys (input files, error counts,
+//! execution results) are mutated directly through the live
+//! `&mut BTreeMap` reference and need no such step. Because
+//! [`BaseCodeExecutor::execute_code`] needs `ctx: &InvocationContext`
+//! whole (conflicting with a live `CodeExecutorContext` borrow of
+//! `ctx.session.state`), [`apply_code_execution_response`] can't hold
+//! one `CodeExecutorContext` across the `execute_code` call — it
+//! explicitly applies `get_state_delta()` back onto `ctx.session.state`
+//! before that borrow ends, so a later, freshly-constructed
+//! `CodeExecutorContext` (in [`post_process_code_execution_result`])
+//! still sees any `execution_session_id` [`get_or_set_execution_id`]
+//! just generated.
+//!
 //! **Not ported this batch, disclosed**:
 //! - The general (non-built-in) executor's `optimize_data_file` data-file
 //!   extraction/preprocessing path (`_extract_and_replace_inline_files`,
@@ -33,24 +79,23 @@
 //!   consequently always a no-op (matches the source's own `if not
 //!   code_executor.optimize_data_file: return` early-out when the
 //!   feature isn't enabled).
-//! - The general executor's code-execute-and-yield-events response path
-//!   (`_run_post_processor`'s non-built-in branch: extract code, run it
-//!   via `execute_code`, emit code + result events, clear
-//!   `llm_response.content` to loop) — also real additional surface, not
-//!   ported this batch. [`apply_code_execution_response`]'s non-built-in
-//!   branch is a no-op for now.
 //! - Tool-level plugin/canonical callback dispatch — not applicable here,
 //!   this capability has none in the source either.
 
 use adk_agents::invocation_context::InvocationContext;
 use adk_events::node_info::NodeInfo;
 use adk_events::{Event, EventActions};
-use adk_genai::content::Part;
+use adk_genai::content::{Content, MediaBlobStub, Part};
 use adk_models::llm_request::LlmRequest;
 use adk_models::llm_response::LlmResponse;
 use adk_tools::base_code_executor::BaseCodeExecutor;
 use adk_tools::built_in_code_executor::BuiltInCodeExecutor;
-use adk_tools::code_execution_utils::convert_code_execution_parts;
+use adk_tools::code_execution_utils::{
+    build_code_execution_result_part, convert_code_execution_parts,
+    extract_code_and_truncate_content, get_encoded_file_content, CodeExecutionInput,
+    CodeExecutionResult,
+};
+use adk_tools::code_executor_context::CodeExecutorContext;
 use rusty_serde::value::Value;
 
 #[derive(Debug, rusty_err::Error)]
@@ -107,10 +152,11 @@ pub async fn apply_code_execution_request(
 /// artifact service and clears it from the response content, always
 /// yielding exactly one event carrying the resulting `artifact_delta`
 /// (matching the source's own unconditional yield, even with an empty
-/// delta). The non-built-in "extract code, execute it, emit events"
-/// path is disclosed-not-ported this batch — see the module doc.
+/// delta). For a general executor, extracts and runs the first code
+/// block found in the response — see the module doc for the full
+/// C0180 shape and the `CodeExecutorContext` borrow-scoping this needs.
 pub async fn apply_code_execution_response(
-    ctx: &InvocationContext,
+    ctx: &mut InvocationContext,
     llm_response: &mut LlmResponse,
     code_executor: &dyn BaseCodeExecutor,
     agent_name: &str,
@@ -118,22 +164,189 @@ pub async fn apply_code_execution_response(
     if llm_response.partial == Some(true) {
         return Ok(Vec::new());
     }
-    if as_built_in(code_executor).is_none() {
+    if llm_response.content.is_none() {
         return Ok(Vec::new());
     }
-    let Some(content) = llm_response.content.as_mut() else {
+
+    if as_built_in(code_executor).is_some() {
+        let content = llm_response.content.as_mut().unwrap();
+        let mut actions = EventActions::default();
+        for part in content.parts.iter_mut() {
+            save_generated_image_as_artifact(ctx, part, &mut actions).await?;
+        }
+
+        let mut event = Event::new(ctx.invocation_id.clone(), agent_name, NodeInfo::new(""));
+        event.branch = ctx.branch.clone();
+        event.actions = actions;
+        return Ok(vec![event]);
+    }
+
+    let invocation_id = ctx.invocation_id.clone();
+    let branch = ctx.branch.clone();
+    let session_id = ctx.session.id.clone();
+
+    let error_count_exceeded = {
+        let code_executor_context = CodeExecutorContext::new(&mut ctx.session.state);
+        code_executor_context.get_error_count(&invocation_id)
+            >= code_executor.config().error_retry_attempts
+    };
+    if error_count_exceeded {
+        return Ok(Vec::new());
+    }
+
+    let response_content = llm_response.content.as_mut().unwrap();
+    let Some(code_str) = extract_code_and_truncate_content(
+        response_content,
+        &code_executor.config().code_block_delimiters,
+    ) else {
         return Ok(Vec::new());
     };
+    let truncated_content = response_content.clone();
 
-    let mut actions = EventActions::default();
-    for part in content.parts.iter_mut() {
-        save_generated_image_as_artifact(ctx, part, &mut actions).await?;
+    let mut events = Vec::new();
+    let mut code_event = Event::new(invocation_id.clone(), agent_name, NodeInfo::new(""));
+    code_event.branch = branch.clone();
+    code_event.content = Some(truncated_content);
+    events.push(code_event);
+
+    let (execution_id, input_files) = {
+        let mut code_executor_context = CodeExecutorContext::new(&mut ctx.session.state);
+        let execution_id = get_or_set_execution_id(
+            &session_id,
+            &mut code_executor_context,
+            code_executor.config().stateful,
+        );
+        let input_files = code_executor_context.get_input_files();
+        // Flush the (possibly just-set) execution id back onto
+        // `ctx.session.state` before this borrow ends — see the module
+        // doc's disclosure on `CodeExecutorContext`'s buffered nested
+        // context field.
+        let delta = code_executor_context.get_state_delta();
+        ctx.session.state.extend(delta);
+        (execution_id, input_files)
+    };
+
+    let code_execution_result = code_executor.execute_code(
+        ctx,
+        &CodeExecutionInput {
+            code: code_str.clone(),
+            input_files,
+            execution_id,
+        },
+    );
+
+    let result_event = post_process_code_execution_result(
+        ctx,
+        &invocation_id,
+        &branch,
+        &code_str,
+        &code_execution_result,
+        agent_name,
+    )
+    .await?;
+    events.push(result_event);
+
+    // [Step 3] Skip processing the original model response to continue
+    // the code generation loop.
+    llm_response.content = None;
+
+    Ok(events)
+}
+
+/// C0180: `_get_or_set_execution_id` — for a stateful executor, returns
+/// (creating and persisting on `code_executor_context` if absent) a
+/// stable execution id scoping code across turns within one session;
+/// `None` for a non-stateful executor.
+fn get_or_set_execution_id(
+    session_id: &str,
+    code_executor_context: &mut CodeExecutorContext,
+    stateful: bool,
+) -> Option<String> {
+    if !stateful {
+        return None;
+    }
+    if let Some(execution_id) = code_executor_context
+        .get_execution_id()
+        .filter(|id| !id.is_empty())
+    {
+        return Some(execution_id);
+    }
+    code_executor_context.set_execution_id(session_id);
+    Some(session_id.to_string())
+}
+
+/// C0180: `_post_process_code_execution_result` — builds the code
+/// execution result event, records the error-retry count (`stderr`
+/// present increments it, otherwise it resets), and saves every output
+/// file as an artifact.
+async fn post_process_code_execution_result(
+    ctx: &mut InvocationContext,
+    invocation_id: &str,
+    branch: &Option<String>,
+    code: &str,
+    code_execution_result: &CodeExecutionResult,
+    agent_name: &str,
+) -> Result<Event, CodeExecutionError> {
+    if ctx.artifact_service.is_none() {
+        return Err(CodeExecutionError::ArtifactServiceUnset);
     }
 
-    let mut event = Event::new(ctx.invocation_id.clone(), agent_name, NodeInfo::new(""));
-    event.branch = ctx.branch.clone();
+    let mut actions = {
+        let mut code_executor_context = CodeExecutorContext::new(&mut ctx.session.state);
+        code_executor_context.update_code_execution_result(
+            invocation_id,
+            code,
+            &code_execution_result.stdout,
+            &code_execution_result.stderr,
+        );
+        if !code_execution_result.stderr.is_empty() {
+            code_executor_context.increment_error_count(invocation_id);
+        } else {
+            code_executor_context.reset_error_count(invocation_id);
+        }
+        EventActions {
+            state_delta: code_executor_context
+                .get_state_delta()
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }
+    };
+
+    for output_file in &code_execution_result.output_files {
+        let encoded = get_encoded_file_content(&output_file.content);
+        let data = String::from_utf8(encoded).unwrap_or_default();
+        let artifact_part = Part {
+            inline_data: Some(MediaBlobStub {
+                mime_type: Some(output_file.mime_type.clone()),
+                rest: Some(Value::Map(vec![("data".to_string(), Value::String(data))])),
+            }),
+            ..Default::default()
+        };
+        let artifact_service = ctx.artifact_service.as_ref().unwrap();
+        let version = artifact_service.save_artifact(
+            &ctx.session.app_name,
+            &ctx.session.user_id,
+            &ctx.session.id,
+            &output_file.name,
+            rusty_serde::json::to_value(&artifact_part).unwrap_or(Value::Null),
+            None,
+        );
+        actions
+            .artifact_delta
+            .insert(output_file.name.clone(), version);
+    }
+
+    let result_content = Content {
+        role: Some("model".to_string()),
+        parts: vec![build_code_execution_result_part(code_execution_result)],
+    };
+
+    let mut event = Event::new(invocation_id, agent_name, NodeInfo::new(""));
+    event.branch = branch.clone();
+    event.content = Some(result_content);
     event.actions = actions;
-    Ok(vec![event])
+    Ok(event)
 }
 
 /// If `part` carries inline image data, saves it to the artifact service,
@@ -428,14 +641,14 @@ mod tests {
 
     #[rusty_tokio::test]
     async fn built_in_response_saves_a_generated_image_using_its_display_name() {
-        let (ctx, service) = ctx_with_artifact_service();
+        let (mut ctx, service) = ctx_with_artifact_service();
         let mut response = LlmResponse {
             content: Some(Content::new("model", vec![image_part(Some("chart.png"))])),
             ..Default::default()
         };
         let executor = BuiltInCodeExecutor::new();
 
-        let events = apply_code_execution_response(&ctx, &mut response, &executor, "my_agent")
+        let events = apply_code_execution_response(&mut ctx, &mut response, &executor, "my_agent")
             .await
             .unwrap();
 
@@ -454,14 +667,14 @@ mod tests {
 
     #[rusty_tokio::test]
     async fn built_in_response_generates_a_timestamped_name_without_a_display_name() {
-        let (ctx, _service) = ctx_with_artifact_service();
+        let (mut ctx, _service) = ctx_with_artifact_service();
         let mut response = LlmResponse {
             content: Some(Content::new("model", vec![image_part(None)])),
             ..Default::default()
         };
         let executor = BuiltInCodeExecutor::new();
 
-        let events = apply_code_execution_response(&ctx, &mut response, &executor, "my_agent")
+        let events = apply_code_execution_response(&mut ctx, &mut response, &executor, "my_agent")
             .await
             .unwrap();
 
@@ -471,14 +684,14 @@ mod tests {
 
     #[rusty_tokio::test]
     async fn built_in_response_yields_one_event_even_with_no_images() {
-        let (ctx, _service) = ctx_with_artifact_service();
+        let (mut ctx, _service) = ctx_with_artifact_service();
         let mut response = LlmResponse {
             content: Some(Content::new("model", vec![Part::text("no image here")])),
             ..Default::default()
         };
         let executor = BuiltInCodeExecutor::new();
 
-        let events = apply_code_execution_response(&ctx, &mut response, &executor, "my_agent")
+        let events = apply_code_execution_response(&mut ctx, &mut response, &executor, "my_agent")
             .await
             .unwrap();
 
@@ -488,7 +701,7 @@ mod tests {
 
     #[rusty_tokio::test]
     async fn response_processor_skips_a_partial_response() {
-        let (ctx, _service) = ctx_with_artifact_service();
+        let (mut ctx, _service) = ctx_with_artifact_service();
         let mut response = LlmResponse {
             content: Some(Content::new("model", vec![image_part(Some("x.png"))])),
             partial: Some(true),
@@ -496,25 +709,239 @@ mod tests {
         };
         let executor = BuiltInCodeExecutor::new();
 
-        let events = apply_code_execution_response(&ctx, &mut response, &executor, "my_agent")
+        let events = apply_code_execution_response(&mut ctx, &mut response, &executor, "my_agent")
             .await
             .unwrap();
         assert!(events.is_empty());
     }
 
     #[rusty_tokio::test]
-    async fn response_processor_is_a_no_op_for_a_non_built_in_executor() {
-        let (ctx, _service) = ctx_with_artifact_service();
+    async fn response_processor_is_a_no_op_for_a_non_built_in_executor_with_no_code_block() {
+        let (mut ctx, _service) = ctx_with_artifact_service();
         let mut response = LlmResponse {
             content: Some(Content::new("model", vec![image_part(Some("x.png"))])),
             ..Default::default()
         };
         let executor = stub_executor();
 
-        let events = apply_code_execution_response(&ctx, &mut response, &executor, "my_agent")
+        let events = apply_code_execution_response(&mut ctx, &mut response, &executor, "my_agent")
             .await
             .unwrap();
         assert!(events.is_empty());
+    }
+
+    // --- C0180: general (non-built-in) executor response path ---
+
+    struct RecordingExecutor {
+        config: CodeExecutorConfig,
+        result: CodeExecutionResult,
+        received_inputs: Mutex<Vec<CodeExecutionInput>>,
+    }
+
+    impl RecordingExecutor {
+        fn new(config: CodeExecutorConfig, result: CodeExecutionResult) -> Self {
+            Self {
+                config,
+                result,
+                received_inputs: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl BaseCodeExecutor for RecordingExecutor {
+        fn config(&self) -> &CodeExecutorConfig {
+            &self.config
+        }
+        fn execute_code(
+            &self,
+            _ctx: &InvocationContext,
+            input: &CodeExecutionInput,
+        ) -> CodeExecutionResult {
+            self.received_inputs.lock().unwrap().push(input.clone());
+            self.result.clone()
+        }
+    }
+
+    fn code_response(code: &str) -> LlmResponse {
+        LlmResponse {
+            content: Some(Content::new(
+                "model",
+                vec![Part::text(format!("```python\n{code}\n```"))],
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn general_executor_executes_code_and_emits_two_events() {
+        let (mut ctx, _service) = ctx_with_artifact_service();
+        let mut response = code_response("print(1)");
+        let executor = RecordingExecutor::new(
+            CodeExecutorConfig::default(),
+            CodeExecutionResult {
+                stdout: "1\n".to_string(),
+                ..Default::default()
+            },
+        );
+
+        let events = apply_code_execution_response(&mut ctx, &mut response, &executor, "my_agent")
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 2);
+        // First event carries the truncated code content.
+        assert!(events[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .parts
+            .iter()
+            .any(|p| p.executable_code.is_some()));
+        // Second event carries the execution result.
+        assert!(events[1].content.as_ref().unwrap().parts[0]
+            .code_execution_result
+            .is_some());
+        // The response content is cleared so the turn loop keeps
+        // generating rather than treating this as final.
+        assert!(response.content.is_none());
+        assert_eq!(executor.received_inputs.lock().unwrap()[0].code, "print(1)");
+    }
+
+    #[rusty_tokio::test]
+    async fn general_executor_skips_when_the_error_retry_limit_is_exceeded() {
+        let (mut ctx, _service) = ctx_with_artifact_service();
+        let config = CodeExecutorConfig {
+            error_retry_attempts: 1,
+            ..Default::default()
+        };
+        let executor = RecordingExecutor::new(
+            config,
+            CodeExecutionResult {
+                stderr: "boom".to_string(),
+                ..Default::default()
+            },
+        );
+
+        // First call fails, incrementing the error count to 1 (the
+        // configured limit).
+        let mut first = code_response("bad_code()");
+        apply_code_execution_response(&mut ctx, &mut first, &executor, "my_agent")
+            .await
+            .unwrap();
+
+        // Second call is skipped entirely — the retry limit is already
+        // met, so the code never reaches the executor again.
+        let mut second = code_response("bad_code()");
+        let events = apply_code_execution_response(&mut ctx, &mut second, &executor, "my_agent")
+            .await
+            .unwrap();
+        assert!(events.is_empty());
+        assert_eq!(executor.received_inputs.lock().unwrap().len(), 1);
+    }
+
+    #[rusty_tokio::test]
+    async fn general_executor_resets_the_error_count_after_a_clean_run() {
+        let (mut ctx, _service) = ctx_with_artifact_service();
+        let config = CodeExecutorConfig {
+            error_retry_attempts: 5, // high enough to never trip the skip in this test
+            ..Default::default()
+        };
+
+        let failing = RecordingExecutor::new(
+            config.clone(),
+            CodeExecutionResult {
+                stderr: "boom".to_string(),
+                ..Default::default()
+            },
+        );
+        let mut first = code_response("bad_code()");
+        apply_code_execution_response(&mut ctx, &mut first, &failing, "my_agent")
+            .await
+            .unwrap();
+        assert_eq!(
+            CodeExecutorContext::new(&mut ctx.session.state).get_error_count(&ctx.invocation_id),
+            1
+        );
+
+        let succeeding = RecordingExecutor::new(config, CodeExecutionResult::default());
+        let mut second = code_response("good_code()");
+        apply_code_execution_response(&mut ctx, &mut second, &succeeding, "my_agent")
+            .await
+            .unwrap();
+        assert_eq!(
+            CodeExecutorContext::new(&mut ctx.session.state).get_error_count(&ctx.invocation_id),
+            0,
+            "a clean run (no stderr) should reset the error count back to 0"
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn general_executor_saves_output_files_as_artifacts() {
+        let (mut ctx, service) = ctx_with_artifact_service();
+        let mut response = code_response("plot()");
+        let executor = RecordingExecutor::new(
+            CodeExecutorConfig::default(),
+            CodeExecutionResult {
+                stdout: "done".to_string(),
+                output_files: vec![adk_tools::code_execution_utils::File::new(
+                    "chart.png",
+                    b"fake-png-bytes".to_vec(),
+                    "image/png",
+                )],
+                ..Default::default()
+            },
+        );
+
+        let events = apply_code_execution_response(&mut ctx, &mut response, &executor, "my_agent")
+            .await
+            .unwrap();
+
+        assert_eq!(events[1].actions.artifact_delta.get("chart.png"), Some(&0));
+        let saved = service.saved.lock().unwrap();
+        assert_eq!(saved[0].3, "chart.png");
+    }
+
+    #[rusty_tokio::test]
+    async fn general_executor_persists_a_stateful_execution_id_across_calls() {
+        let (mut ctx, _service) = ctx_with_artifact_service();
+        let config = CodeExecutorConfig {
+            stateful: true,
+            ..Default::default()
+        };
+        let executor = RecordingExecutor::new(config, CodeExecutionResult::default());
+
+        let mut first = code_response("a");
+        apply_code_execution_response(&mut ctx, &mut first, &executor, "my_agent")
+            .await
+            .unwrap();
+        let mut second = code_response("b");
+        apply_code_execution_response(&mut ctx, &mut second, &executor, "my_agent")
+            .await
+            .unwrap();
+
+        let inputs = executor.received_inputs.lock().unwrap();
+        let first_id = inputs[0].execution_id.clone().unwrap();
+        assert_eq!(first_id, ctx.session.id);
+        assert_eq!(inputs[1].execution_id, Some(first_id));
+    }
+
+    #[rusty_tokio::test]
+    async fn general_executor_leaves_execution_id_unset_when_not_stateful() {
+        let (mut ctx, _service) = ctx_with_artifact_service();
+        let executor = RecordingExecutor::new(
+            CodeExecutorConfig::default(),
+            CodeExecutionResult::default(),
+        );
+
+        let mut response = code_response("a");
+        apply_code_execution_response(&mut ctx, &mut response, &executor, "my_agent")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            executor.received_inputs.lock().unwrap()[0].execution_id,
+            None
+        );
     }
 
     #[test]
