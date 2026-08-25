@@ -22,6 +22,7 @@ pub mod basic;
 pub mod cache_performance_analyzer;
 pub mod canonical_model;
 pub mod compaction;
+pub mod compaction_request_processor;
 pub mod contents;
 pub mod context_cache;
 pub mod fencing;

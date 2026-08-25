@@ -68,7 +68,9 @@ use adk_models::base_llm::{BaseLlm, BaseLlmError};
 use adk_models::llm_request::LlmRequest;
 use adk_models::llm_response::LlmResponse;
 
+use crate::apps_compaction::CompactionTriggerError;
 use crate::canonical_model::{canonical_model, CanonicalModelError};
+use crate::compaction_request_processor::apply_compaction_processor;
 use crate::contents::{get_contents, get_current_turn_contents, ContentsError};
 use crate::context_cache::{apply_context_cache, ContextCacheError};
 use crate::identity::apply_identity;
@@ -90,6 +92,8 @@ pub enum LlmFlowError {
     Contents(#[from] ContentsError),
     #[error("{0}")]
     ContextCache(#[from] ContextCacheError),
+    #[error("{0}")]
+    Compaction(#[from] CompactionTriggerError),
     #[error("{0}")]
     InvocationContext(#[from] InvocationContextError),
     #[error("model call failed: {0}")]
@@ -278,11 +282,14 @@ impl LlmFlow {
     }
 
     /// C0150 (partial): assembles the `LlmRequest` — `basic` → `identity`
-    /// → `instructions` → contents (full history or current-turn-only,
-    /// per `include_contents`) → `context_cache`. See the module doc for
-    /// what's not wired (toolset auth/tool resolution, dynamic
-    /// instructions, `interactions_processor`).
-    pub async fn preprocess(&self, ctx: &InvocationContext) -> Result<LlmRequest, LlmFlowError> {
+    /// → `instructions` → `compaction` → contents (full history or
+    /// current-turn-only, per `include_contents`) → `context_cache`. See
+    /// the module doc for what's not wired (toolset auth/tool resolution,
+    /// dynamic instructions, `interactions_processor`).
+    pub async fn preprocess(
+        &self,
+        ctx: &mut InvocationContext,
+    ) -> Result<LlmRequest, LlmFlowError> {
         let agent_name = ctx
             .agent
             .as_ref()
@@ -291,10 +298,14 @@ impl LlmFlow {
         let agent_description = ctx.agent.as_ref().map(|a| a.description().to_string());
 
         let default_run_config = RunConfig::default();
-        let run_config = ctx.run_config.as_ref().unwrap_or(&default_run_config);
+        let run_config = ctx
+            .run_config
+            .as_ref()
+            .unwrap_or(&default_run_config)
+            .clone();
 
         let mut request = LlmRequest::default();
-        basic::build_basic_request(&self.llm_agent, run_config, &mut request)?;
+        basic::build_basic_request(&self.llm_agent, &run_config, &mut request)?;
         apply_identity(
             &agent_name,
             agent_description.as_deref(),
@@ -304,6 +315,12 @@ impl LlmFlow {
 
         let readonly_ctx = ReadonlyContext::new(ctx.clone());
         build_instructions(&self.llm_agent, &readonly_ctx, &mut request)?;
+
+        // C0173: `compaction` request processor — runs before contents
+        // are assembled, matching the source's own `REQUEST_PROCESSORS`
+        // ordering (`instructions`/`identity`, then `compaction`, then
+        // `interactions_processor`/`contents`).
+        apply_compaction_processor(ctx).await?;
 
         let events = ctx.get_events(false, false);
 
@@ -574,9 +591,9 @@ mod tests {
         gemini.use_interactions_api = true;
         let llm_agent = LlmAgent::new(ModelRef::Name("gemini-2.0-flash".to_string()));
         let flow = LlmFlow::with_model(llm_agent, Arc::new(gemini));
-        let ctx = ctx_with_prior_interaction("my_agent", "prev-interaction");
+        let mut ctx = ctx_with_prior_interaction("my_agent", "prev-interaction");
 
-        let request = flow.preprocess(&ctx).await.unwrap();
+        let request = flow.preprocess(&mut ctx).await.unwrap();
         assert_eq!(
             request.previous_interaction_id.as_deref(),
             Some("prev-interaction")
@@ -588,9 +605,9 @@ mod tests {
         let gemini = adk_models::gemini::Gemini::new("gemini-2.0-flash");
         let llm_agent = LlmAgent::new(ModelRef::Name("gemini-2.0-flash".to_string()));
         let flow = LlmFlow::with_model(llm_agent, Arc::new(gemini));
-        let ctx = ctx_with_prior_interaction("my_agent", "prev-interaction");
+        let mut ctx = ctx_with_prior_interaction("my_agent", "prev-interaction");
 
-        let request = flow.preprocess(&ctx).await.unwrap();
+        let request = flow.preprocess(&mut ctx).await.unwrap();
         assert_eq!(request.previous_interaction_id, None);
     }
 
@@ -599,9 +616,9 @@ mod tests {
         // FakeLlm doesn't downcast to Gemini at all, regardless of any
         // field it might otherwise have.
         let flow = flow_with_response(LlmResponse::default());
-        let ctx = ctx_with_prior_interaction("my_agent", "prev-interaction");
+        let mut ctx = ctx_with_prior_interaction("my_agent", "prev-interaction");
 
-        let request = flow.preprocess(&ctx).await.unwrap();
+        let request = flow.preprocess(&mut ctx).await.unwrap();
         assert_eq!(request.previous_interaction_id, None);
     }
 

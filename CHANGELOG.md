@@ -5,6 +5,34 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-flows/src/compaction_request_processor.rs`: the
+  `compaction` request processor (C0173), wired into
+  `LlmFlow::preprocess` right after `instructions`/`identity` and before
+  `interactions_processor`/`contents`, matching the source's own
+  `REQUEST_PROCESSORS` ordering. Runs token-threshold event compaction
+  before contents are assembled, appends the resulting event via
+  `ctx.session_service`, and marks `ctx.token_compaction_checked` — which
+  `Runner`'s post-invocation sliding-window trigger (C0872) already reads
+  back as `skip_token_compaction`, so flow-level compaction isn't
+  immediately redone at the end of the same invocation.
+  `apps_compaction.rs::run_compaction_for_token_threshold` split into
+  itself (unchanged, the `App`-level `""`/`None` wrapper) plus a new
+  `run_compaction_for_token_threshold_config` taking `agent_name`/
+  `current_branch` explicitly, since the new processor is a second real
+  caller with real values for both. `LlmFlow::preprocess` widened from
+  `&InvocationContext` to `&mut InvocationContext` to support it. 5 new
+  tests.
+### Fixed
+- `crates/adk-tools/src/agent_tool.rs`: `AgentTool`'s nested `Runner` now
+  gets an `InMemoryMemoryService` (matching the source's own
+  `memory_service=InMemoryMemoryService()`, unconditional and never
+  parent-forwarded, unlike the artifact service). Corrects a stale
+  blocker claim (same pattern as C0172/C0178/C0196/C0125): the module
+  doc said this was "Phase 6, not built" — false, it shipped long ago
+  and `adk-tools` already depends on `adk-agents`. The manifest row's
+  own evidence also repeated a second stale claim (that
+  `ForwardingArtifactService` wasn't ported either) well after it had
+  actually landed — corrected in place. 1 new test.
 - `crates/adk-genai/src/content.rs`: new `PartialArg` type and a
   `partial_args: Option<Vec<PartialArg>>` field on `FunctionCall`, needed
   for progressive SSE streaming's incrementally-streamed function-call
