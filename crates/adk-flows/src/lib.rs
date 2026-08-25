@@ -37,6 +37,7 @@ pub mod instructions;
 pub mod instructions_utils;
 pub mod interactions;
 pub mod llm_flow;
+pub mod nl_planning;
 pub mod output_schema;
 pub mod planners;
 pub mod processor;

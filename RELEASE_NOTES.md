@@ -22,6 +22,26 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `flows/llm_flows/`: wire NL planning into the request/response pipeline (C0176/C0179/C0200, all DONE)
+**2026-08-25**
+
+- **Added:** `LlmFlow` now runs a configured planner on every model
+  turn — a native "thinking" planner gets its thinking config applied
+  to the outgoing request; any other planner gets its instruction text
+  appended and any stale "thought" markers stripped from prior turns.
+  On the way back, a non-native planner's response post-processing runs
+  too: it can rewrite the model's response and record session-state
+  changes, which now show up as their own event ahead of the model's
+  response event.
+- **Added:** `LlmFlow::with_planner` — attaches the planner a caller
+  wants active for a flow, the same "hand the flow its already-resolved
+  pieces" pattern already used for its tools.
+- **Fixed:** corrected a stale claim in an earlier PR's own tracked
+  evidence — several processors it described as "not wired in yet" had
+  already been wired into the request pipeline in the meantime.
+
+---
+
 ## PR #TBD — `tools/computer_use/`: computer-use tool trio (C0445/C0447 DONE, C0446 partial)
 **2026-08-25**
 

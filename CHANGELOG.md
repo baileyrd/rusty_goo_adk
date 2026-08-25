@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `_nl_planning`'s request/response processors (C0176/C0179, both DONE,
+  closing C0200 as a side effect): `LlmFlow` gains a `planner: Option<
+  Arc<dyn BasePlanner>>` field and `with_planner` builder — the same
+  "caller supplies the resolved bits" shape already established for
+  `tools`/`tools_dict`. New `crates/adk-flows/src/nl_planning.rs`:
+  `apply_nl_planning_request` applies `BuiltInPlanner`'s thinking config
+  or (for any other planner) appends its planning instruction and strips
+  pre-existing `thought` flags, wired into `LlmFlow::preprocess` right
+  after `context_cache`; `apply_nl_planning_response` runs
+  `process_planning_response` for any non-`BuiltInPlanner`, replaces the
+  response's parts, and surfaces a state-update event when the planner
+  touched session state — wired into `LlmFlow::postprocess`, emitted
+  before the model-response event. `BasePlanner` widens to `AsAny + Send
+  + Sync` (additive — its only two impls and its only consumer are in
+  this same batch) so the response processor can downcast to the
+  concrete `BuiltInPlanner` type, replacing the source's Python-only
+  unbound-method-identity check with the same effective skip set.
+  Corrected a stale claim in `C0144`'s own evidence along the way:
+  `compaction`/`interactions_processor`/`output_schema_processor` were
+  already wired into `LlmFlow::preprocess` in earlier batches, contrary
+  to what that row's text still said.
 - Computer-use tool trio (`tools/computer_use/`): `BaseComputer`
   (C0445, DONE) — the full browser-automation trait contract
   (click/hover/type/scroll/wait/navigate/search/key-combo/drag-drop/
