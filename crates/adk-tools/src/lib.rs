@@ -174,6 +174,7 @@ pub mod exit_loop_tool;
 pub mod finish_task_tool;
 pub mod forwarding_artifact_service;
 pub mod function_tool;
+pub mod gda_stream_util;
 pub mod gemini_schema_util;
 pub mod get_user_choice_tool;
 pub mod google_maps_grounding_tool;
