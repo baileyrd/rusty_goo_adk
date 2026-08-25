@@ -199,6 +199,7 @@ pub mod evaluation_generator;
 pub mod evaluator;
 pub mod final_response_match_v1;
 pub mod in_memory_eval_sets_manager;
+pub mod llm_as_judge;
 pub mod llm_as_judge_utils;
 pub mod llm_backed_user_simulator;
 pub mod local_eval_service;
