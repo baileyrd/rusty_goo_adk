@@ -156,9 +156,11 @@ use crate::functions_utils::{generate_auth_event, generate_request_confirmation_
 use crate::identity::apply_identity;
 use crate::instructions::{build_instructions, InstructionsError};
 use crate::interactions::find_previous_interaction_state;
+use crate::nl_planning::{apply_nl_planning_request, apply_nl_planning_response};
 use crate::output_schema::{
     apply_output_schema_processor, create_final_model_response_event, get_structured_model_response,
 };
+use crate::planners::BasePlanner;
 use crate::processor::BoxFuture;
 use crate::{basic, basic::BasicRequestError};
 
@@ -373,6 +375,14 @@ pub struct LlmFlow {
     /// [`Self::with_tools`]'s own doc for why order matters and why
     /// this is a separate field from [`Self::tools_dict`].
     pub tools: Vec<Arc<dyn BaseTool>>,
+    /// C0176/C0179 (narrowed): the caller-resolved planner
+    /// `nl_planning.rs`'s free functions dispatch on — see
+    /// [`Self::with_planner`]'s own doc for why this is a plain
+    /// caller-supplied field rather than resolved from `LlmAgent.planner`
+    /// (still an opaque, unread `Value` placeholder, C0088). `None` by
+    /// default, matching the source's own `if not planner: return` for
+    /// an agent with no planner configured.
+    pub planner: Option<Arc<dyn BasePlanner>>,
 }
 
 impl LlmFlow {
@@ -385,6 +395,7 @@ impl LlmFlow {
             model,
             tools_dict: ToolsDict::new(),
             tools: Vec::new(),
+            planner: None,
         })
     }
 
@@ -397,6 +408,7 @@ impl LlmFlow {
             model,
             tools_dict: ToolsDict::new(),
             tools: Vec::new(),
+            planner: None,
         }
     }
 
@@ -418,6 +430,13 @@ impl LlmFlow {
     /// before a later tool might read it).
     pub fn with_tools(mut self, tools: Vec<Arc<dyn BaseTool>>) -> Self {
         self.tools = tools;
+        self
+    }
+
+    /// Attaches the resolved planner `nl_planning.rs`'s free functions
+    /// dispatch against — see [`Self::planner`]'s own doc.
+    pub fn with_planner(mut self, planner: Arc<dyn BasePlanner>) -> Self {
+        self.planner = Some(planner);
         self
     }
 
@@ -519,6 +538,11 @@ impl LlmFlow {
             &agent_name,
             &ctx.invocation_id,
         )?;
+
+        // C0176: `_nl_planning` request processor — the source runs this
+        // right after `context_cache_processor`, before `code_execution`/
+        // `output_schema_processor`.
+        apply_nl_planning_request(self.planner.as_deref(), &readonly_ctx, &mut request);
 
         // C0178: `_output_schema_processor` — the source runs this near
         // the end of its `REQUEST_PROCESSORS` list (after `contents`/
@@ -646,20 +670,43 @@ impl LlmFlow {
 
         responses
             .into_iter()
-            .filter_map(|mut response| {
-                apply_no_content_error(&mut response, run_config);
-                if should_skip_empty_response(&response) {
-                    return None;
+            .flat_map(|mut response| {
+                let mut events = Vec::new();
+
+                // C0179: `_nl_planning` response processor — runs first,
+                // matching the source's own response-processor order
+                // (`nl_planning` before `code_execution`, and both before
+                // the model-response event itself is finalized — see
+                // `nl_planning.rs`'s module doc for why the resulting
+                // state-update event doesn't get `isolation_scope` set,
+                // unlike the model-response event just below).
+                if let Some(actions) =
+                    apply_nl_planning_response(self.planner.as_deref(), ctx, &mut response)
+                {
+                    let mut state_update_event = Event::new(
+                        ctx.invocation_id.clone(),
+                        agent_name.clone(),
+                        NodeInfo::new(node_path.clone()),
+                    );
+                    state_update_event.branch = ctx.branch.clone();
+                    state_update_event.actions = actions;
+                    events.push(state_update_event);
                 }
-                let mut event = Event::new(
-                    ctx.invocation_id.clone(),
-                    agent_name.clone(),
-                    NodeInfo::new(node_path.clone()),
-                );
-                event.branch = ctx.branch.clone();
-                event.isolation_scope = ctx.isolation_scope.clone();
-                finalize_model_response_event(&mut event, &response);
-                Some(event)
+
+                apply_no_content_error(&mut response, run_config);
+                if !should_skip_empty_response(&response) {
+                    let mut event = Event::new(
+                        ctx.invocation_id.clone(),
+                        agent_name.clone(),
+                        NodeInfo::new(node_path.clone()),
+                    );
+                    event.branch = ctx.branch.clone();
+                    event.isolation_scope = ctx.isolation_scope.clone();
+                    finalize_model_response_event(&mut event, &response);
+                    events.push(event);
+                }
+
+                events
             })
             .collect()
     }
@@ -1223,6 +1270,98 @@ mod tests {
         let events = flow.postprocess(&ctx, vec![stop_response(None)]);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].error_code.as_deref(), Some(NO_CONTENT_ERROR_CODE));
+    }
+
+    // --- nl_planning wiring (C0176/C0179) ---
+
+    struct StateSettingPlanner;
+
+    impl BasePlanner for StateSettingPlanner {
+        fn build_planning_instruction(
+            &self,
+            _readonly_context: &ReadonlyContext,
+            _llm_request: &LlmRequest,
+        ) -> Option<String> {
+            Some("Custom planning instruction".to_string())
+        }
+
+        fn process_planning_response(
+            &self,
+            callback_context: &mut Context,
+            response_parts: Vec<Part>,
+        ) -> Option<Vec<Part>> {
+            callback_context
+                .state_mut()
+                .update([("planned".to_string(), rusty_serde::value::Value::Bool(true))].into());
+            Some(response_parts)
+        }
+    }
+
+    #[rusty_tokio::test]
+    async fn preprocess_applies_thinking_config_for_a_built_in_planner() {
+        let flow = flow_with_response(LlmResponse::default()).with_planner(Arc::new(
+            crate::planners::BuiltInPlanner::new(rusty_serde::value::Value::Bool(true)),
+        ));
+        let mut ctx = ctx_for("my_agent");
+        let request = flow.preprocess(&mut ctx).await.unwrap();
+        assert_eq!(
+            request.config.thinking_config,
+            Some(rusty_serde::value::Value::Bool(true))
+        );
+    }
+
+    #[rusty_tokio::test]
+    async fn preprocess_appends_the_plan_react_instruction_for_a_non_built_in_planner() {
+        let flow = flow_with_response(LlmResponse::default())
+            .with_planner(Arc::new(crate::planners::PlanReActPlanner));
+        let mut ctx = ctx_for("my_agent");
+        let request = flow.preprocess(&mut ctx).await.unwrap();
+        let instruction = request.config.system_instruction.unwrap();
+        assert!(instruction.contains("/*PLANNING*/"));
+    }
+
+    #[test]
+    fn postprocess_skips_the_built_in_planners_response_hook() {
+        let flow = flow_with_response(LlmResponse::default()).with_planner(Arc::new(
+            crate::planners::BuiltInPlanner::new(rusty_serde::value::Value::Bool(true)),
+        ));
+        let ctx = ctx_for("my_agent");
+        let response = LlmResponse {
+            content: Some(Content::new("model", vec![Part::text("hi")])),
+            ..Default::default()
+        };
+        let events = flow.postprocess(&ctx, vec![response]);
+        // Only the model-response event — no state-update event, since
+        // `BuiltInPlanner`'s response hook is skipped entirely.
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("hi")
+        );
+    }
+
+    #[test]
+    fn postprocess_emits_a_state_update_event_before_the_model_response_event() {
+        let flow =
+            flow_with_response(LlmResponse::default()).with_planner(Arc::new(StateSettingPlanner));
+        let ctx = ctx_for("my_agent");
+        let response = LlmResponse {
+            content: Some(Content::new("model", vec![Part::text("hi")])),
+            ..Default::default()
+        };
+        let events = flow.postprocess(&ctx, vec![response]);
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].actions.state_delta.get("planned"),
+            Some(&rusty_serde::value::Value::Bool(true))
+        );
+        // The state-update event doesn't set `isolation_scope` — see
+        // `nl_planning.rs`'s module doc.
+        assert_eq!(events[0].isolation_scope, None);
+        assert_eq!(
+            events[1].content.as_ref().unwrap().parts[0].text.as_deref(),
+            Some("hi")
+        );
     }
 
     // --- LlmFlow turn ---

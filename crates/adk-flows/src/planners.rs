@@ -8,20 +8,35 @@
 //! for future planner implementations, not because either concrete
 //! implementation needs it today.
 //!
-//! Not ported in this batch: wiring `BasePlanner` into the `_nl_planning`
-//! request/response processors (C0176/C0179) — those need
-//! `InvocationContext.agent` to resolve a concrete `LlmAgent` and its
-//! configured planner, the same blocker every other Phase 4 processor
-//! (`basic`, `identity`, `instructions`, ...) already discloses.
+//! Wired into the `_nl_planning` request/response processors (C0176/C0179)
+//! — see `nl_planning.rs`. The blocker this module doc previously
+//! claimed ("needs `InvocationContext.agent` to resolve a concrete
+//! `LlmAgent`") was stale: `LlmFlow` already owns its `LlmAgent` and
+//! resolved model directly (the same "caller supplies the resolved bits"
+//! shape already established for `tools`/`tools_dict`, C0151), so
+//! `nl_planning.rs`'s free functions just take `Option<&dyn BasePlanner>`
+//! as a plain parameter — the same pattern every sibling processor in
+//! `llm_flow.rs` already uses.
 
 use adk_agents::context::CallbackContext;
 use adk_agents::readonly_context::ReadonlyContext;
 use adk_genai::content::Part;
+use adk_models::base_llm::AsAny;
 use adk_models::llm_request::LlmRequest;
 use rusty_serde::value::Value;
 
-/// C0200: `BasePlanner(ABC)`.
-pub trait BasePlanner {
+/// C0200: `BasePlanner(ABC)`. `AsAny + Send + Sync` (widened for this
+/// batch): `Send + Sync` so `Arc<dyn BasePlanner>` is usable from async
+/// code (matching `BaseTool`'s own bound); `AsAny` so `nl_planning.rs`
+/// can downcast to the concrete `BuiltInPlanner` — see that module's doc
+/// for why (the source's "is this method literally
+/// `BuiltInPlanner.process_planning_response`, unbound" identity check
+/// has no Rust equivalent without it). Additive: this trait's only two
+/// impls live in this same file, and it has no consumer anywhere else in
+/// the workspace yet (verified — `llm_agent.rs`'s own `planner` field is
+/// still an opaque, unread `Value` placeholder), so widening its bounds
+/// breaks no shipped call site.
+pub trait BasePlanner: AsAny + Send + Sync {
     fn build_planning_instruction(
         &self,
         readonly_context: &ReadonlyContext,
