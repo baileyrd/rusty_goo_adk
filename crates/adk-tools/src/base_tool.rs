@@ -11,11 +11,19 @@
 //! `name`/`description`/etc. however it likes and returns them from these
 //! methods.
 //!
-//! **Not** ported: `from_config` (needs `ToolArgsConfig`, C0417 — the
-//! YAML/dict tool-reference config format, not built in this port yet) and
-//! the `SelfTool` generic-return-type pattern it uses (a Rust trait method
-//! can't return `Self` behind a trait object the way Python's classmethod
-//! can return the concrete subclass).
+//! **Not** ported: `from_config`. `ToolArgsConfig`/`ToolConfig` (C0417,
+//! `crate::tool_configs`) — the declarative YAML/dict tool-reference
+//! shape `from_config` would validate its `args` against — are real,
+//! tested types now; what's still missing is the *dynamic-dispatch
+//! resolution* itself (5 reference kinds: built-in name / instance path
+//! / class+args / factory+args / function path), which needs Python's
+//! `importlib` — genuinely inapplicable in this port, same
+//! disclosed-inapplicable precedent already established for C0939's
+//! `_lazy.accessors`, not a "not built yet" gap C0417 landing closes.
+//! Also not ported: the `SelfTool` generic-return-type pattern
+//! `from_config` uses (a Rust trait method can't return `Self` behind a
+//! trait object the way Python's classmethod can return the concrete
+//! subclass).
 
 use std::collections::BTreeMap;
 use std::future::Future;

@@ -5,6 +5,17 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-tools/src/tool_configs.rs`: `BaseToolConfig`/
+  `ToolArgsConfig`/`ToolConfig` (C0417) — the declarative YAML/dict
+  tool-reference data shape (a tool `name` plus optional free-form
+  `args`), gated behind `FeatureName::ToolConfig` via
+  `adk_features::feature_decorator::check_feature_enabled` (C0647),
+  matching the source's `@experimental` decorator. Doesn't unblock
+  `BaseTool.from_config`'s actual dynamic-dispatch resolution (5
+  reference kinds, needs Python's `importlib`) — `base_tool.rs`,
+  `base_toolset.rs`, and `example_tool.rs` updated to cite that as
+  disclosed-inapplicable (same precedent as C0939's `_lazy.accessors`)
+  rather than "C0417 not built." 9 new tests.
 - New `crates/adk-tools/src/finish_task_tool.rs`: `FinishTaskTool`
   (C0099) — signals `LlmAgent` task completion, wraps a non-object
   `output_schema` under a `result` key (hoisting `$defs` to the wrapped

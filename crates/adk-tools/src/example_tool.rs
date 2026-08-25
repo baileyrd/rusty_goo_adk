@@ -1,10 +1,11 @@
 //! Capability C0419: `ExampleTool`, ported from
 //! `google.adk.tools.example_tool`.
 //!
-//! **Not** ported: `from_config` — needs `ToolArgsConfig`/YAML
-//! tool-reference config (C0417), not built in this port yet, the same
-//! blocker `base_tool.rs`'s own module doc already discloses for every
-//! `from_config` classmethod.
+//! **Not** ported: `from_config` — `ToolArgsConfig`/`ToolConfig` (C0417,
+//! `crate::tool_configs`) are real types now, but the dynamic-dispatch
+//! resolution itself needs Python's `importlib`, genuinely inapplicable
+//! in this port — the same disclosed-inapplicable gap `base_tool.rs`'s
+//! own module doc already discloses for every `from_config` classmethod.
 //!
 //! `name`/`description` are set but, per the source's own comment, never
 //! actually used — this tool only mutates `llm_request`, never appears in

@@ -28,9 +28,11 @@
 //! are necessarily reachable from any implementor, so there's no
 //! private/public distinction to preserve here.
 //!
-//! **Not** ported: `from_config` (needs `ToolArgsConfig`, C0417, not built
-//! in this port yet — the same gap `BaseTool::from_config` (C0402)
-//! discloses).
+//! **Not** ported: `from_config` — `ToolArgsConfig`/`ToolConfig` (C0417,
+//! `crate::tool_configs`) are real types now, but the dynamic-dispatch
+//! resolution itself needs Python's `importlib`, genuinely inapplicable
+//! in this port — the same disclosed-inapplicable gap
+//! `BaseTool::from_config` (C0402) discloses.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
