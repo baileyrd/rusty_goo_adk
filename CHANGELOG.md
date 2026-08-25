@@ -5,6 +5,22 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- `NodeTool` (C0490, DONE): `crates/adk-tools/src/node_tool.rs` wraps a
+  workflow `BaseNode` as a callable `BaseTool`, unblocked once
+  `workflow::BaseNode`/`Context::run_node` landed — C0491's evidence
+  previously called this row blocked on that; corrected. Ports the
+  object-schema-wrapping declaration (`{"type":"object","properties":
+  {"request":<schema>},...}` for a non-object `input_schema`) and its
+  matching `run_async` unwrap, faithfully, including the surprising
+  catch-all that stringifies a failed node run into a normal tool
+  *result* rather than a raised tool error. An interrupted run returns
+  `Ok(Value::Null)` with no separate propagation step, since
+  `Context::run_node` already records the interrupt on the calling
+  `Context` in place (same contract `ParallelWorker` already relies on).
+  Disclosed, no-equivalent-needed: the `isinstance(node, BaseAgent)`
+  guard (foreclosed by the type system) and the `FunctionNode`/
+  `parameter_binding` rebinding block (this port's `FunctionNode` has no
+  such concept, and isn't even a public type). 8 new tests.
 - P11 local LLM-judge metrics batch (C0592/C0593/C0595/C0598, all DONE):
   `crates/adk-eval/src/final_response_match_v2.rs` (`FinalResponseMatchV2Evaluator`),
   `rubric_based_tool_use_quality_v1.rs` (`RubricBasedToolUseV1Evaluator`),

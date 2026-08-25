@@ -188,6 +188,7 @@ pub mod long_running_tool;
 pub mod mcp_conversion_utils;
 pub mod memory_entry_utils;
 pub mod model_name_utils;
+pub mod node_tool;
 pub mod preload_memory_tool;
 pub mod read_file_tool;
 pub mod remote_mcp_server;
