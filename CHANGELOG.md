@@ -5,6 +5,27 @@ Format: Added / Changed / Deprecated / Removed / Fixed / Security, newest first.
 
 ## [Unreleased]
 ### Added
+- New `crates/adk-models/src/gemma.rs`: `Gemma`/`GemmaFunctionCallingMixin`/
+  `GemmaFunctionCallModel` (C0113/C0545/C0546/C0548, all DONE), ported
+  from `models/gemma_llm.py`. `Gemma` composes a `Gemini` instance
+  (Rust has no multiple inheritance for the source's mixin) to work
+  around Gemma 3's lack of native function calling/system-instruction
+  support: tool declarations get injected as a strict-JSON text
+  system-instruction block, function calls are parsed back out of the
+  model's text response (fenced code block or the last valid JSON
+  substring), and any system instruction is converted to a prepended
+  user-role message. Registered in `default_registry` after `Gemini`,
+  whose own `gemma-4.*` pattern already precedes `Gemma`'s broader
+  `gemma-.*` — resolving C0113's registration-precedence requirement
+  (Gemma 4+ still resolves natively to `Gemini`) as a side effect, no
+  new mechanism needed. Adaptations, disclosed at length in the module
+  doc: `_get_last_valid_json_substring`'s `json.JSONDecoder.raw_decode`
+  becomes a quote/escape-aware brace-matcher; `Gemma::api_backend()` is
+  read-parity only (has no effect on the inner `Gemini`'s actual
+  backend selection, which is process-global, not per-instance); the
+  source's bare `assert` on a non-Gemma model becomes a real `Err`
+  instead of a panic. `Gemma3Ollama` (C0547) stays out of scope — it
+  needs `LiteLlm` (C0557), not built in this port at all. 24 new tests.
 - `crates/adk-eval/src/user_simulator.rs`: `UserSimulatorProvider` now
   genuinely dispatches `"llm_backed"` scenario cases (C0627, partial →
   closes its own disclosed gap), ported from

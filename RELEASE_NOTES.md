@@ -22,6 +22,22 @@ Notable changes to this repo, one entry per merged PR against `main`, newest fir
 
 ---
 
+## PR #TBD — `models/`: Gemma 3 model backend (C0113/C0545/C0546/C0548, all DONE)
+**2026-08-25**
+
+- **Added:** `Gemma` — a new `BaseLlm` backend working around Gemma 3's
+  lack of native function calling/system-instruction support: tool
+  declarations become a strict-JSON text system-instruction block,
+  function calls are parsed back out of the model's text response, and
+  any system instruction is converted into a prepended user-role
+  message. Registered so Gemma 4+ model names still resolve natively to
+  the existing `Gemini` backend (only Gemma 3 needs the workaround).
+- **Known limitation, disclosed:** `Gemma3Ollama` (Gemma 3 served via
+  Ollama/LiteLLM) stays out of scope — it needs a `LiteLlm` backend
+  this port doesn't have at all yet.
+
+---
+
 ## PR #TBD — `evaluation/`: wire LlmBackedUserSimulator into the provider registry (C0627)
 **2026-08-25**
 
